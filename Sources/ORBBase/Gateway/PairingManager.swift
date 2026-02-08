@@ -1,0 +1,204 @@
+import Foundation
+import Network
+
+// MARK: - Thread-Safe Token Store
+// GatewayServer is an actor and can't call @MainActor PairingManager synchronously.
+// This reads paired device tokens directly from UserDefaults (thread-safe for reads).
+enum PairedDeviceStore {
+    private static let devicesKey = "orb_paired_devices"
+
+    static func isAuthorized(token: String) -> Bool {
+        guard let data = UserDefaults.standard.data(forKey: devicesKey),
+              let devices = try? JSONDecoder().decode([PairedDevice].self, from: data) else {
+            return false
+        }
+        return devices.contains(where: { $0.token == token })
+    }
+}
+
+// MARK: - Paired Device
+
+struct PairedDevice: Codable, Identifiable {
+    let id: String          // UUID for this device
+    let name: String        // e.g. "Michael's iPhone"
+    let token: String       // Bearer token issued to this device
+    let pairedAt: Date
+    var lastSeen: Date?
+
+    var isRecent: Bool {
+        guard let lastSeen else { return false }
+        return Date().timeIntervalSince(lastSeen) < 300 // 5 min
+    }
+}
+
+// MARK: - Pairing Manager
+
+@MainActor
+final class PairingManager: ObservableObject {
+    static let shared = PairingManager()
+
+    // Published state
+    @Published var pairingCode: String = ""
+    @Published var pairingActive: Bool = false
+    @Published var pairedDevices: [PairedDevice] = []
+    @Published var qrString: String = ""
+
+    // Bonjour
+    private var netService: NetService?
+    private let bonjourType = "_orb-base._tcp."
+
+    // Code expiration
+    private var codeTimer: Timer?
+    private static let codeLifetime: TimeInterval = 300 // 5 minutes
+
+    // Persistence
+    private static let devicesKey = "orb_paired_devices"
+
+    private init() {
+        loadDevices()
+    }
+
+    // MARK: - Bonjour Publishing
+
+    func startAdvertising(port: UInt16) {
+        let machineName = Host.current().localizedName ?? "Mac"
+        let serviceName = "ORB Base (\(machineName))"
+
+        netService = NetService(
+            domain: "",        // default domain
+            type: bonjourType,
+            name: serviceName,
+            port: Int32(port)
+        )
+
+        // TXT record with metadata
+        let txt: [String: Data] = [
+            "version": Data("2.0.0".utf8),
+            "platform": Data("macos".utf8),
+            "name": Data(machineName.utf8)
+        ]
+        netService?.setTXTRecord(NetService.data(fromTXTRecord: txt))
+        netService?.publish()
+        print("[Pairing] Bonjour: advertising \(serviceName) on port \(port)")
+    }
+
+    func stopAdvertising() {
+        netService?.stop()
+        netService = nil
+        print("[Pairing] Bonjour: stopped advertising")
+    }
+
+    // MARK: - Code Generation
+
+    /// Generate a fresh 6-character pairing code and QR string
+    func generateCode(host: String, port: UInt16) {
+        // Random 6-char alphanumeric (uppercase)
+        let chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789" // No I/O/0/1 for clarity
+        pairingCode = String((0..<6).map { _ in chars.randomElement()! })
+        pairingActive = true
+
+        // QR payload: orb://pair?host=X&port=X&code=X
+        qrString = "orb://pair?host=\(host)&port=\(port)&code=\(pairingCode)"
+
+        print("[Pairing] Code generated: \(pairingCode) — expires in \(Self.codeLifetime)s")
+
+        // Auto-expire
+        codeTimer?.invalidate()
+        codeTimer = Timer.scheduledTimer(withTimeInterval: Self.codeLifetime, repeats: false) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.expireCode()
+            }
+        }
+    }
+
+    /// Invalidate the current code
+    func expireCode() {
+        pairingCode = ""
+        pairingActive = false
+        qrString = ""
+        codeTimer?.invalidate()
+        codeTimer = nil
+        print("[Pairing] Code expired")
+    }
+
+    // MARK: - Pairing
+
+    /// Validate a code and pair a device. Returns (token, deviceId) on success.
+    func pair(code: String, deviceName: String) -> (token: String, deviceId: String)? {
+        guard pairingActive,
+              !pairingCode.isEmpty,
+              code.uppercased() == pairingCode else {
+            print("[Pairing] Code mismatch or expired")
+            return nil
+        }
+
+        // Generate permanent token for this device
+        let token = generateToken()
+        let deviceId = UUID().uuidString
+
+        let device = PairedDevice(
+            id: deviceId,
+            name: deviceName,
+            token: token,
+            pairedAt: Date(),
+            lastSeen: Date()
+        )
+
+        pairedDevices.append(device)
+        saveDevices()
+
+        // Expire the code (single-use)
+        expireCode()
+
+        print("[Pairing] ✅ Paired '\(deviceName)' → \(deviceId)")
+        return (token, deviceId)
+    }
+
+    /// Verify a token is valid. Updates lastSeen.
+    func verifyToken(_ token: String) -> Bool {
+        if let idx = pairedDevices.firstIndex(where: { $0.token == token }) {
+            pairedDevices[idx].lastSeen = Date()
+            saveDevices()
+            return true
+        }
+        return false
+    }
+
+    /// Check if a Bearer token belongs to a paired device
+    func isAuthorized(token: String) -> Bool {
+        pairedDevices.contains(where: { $0.token == token })
+    }
+
+    /// Remove a paired device
+    func unpair(deviceId: String) {
+        pairedDevices.removeAll(where: { $0.id == deviceId })
+        saveDevices()
+        print("[Pairing] Removed device \(deviceId)")
+    }
+
+    // MARK: - Token Generation
+
+    private func generateToken() -> String {
+        var bytes = [UInt8](repeating: 0, count: 32)
+        _ = SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes)
+        return Data(bytes).base64EncodedString()
+            .replacingOccurrences(of: "+", with: "-")
+            .replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: "=", with: "")
+    }
+
+    // MARK: - Persistence
+
+    private func loadDevices() {
+        guard let data = UserDefaults.standard.data(forKey: Self.devicesKey),
+              let devices = try? JSONDecoder().decode([PairedDevice].self, from: data) else { return }
+        pairedDevices = devices
+        print("[Pairing] Loaded \(devices.count) paired device(s)")
+    }
+
+    private func saveDevices() {
+        if let data = try? JSONEncoder().encode(pairedDevices) {
+            UserDefaults.standard.set(data, forKey: Self.devicesKey)
+        }
+    }
+}
