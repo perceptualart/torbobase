@@ -147,11 +147,18 @@ actor ProactiveAgent {
 
         // Non-streaming tool loop through Base gateway
         for round in 0..<maxRounds {
-            let body: [String: Any] = [
+            // Get tool definitions for this crew's access level
+            let tools = ToolProcessor.toolDefinitions(for: accessLevel)
+
+            var body: [String: Any] = [
                 "model": model,
                 "messages": messages,
                 "stream": false
             ]
+            if !tools.isEmpty {
+                body["tools"] = tools
+                body["tool_choice"] = "auto"
+            }
 
             let url = URL(string: "http://127.0.0.1:\(await MainActor.run { AppState.shared.serverPort })/v1/chat/completions")!
             var request = URLRequest(url: url)
