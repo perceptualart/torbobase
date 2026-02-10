@@ -74,7 +74,7 @@ actor ProactiveAgent {
                 crewID: crewID,
                 model: modelConfig.model,
                 provider: modelConfig.provider,
-                maxRounds: 15
+                maxRounds: 30
             )
 
             let elapsed = Int(Date().timeIntervalSince(startTime))
