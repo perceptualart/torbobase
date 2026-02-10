@@ -141,7 +141,7 @@ actor ProactiveAgent {
 
         // Build messages
         var messages: [[String: Any]] = [
-            ["role": "system", "content": "You are a skilled AI assistant and software engineer working on the ORB Base project. Execute tasks autonomously using your available tools. Read files to understand the codebase, write files to implement changes, run commands to build and test. Be concise and effective. Do NOT just describe what you would do — actually use the tools to do it."],
+            ["role": "system", "content": "You are a skilled AI assistant working on the ORB Base project. Execute tasks autonomously using your available tools.\n\nCRITICAL RULES:\n1. NEVER modify existing core files (GatewayServer.swift, Capabilities.swift, AppState.swift, ORBBaseApp.swift, KeychainManager.swift, PairingManager.swift, ConversationStore.swift, TaskQueue.swift, ProactiveAgent.swift). The write_file tool will block you.\n2. ALWAYS create NEW files for new features. Name them clearly (e.g. PrivacyFilter.swift, ScreenCapture.swift).\n3. After writing any file, run swift build to verify it compiles. If it fails, fix your file — do NOT touch other files.\n4. Read existing code to understand patterns, but implement in NEW files using extensions.\n5. The project is at ~/Documents/orb master/orb base/. The app is at ~/Documents/orb master/orb app/.\n6. Use tools — don't describe what you would do."],
             ["role": "user", "content": prompt]
         ]
 

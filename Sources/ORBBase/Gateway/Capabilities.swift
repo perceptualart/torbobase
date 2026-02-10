@@ -808,6 +808,28 @@ actor SystemAccessEngine {
         ] as [String: Any]
     ]
 
+    // MARK: - Core File Protection
+
+    /// Files that NO crew member can modify via write_file
+    /// These are core infrastructure — changes require manual review
+    static let coreFileLocklist: [String] = [
+        "GatewayServer.swift",
+        "Capabilities.swift",
+        "AppState.swift",
+        "ORBBaseApp.swift",
+        "KeychainManager.swift",
+        "PairingManager.swift",
+        "ConversationStore.swift",
+        "TaskQueue.swift",
+        "TaskQueueRoutes.swift",
+        "ProactiveAgent.swift"
+    ]
+
+    static func isCoreFile(_ path: String) -> Bool {
+        let filename = URL(fileURLWithPath: NSString(string: path).expandingTildeInPath).lastPathComponent
+        return coreFileLocklist.contains(filename)
+    }
+
     // MARK: - Command Safety
 
     enum CommandThreat { case safe, moderate, destructive, blocked }
@@ -877,7 +899,11 @@ actor SystemAccessEngine {
 
     func writeFile(path: String, content: String, append: Bool = false) -> String {
         let p = NSString(string: path).expandingTildeInPath
-        if Self.isProtectedPath(p) { return "BLOCKED: protected path" }
+        if Self.isProtectedPath(p) { return "BLOCKED: protected system path" }
+        if Self.isCoreFile(p) {
+            print("[Safety] BLOCKED write to core file: \(path)")
+            return "BLOCKED: \(URL(fileURLWithPath: p).lastPathComponent) is a core infrastructure file. Create a NEW file instead, or ask MM to modify it manually."
+        }
         if FileManager.default.fileExists(atPath: p) { _ = backupFile(at: p) }
         let url = URL(fileURLWithPath: p)
         do {
