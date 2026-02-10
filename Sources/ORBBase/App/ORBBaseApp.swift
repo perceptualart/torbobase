@@ -81,6 +81,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             await GatewayServer.shared.start(appState: AppState.shared)
             print("[ORB Base] Gateway running on port \(AppState.shared.serverPort)")
             print("[ORB Base] Access level: \(AppState.shared.accessLevel.rawValue) (\(AppState.shared.accessLevel.name))")
+            
+            // Start ProactiveAgent — background task executor
+            await ProactiveAgent.shared.start()
         }
     }
 

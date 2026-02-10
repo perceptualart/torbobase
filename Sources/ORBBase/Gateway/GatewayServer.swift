@@ -235,7 +235,8 @@ actor GatewayServer {
             stateRef?.connectedClients = stateRef?.activeClientIPs.count ?? 0
         }
 
-        let currentLevel = await MainActor.run { stateRef?.accessLevel ?? .off }
+        let crewID = req.headers["x-orb-agent-id"] ?? req.headers["X-Orb-Agent-Id"] ?? "unknown"
+        let currentLevel = await MainActor.run { stateRef?.accessLevel(for: crewID) ?? .off }
 
         if currentLevel == .off {
             await audit(clientIP: clientIP, method: req.method, path: req.path,
@@ -370,6 +371,12 @@ actor GatewayServer {
             }
 
         default:
+            // TaskQueue routes
+            if req.path.hasPrefix("/v1/tasks") {
+                if let response = await handleTaskQueueRoute(req, clientIP: clientIP) {
+                    return response
+                }
+            }
             return HTTPResponse.notFound()
         }
     }

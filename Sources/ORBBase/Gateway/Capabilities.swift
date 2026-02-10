@@ -644,3 +644,302 @@ func convertMessagesToGemini(_ messages: [[String: Any]]) -> (contents: [[String
 
     return (contents, systemInstruction)
 }
+
+
+
+// MARK: - System Access Tools
+
+extension ToolProcessor {
+    /// Tool definitions for system access (filtered by crew level)
+    static func toolDefinitions(for level: AccessLevel) -> [[String: Any]] {
+        var tools: [[String: Any]] = []
+        if level.rawValue >= AccessLevel.readFiles.rawValue {
+            tools.append(SystemAccessEngine.readFileToolDefinition)
+            tools.append(SystemAccessEngine.listDirectoryToolDefinition)
+        }
+        if level.rawValue >= AccessLevel.writeFiles.rawValue {
+            tools.append(SystemAccessEngine.writeFileToolDefinition)
+        }
+        if level.rawValue >= AccessLevel.execute.rawValue {
+            tools.append(SystemAccessEngine.runCommandToolDefinition)
+        }
+        return tools
+    }
+
+    /// Execute system access tools (called from the tool loop)
+    func executeBuiltInTools(_ toolCalls: [[String: Any]], accessLevel: AccessLevel) async -> [[String: Any]] {
+        let systemToolNames: Set<String> = ["read_file", "write_file", "list_directory", "run_command"]
+        var results: [[String: Any]] = []
+
+        for call in toolCalls {
+            guard let id = call["id"] as? String,
+                  let function = call["function"] as? [String: Any],
+                  let name = function["name"] as? String else { continue }
+
+            let argsStr = function["arguments"] as? String ?? "{}"
+            let args = (try? JSONSerialization.jsonObject(with: Data(argsStr.utf8)) as? [String: Any]) ?? [:]
+
+            // Handle original built-in tools
+            if Self.builtInToolNames.contains(name) {
+                var content = ""
+                switch name {
+                case "web_search":
+                    let query = args["query"] as? String ?? ""
+                    content = await WebSearchEngine.shared.search(query: query)
+                case "web_fetch":
+                    let url = args["url"] as? String ?? ""
+                    content = await WebSearchEngine.shared.fetchPage(url: url)
+                case "generate_image":
+                    let prompt = args["prompt"] as? String ?? ""
+                    let size = args["size"] as? String ?? "1024x1024"
+                    content = await ImageGenerator.shared.generate(prompt: prompt, size: size)
+                default:
+                    content = "Unknown tool: \(name)"
+                }
+                results.append(["role": "tool", "tool_call_id": id, "content": content])
+                continue
+            }
+
+            // Handle system access tools
+            if systemToolNames.contains(name) {
+                let content: String
+                switch name {
+                case "read_file":
+                    let path = args["path"] as? String ?? ""
+                    let maxChars = args["max_chars"] as? Int ?? 50000
+                    content = await SystemAccessEngine.shared.readFile(path: path, maxChars: maxChars)
+                case "write_file":
+                    let path = args["path"] as? String ?? ""
+                    let fileContent = args["content"] as? String ?? ""
+                    let append = args["append"] as? Bool ?? false
+                    content = await SystemAccessEngine.shared.writeFile(path: path, content: fileContent, append: append)
+                case "list_directory":
+                    let path = args["path"] as? String ?? ""
+                    let recursive = args["recursive"] as? Bool ?? false
+                    content = await SystemAccessEngine.shared.listDirectory(path: path, recursive: recursive)
+                case "run_command":
+                    let command = args["command"] as? String ?? ""
+                    let workDir = args["working_directory"] as? String
+                    let timeout = args["timeout"] as? Int ?? 30
+                    content = await SystemAccessEngine.shared.runCommand(command: command, workingDirectory: workDir, timeout: timeout)
+                default:
+                    content = "Unknown tool: \(name)"
+                }
+                print("[ToolLoop] Executed 1 built-in tool(s) for crew: unknown (level: \(accessLevel.name))")
+                results.append(["role": "tool", "tool_call_id": id, "content": content])
+                continue
+            }
+
+            // Unknown tool — skip
+            results.append(["role": "tool", "tool_call_id": id, "content": "Unknown tool: \(name)"])
+        }
+        return results
+    }
+}
+
+// MARK: - Filesystem & Shell Access
+
+actor SystemAccessEngine {
+    static let shared = SystemAccessEngine()
+
+    static let readFileToolDefinition: [String: Any] = [
+        "type": "function",
+        "function": [
+            "name": "read_file",
+            "description": "Read the contents of a file at the given path.",
+            "parameters": [
+                "type": "object",
+                "properties": [
+                    "path": ["type": "string", "description": "File path to read"],
+                    "max_chars": ["type": "integer", "description": "Max characters (default: 50000)"]
+                ] as [String: Any],
+                "required": ["path"]
+            ] as [String: Any]
+        ] as [String: Any]
+    ]
+
+    static let writeFileToolDefinition: [String: Any] = [
+        "type": "function",
+        "function": [
+            "name": "write_file",
+            "description": "Write content to a file. Creates parent directories if needed.",
+            "parameters": [
+                "type": "object",
+                "properties": [
+                    "path": ["type": "string", "description": "File path to write"],
+                    "content": ["type": "string", "description": "Content to write"],
+                    "append": ["type": "boolean", "description": "Append instead of overwrite (default: false)"]
+                ] as [String: Any],
+                "required": ["path", "content"]
+            ] as [String: Any]
+        ] as [String: Any]
+    ]
+
+    static let listDirectoryToolDefinition: [String: Any] = [
+        "type": "function",
+        "function": [
+            "name": "list_directory",
+            "description": "List files and directories at the given path.",
+            "parameters": [
+                "type": "object",
+                "properties": [
+                    "path": ["type": "string", "description": "Directory path to list"],
+                    "recursive": ["type": "boolean", "description": "List recursively up to 2 levels (default: false)"]
+                ] as [String: Any],
+                "required": ["path"]
+            ] as [String: Any]
+        ] as [String: Any]
+    ]
+
+    static let runCommandToolDefinition: [String: Any] = [
+        "type": "function",
+        "function": [
+            "name": "run_command",
+            "description": "Execute a shell command via /bin/zsh and return output.",
+            "parameters": [
+                "type": "object",
+                "properties": [
+                    "command": ["type": "string", "description": "Shell command to execute"],
+                    "working_directory": ["type": "string", "description": "Working directory (default: home)"],
+                    "timeout": ["type": "integer", "description": "Timeout in seconds (default: 30, max: 300)"]
+                ] as [String: Any],
+                "required": ["command"]
+            ] as [String: Any]
+        ] as [String: Any]
+    ]
+
+    // MARK: - Command Safety
+
+    enum CommandThreat { case safe, moderate, destructive, blocked }
+
+    static let protectedPaths = ["/System", "/Library", "/usr", "/bin", "/sbin", "/Applications"]
+
+    static let crewDirectoryScopes: [String: [String]] = [
+        "sid": [],
+        "orion": ["~/Documents/orb master", "~/Documents/projects", "~/.orb-backup"],
+        "mira": ["~/Documents/orb master/orb app", "~/Documents/orb master/website", "~/Downloads"],
+        "ada": ["~/Documents/orb master", "~/Library/Application Support/ORBBase", "~/.orb-backup"]
+    ]
+
+    private static let destructivePatterns = [
+        "rm ", "rmdir", "mv ", "git push", "git reset --hard",
+        "git clean", "git checkout -- .", "chmod", "chown", "sudo",
+        "kill ", "killall", "pkill", "shutdown", "reboot"
+    ]
+
+    private static let safePatterns = [
+        "ls", "cat ", "head ", "tail ", "grep ", "find ",
+        "which ", "file ", "wc ", "diff ", "uptime", "whoami",
+        "pwd", "echo ", "git status", "git log", "git diff",
+        "swift build", "swift --version", "xcodebuild",
+        "ps ", "df ", "du "
+    ]
+
+    static func classifyCommand(_ command: String) -> CommandThreat {
+        let cmd = command.trimmingCharacters(in: .whitespaces).lowercased()
+        if cmd.contains("sudo rm -rf /") || cmd.contains(":(){ :|:& };:") || cmd == "rm -rf /" { return .blocked }
+        for p in destructivePatterns { if cmd.contains(p.lowercased()) { return .destructive } }
+        for p in safePatterns { if cmd.hasPrefix(p.lowercased()) { return .safe } }
+        return .moderate
+    }
+
+    static func isProtectedPath(_ path: String) -> Bool {
+        let expanded = NSString(string: path).expandingTildeInPath
+        return protectedPaths.contains { expanded.hasPrefix($0) }
+    }
+
+    func backupFile(at path: String) -> String? {
+        let expanded = NSString(string: path).expandingTildeInPath
+        let fm = FileManager.default
+        guard fm.fileExists(atPath: expanded) else { return nil }
+        let backupDir = NSHomeDirectory() + "/.orb-backup"
+        let timestamp = ISO8601DateFormatter().string(from: Date()).replacingOccurrences(of: ":", with: "-")
+        let filename = URL(fileURLWithPath: expanded).lastPathComponent
+        let backupPath = "\(backupDir)/\(timestamp)_\(filename)"
+        do {
+            try fm.createDirectory(atPath: backupDir, withIntermediateDirectories: true)
+            try fm.copyItem(atPath: expanded, toPath: backupPath)
+            print("[Safety] Backed up \(path) -> \(backupPath)")
+            return backupPath
+        } catch { return nil }
+    }
+
+    // MARK: - Execution
+
+    func readFile(path: String, maxChars: Int = 50000) -> String {
+        let p = NSString(string: path).expandingTildeInPath
+        guard FileManager.default.fileExists(atPath: p) else { return "Error: File not found at '\(path)'" }
+        do {
+            let content = try String(contentsOfFile: p, encoding: .utf8)
+            return content.count > maxChars ? String(content.prefix(maxChars)) + "\n[truncated]" : content
+        } catch { return "Error: \(error.localizedDescription)" }
+    }
+
+    func writeFile(path: String, content: String, append: Bool = false) -> String {
+        let p = NSString(string: path).expandingTildeInPath
+        if Self.isProtectedPath(p) { return "BLOCKED: protected path" }
+        if FileManager.default.fileExists(atPath: p) { _ = backupFile(at: p) }
+        let url = URL(fileURLWithPath: p)
+        do {
+            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            if append, FileManager.default.fileExists(atPath: p) {
+                let handle = try FileHandle(forWritingTo: url)
+                handle.seekToEndOfFile()
+                handle.write(content.data(using: .utf8)!)
+                handle.closeFile()
+                return "Appended \(content.count) chars to \(path)"
+            }
+            try content.write(toFile: p, atomically: true, encoding: .utf8)
+            return "Wrote \(content.count) chars to \(path)"
+        } catch { return "Error: \(error.localizedDescription)" }
+    }
+
+    func listDirectory(path: String, recursive: Bool = false) -> String {
+        let p = NSString(string: path).expandingTildeInPath
+        guard FileManager.default.fileExists(atPath: p) else { return "Error: not found" }
+        do {
+            let items = try FileManager.default.contentsOfDirectory(atPath: p).sorted()
+            var result = "Contents of \(path):\n"
+            for item in items {
+                var isDir: ObjCBool = false
+                FileManager.default.fileExists(atPath: (p as NSString).appendingPathComponent(item), isDirectory: &isDir)
+                result += isDir.boolValue ? "  \(item)/\n" : "  \(item)\n"
+            }
+            return result
+        } catch { return "Error: \(error.localizedDescription)" }
+    }
+
+    func runCommand(command: String, workingDirectory: String? = nil, timeout: Int = 30) async -> String {
+        let threat = Self.classifyCommand(command)
+        switch threat {
+        case .blocked: return "BLOCKED: Too dangerous."
+        case .destructive: return "CONFIRMATION REQUIRED: \(command)"
+        case .moderate: print("[Safety] Moderate command: \(command)")
+        case .safe: break
+        }
+        let workDir = workingDirectory.map { NSString(string: $0).expandingTildeInPath } ?? NSHomeDirectory()
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/zsh")
+        process.arguments = ["-c", command]
+        process.currentDirectoryURL = URL(fileURLWithPath: workDir)
+        var env = ProcessInfo.processInfo.environment
+        env["HOME"] = NSHomeDirectory()
+        process.environment = env
+        let stdout = Pipe(), stderr = Pipe()
+        process.standardOutput = stdout
+        process.standardError = stderr
+        do {
+            try process.run()
+            let timeoutTask = Task { try await Task.sleep(nanoseconds: UInt64(min(max(timeout,1),300)) * 1_000_000_000); if process.isRunning { process.terminate() } }
+            process.waitUntilExit()
+            timeoutTask.cancel()
+            let out = String(data: stdout.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+            let err = String(data: stderr.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+            var result = out
+            if !err.isEmpty { result += (result.isEmpty ? "" : "\n") + "STDERR: " + err }
+            if result.isEmpty { result = "(no output)" }
+            if process.terminationStatus != 0 { result += "\n[exit code: \(process.terminationStatus)]" }
+            return result.count > 50000 ? String(result.prefix(50000)) + "\n[truncated]" : result
+        } catch { return "Error: \(error.localizedDescription)" }
+    }
+}

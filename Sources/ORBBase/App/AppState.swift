@@ -273,6 +273,20 @@ final class AppState {
         didSet { AppConfig.accessLevel = accessLevel.rawValue }
     }
 
+    /// Per-crew access levels (capped by global level)
+    var crewAccessLevels: [String: AccessLevel] = [
+        "sid": .fullAccess,
+        "orion": .fullAccess,
+        "mira": .readFiles,
+        "ada": .readFiles
+    ]
+
+    func accessLevel(for crewID: String) -> AccessLevel {
+        if accessLevel == .off { return .off }
+        let crewLevel = crewAccessLevels[crewID] ?? .chatOnly
+        return AccessLevel(rawValue: min(crewLevel.rawValue, accessLevel.rawValue)) ?? .chatOnly
+    }
+
     // Server
     var serverRunning = false
     var serverPort: UInt16 = AppConfig.serverPort
