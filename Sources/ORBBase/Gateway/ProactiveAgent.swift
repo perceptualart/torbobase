@@ -65,7 +65,9 @@ actor ProactiveAgent {
         let prompt = buildTaskPrompt(task)
 
         // Get the model and API config for this crew member
-        let modelConfig = crewModelConfig(crewID)
+        let tier = classifyTaskTier(task.title, task.description ?? "")
+        let modelConfig = crewModelConfig(crewID, tier: tier)
+        print("[ProactiveAgent] \(crewID) task tier: \(tier) -> model: \(modelConfig.model)")
 
         // Execute through the LLM with tool access
         do {
@@ -112,18 +114,41 @@ actor ProactiveAgent {
         let apiKeyName: String
     }
 
-    private func crewModelConfig(_ crewID: String) -> ModelConfig {
-        switch crewID {
-        case "sid":
-            return ModelConfig(model: "claude-sonnet-4-5-20250929", provider: "anthropic", apiKeyName: "anthropic_api_key")
-        case "orion":
-            return ModelConfig(model: "claude-sonnet-4-5-20250929", provider: "anthropic", apiKeyName: "anthropic_api_key")
-        case "mira":
-            return ModelConfig(model: "gpt-4o", provider: "openai", apiKeyName: "openai_api_key")
-        case "ada":
-            return ModelConfig(model: "claude-3-5-haiku-20241022", provider: "anthropic", apiKeyName: "anthropic_api_key")
-        default:
-            return ModelConfig(model: "claude-sonnet-4-5-20250929", provider: "anthropic", apiKeyName: "anthropic_api_key")
+    /// Task complexity tiers — determines local vs cloud routing
+    enum TaskTier {
+        case simple   // Read files, write docs, list dirs, simple edits
+        case medium   // Write code, create specs, moderate reasoning
+        case complex  // Multi-file debugging, architecture, hard problems
+    }
+
+    private func classifyTaskTier(_ title: String, _ description: String) -> TaskTier {
+        let text = (title + " " + description).lowercased()
+        let complexKeywords = ["debug", "fix", "diagnose", "architect", "redesign", "refactor", "complex", "critical", "deep dive", "analyze"]
+        let simpleKeywords = ["list", "read", "create doc", "write doc", "summary", "spec", "document", "markdown", ".md"]
+        
+        for k in complexKeywords { if text.contains(k) { return .complex } }
+        for k in simpleKeywords { if text.contains(k) { return .simple } }
+        return .medium
+    }
+
+    private func crewModelConfig(_ crewID: String, tier: TaskTier = .complex) -> ModelConfig {
+        // Local-first: use Ollama when possible to save money and reduce latency
+        // Fall back to cloud for complex reasoning and tool-heavy tasks
+        switch tier {
+        case .simple:
+            // Fast local model — free, instant
+            return ModelConfig(model: "qwen2.5-coder:7b", provider: "ollama", apiKeyName: "")
+        case .medium:
+            // Larger local model — still free, good quality
+            return ModelConfig(model: "qwen2.5:14b", provider: "ollama", apiKeyName: "")
+        case .complex:
+            // Cloud model — best reasoning, costs money
+            switch crewID {
+            case "mira":
+                return ModelConfig(model: "gpt-4o", provider: "openai", apiKeyName: "openai_api_key")
+            default:
+                return ModelConfig(model: "claude-sonnet-4-5-20250929", provider: "anthropic", apiKeyName: "anthropic_api_key")
+            }
         }
     }
 

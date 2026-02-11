@@ -83,7 +83,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             print("[ORB Base] Access level: \(AppState.shared.accessLevel.rawValue) (\(AppState.shared.accessLevel.name))")
             
             // Start ProactiveAgent — background task executor
-            await ProactiveAgent.shared.start()
+            // ProactiveAgent starts via AppState.proactiveAgentEnabled toggle
+            let agentEnabled = UserDefaults.standard.bool(forKey: "proactiveAgentEnabled")
+            if agentEnabled {
+                await ProactiveAgent.shared.start()
+            }
         }
     }
 

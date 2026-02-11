@@ -273,6 +273,18 @@ final class AppState {
         didSet { AppConfig.accessLevel = accessLevel.rawValue }
     }
 
+    /// ProactiveAgent toggle — controls autonomous task execution
+    var proactiveAgentEnabled: Bool = false {
+        didSet {
+            UserDefaults.standard.set(proactiveAgentEnabled, forKey: "proactiveAgentEnabled")
+            if proactiveAgentEnabled {
+                Task { await ProactiveAgent.shared.start() }
+            } else {
+                Task { await ProactiveAgent.shared.stop() }
+            }
+        }
+    }
+
     /// Per-crew access levels (capped by global level)
     var crewAccessLevels: [String: AccessLevel] = [
         "sid": .fullAccess,
