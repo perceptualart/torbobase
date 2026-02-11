@@ -822,7 +822,14 @@ actor SystemAccessEngine {
         "ConversationStore.swift",
         "TaskQueue.swift",
         "TaskQueueRoutes.swift",
-        "ProactiveAgent.swift"
+        "ProactiveAgent.swift",
+        "AudioManager.swift",
+        "AudioSessionManager.swift",
+        "GatewayManager.swift",
+        "SidPersonality.swift",
+        "RootView.swift",
+        "ContentView.swift",
+        "ChatView.swift"
     ]
 
     static func isCoreFile(_ path: String) -> Bool {
