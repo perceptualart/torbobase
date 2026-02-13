@@ -27,15 +27,8 @@ enum WebChatHTML {
         display: flex; align-items: center; gap: 12px;
         background: var(--surface);
     }
-    .torbo-icon {
-        width: 32px; height: 32px; border-radius: 50%;
-        background: radial-gradient(circle at 40% 40%, var(--cyan), var(--purple), #ff006e);
-        animation: torboPulse 3s ease-in-out infinite;
-    }
-    @keyframes torboPulse {
-        0%, 100% { transform: scale(1); opacity: 0.9; }
-        50% { transform: scale(1.05); opacity: 1; }
-    }
+    .torbo-icon { width: 36px; height: 36px; }
+    .torbo-icon canvas { width: 100%; height: 100%; }
     .header h1 {
         font-size: 14px; font-weight: 700; letter-spacing: 2px;
         font-family: 'SF Mono', monospace;
@@ -113,12 +106,8 @@ enum WebChatHTML {
         align-items: center; justify-content: center; gap: 16px;
         color: var(--text-dim);
     }
-    .empty .torbo-big {
-        width: 80px; height: 80px; border-radius: 50%;
-        background: radial-gradient(circle at 40% 40%, var(--cyan), var(--purple), #ff006e);
-        animation: torboPulse 3s ease-in-out infinite;
-        opacity: 0.3;
-    }
+    .empty .torbo-big { width: 120px; height: 120px; }
+    .empty .torbo-big canvas { width: 100%; height: 100%; }
     .empty p { font-size: 13px; }
     /* Markdown rendering */
     .bubble pre {
@@ -161,7 +150,7 @@ enum WebChatHTML {
     </head>
     <body>
     <div class="header">
-        <div class="torbo-icon"></div>
+        <div class="torbo-icon"><canvas id="orbSmall" width="72" height="72"></canvas></div>
         <h1>TORBO BASE</h1>
         <select class="model-select" id="model">
             <option value="qwen2.5:7b">Loading models...</option>
@@ -169,8 +158,8 @@ enum WebChatHTML {
         <span class="status" id="status">Connecting...</span>
     </div>
     <div class="messages" id="messages">
-        <div class="empty">
-            <div class="torbo-big"></div>
+        <div class="empty" id="emptyState">
+            <div class="torbo-big"><canvas id="orbBig" width="240" height="240"></canvas></div>
             <p>Start a conversation</p>
         </div>
     </div>
@@ -192,7 +181,8 @@ enum WebChatHTML {
         if (!TOKEN) {
             statusEl.textContent = 'No token';
             statusEl.style.color = '#ff4444';
-            messagesEl.innerHTML = '<div class="empty"><div class="torbo-big" style="opacity:0.15"></div><p style="color:#ff4444">Missing authentication token</p><p style="font-size:11px;color:rgba(255,255,255,0.2);margin-top:6px">Open Web Chat from Torbo Base dashboard<br>or add ?token=YOUR_TOKEN to the URL</p></div>';
+            messagesEl.innerHTML = '<div class="empty"><div class="torbo-big" style="opacity:0.15"><canvas id="orbErr" width="240" height="240"></canvas></div><p style="color:#ff4444">Missing authentication token</p><p style="font-size:11px;color:rgba(255,255,255,0.2);margin-top:6px">Open Web Chat from Torbo Base dashboard<br>or add ?token=YOUR_TOKEN to the URL</p></div>';
+            initOrb('orbErr', 240);
             sendBtn.disabled = true;
             return;
         }
@@ -203,7 +193,8 @@ enum WebChatHTML {
             if (res.status === 401) {
                 statusEl.textContent = 'Auth failed';
                 statusEl.style.color = '#ff4444';
-                messagesEl.innerHTML = '<div class="empty"><div class="torbo-big" style="opacity:0.15"></div><p style="color:#ff4444">Invalid token</p><p style="font-size:11px;color:rgba(255,255,255,0.2);margin-top:6px">Token may have been regenerated.<br>Open Web Chat from Torbo Base dashboard to get a fresh link.</p></div>';
+                messagesEl.innerHTML = '<div class="empty"><div class="torbo-big" style="opacity:0.15"><canvas id="orbErr" width="240" height="240"></canvas></div><p style="color:#ff4444">Invalid token</p><p style="font-size:11px;color:rgba(255,255,255,0.2);margin-top:6px">Token may have been regenerated.<br>Open Web Chat from Torbo Base dashboard to get a fresh link.</p></div>';
+                initOrb('orbErr', 240);
                 sendBtn.disabled = true;
                 return;
             }
@@ -397,6 +388,109 @@ enum WebChatHTML {
         inputEl.style.height = 'auto';
         inputEl.style.height = Math.min(inputEl.scrollHeight, 120) + 'px';
     });
+
+    // ─── Aurora Silk Ribbon Orb Renderer ───
+    const orbLayers = [
+        { hue:306, sat:80, bri:90,  radiusMul:1.15, phase:0.08, wave:0.25, sx:1.1,  sy:0.45, rot:0.015, blur:18, opacity:0.12, phaseOff:0, waveOff:0, rotOff:0 },
+        { hue:0,   sat:85, bri:100, radiusMul:1.0,  phase:0.12, wave:0.35, sx:1.0,  sy:0.5,  rot:0.02,  blur:12, opacity:0.18, phaseOff:0, waveOff:0, rotOff:0 },
+        { hue:29,  sat:90, bri:100, radiusMul:0.95, phase:0.1,  wave:0.3,  sx:0.85, sy:0.65, rot:0.018, blur:10, opacity:0.2,  phaseOff:1.5, waveOff:2, rotOff:Math.PI*0.3 },
+        { hue:187, sat:90, bri:100, radiusMul:0.9,  phase:0.14, wave:0.4,  sx:0.75, sy:0.8,  rot:0.022, blur:8,  opacity:0.22, phaseOff:3, waveOff:1, rotOff:Math.PI*0.7 },
+        { hue:216, sat:85, bri:100, radiusMul:0.85, phase:0.09, wave:0.28, sx:0.7,  sy:0.75, rot:0.025, blur:6,  opacity:0.25, phaseOff:2, waveOff:3, rotOff:Math.PI*1.1 },
+        { hue:270, sat:80, bri:100, radiusMul:0.75, phase:0.16, wave:0.45, sx:0.6,  sy:0.7,  rot:0.028, blur:4,  opacity:0.28, phaseOff:4, waveOff:2, rotOff:Math.PI*0.5 },
+        { hue:331, sat:70, bri:100, radiusMul:0.6,  phase:0.11, wave:0.32, sx:0.55, sy:0.6,  rot:0.03,  blur:3,  opacity:0.3,  phaseOff:1, waveOff:4, rotOff:Math.PI*1.4 }
+    ];
+
+    function hslToRgba(h, s, b, a) {
+        s /= 100; b /= 100;
+        const k = n => (n + h / 30) % 12;
+        const f = n => b - b * s * Math.max(Math.min(k(n) - 3, 9 - k(n), 1), -1);
+        return `rgba(${Math.round(f(0)*255)},${Math.round(f(8)*255)},${Math.round(f(4)*255)},${a})`;
+    }
+
+    function drawAuroraRibbon(ctx, cx, cy, radius, layer, t, intensity) {
+        const ph = t * layer.phase + layer.phaseOff;
+        const wp = t * layer.wave + layer.waveOff;
+        const rot = t * layer.rot + layer.rotOff;
+        const r = radius * layer.radiusMul;
+        const segments = 64;
+        const breatheX = layer.sx * (1.0 + Math.sin(wp * 0.3) * 0.08);
+        const breatheY = layer.sy * (1.0 + Math.cos(wp * 0.25) * 0.08);
+
+        ctx.save();
+        ctx.globalCompositeOperation = 'lighter';
+
+        // Build path points
+        const points = [];
+        for (let i = 0; i <= segments; i++) {
+            const angle = (i / segments) * Math.PI * 2;
+            const wave1 = Math.sin(angle * 2 + ph) * 0.25;
+            const wave2 = Math.sin(angle * 3 + wp) * 0.18;
+            const wave3 = Math.cos(angle * 4 + ph * 0.8) * 0.12;
+            const wave4 = Math.sin(angle * 1.5 + wp * 1.3) * 0.15;
+            const audioPulse = Math.sin(angle * 2 + ph * 3) * intensity * 0.35;
+            const audioPulse2 = Math.cos(angle * 3 + wp * 2) * intensity * 0.25;
+            const audioPulse3 = Math.sin(angle * 5 + ph * 4) * intensity * 0.18;
+            const waveSum = wave1 + wave2 + wave3 + wave4 + audioPulse + audioPulse2 + audioPulse3;
+            const dist = r * (0.55 + waveSum);
+            const x = Math.cos(angle) * dist * breatheX;
+            const y = Math.sin(angle) * dist * breatheY;
+            const rx = x * Math.cos(rot) - y * Math.sin(rot);
+            const ry = x * Math.sin(rot) + y * Math.cos(rot);
+            points.push({ x: cx + rx, y: cy + ry });
+        }
+
+        // Draw glow layer (more blur, less opacity)
+        ctx.filter = `blur(${layer.blur}px)`;
+        ctx.beginPath();
+        points.forEach((p, i) => i === 0 ? ctx.moveTo(p.x, p.y) : ctx.lineTo(p.x, p.y));
+        ctx.closePath();
+        ctx.fillStyle = hslToRgba(layer.hue, layer.sat, layer.bri, layer.opacity);
+        ctx.fill();
+
+        // Draw core layer (less blur, less opacity)
+        ctx.filter = `blur(${layer.blur * 0.4}px)`;
+        ctx.beginPath();
+        points.forEach((p, i) => i === 0 ? ctx.moveTo(p.x, p.y) : ctx.lineTo(p.x, p.y));
+        ctx.closePath();
+        ctx.fillStyle = hslToRgba(layer.hue, layer.sat, layer.bri, layer.opacity * 0.49);
+        ctx.fill();
+
+        ctx.restore();
+    }
+
+    function renderOrb(canvas, size) {
+        if (!canvas) return;
+        const ctx = canvas.getContext('2d');
+        const w = canvas.width;
+        const h = canvas.height;
+        const cx = w / 2;
+        const cy = h / 2;
+        const radius = Math.min(w, h) * 0.45;
+        const t = performance.now() / 1000;
+        const intensity = 0.08; // Idle breathing intensity
+
+        ctx.clearRect(0, 0, w, h);
+
+        for (const layer of orbLayers) {
+            drawAuroraRibbon(ctx, cx, cy, radius, layer, t, intensity);
+        }
+    }
+
+    // Animate all active orb canvases
+    const orbCanvases = new Map();
+    function initOrb(id, size) {
+        const c = document.getElementById(id);
+        if (c) orbCanvases.set(id, c);
+    }
+    function orbLoop() {
+        orbCanvases.forEach((canvas, id) => {
+            if (canvas.offsetParent !== null) renderOrb(canvas);
+        });
+        requestAnimationFrame(orbLoop);
+    }
+    initOrb('orbSmall', 72);
+    initOrb('orbBig', 240);
+    orbLoop();
 
     loadModels();
     </script>

@@ -1010,6 +1010,66 @@ struct SettingsView: View {
                     }
                 }
 
+                // Discord
+                SectionHeader(title: "DISCORD")
+                channelConfigRow(label: "Bot Token", value: Binding(
+                    get: { state.discordBotToken ?? "" },
+                    set: { state.discordBotToken = $0.isEmpty ? nil : $0 }
+                ), secure: true)
+                channelConfigRow(label: "Channel ID", value: Binding(
+                    get: { state.discordChannelID ?? "" },
+                    set: { state.discordChannelID = $0.isEmpty ? nil : $0 }
+                ))
+
+                // Slack
+                SectionHeader(title: "SLACK")
+                channelConfigRow(label: "Bot Token", value: Binding(
+                    get: { state.slackBotToken ?? "" },
+                    set: { state.slackBotToken = $0.isEmpty ? nil : $0 }
+                ), secure: true)
+                channelConfigRow(label: "Channel ID", value: Binding(
+                    get: { state.slackChannelID ?? "" },
+                    set: { state.slackChannelID = $0.isEmpty ? nil : $0 }
+                ))
+
+                // WhatsApp
+                SectionHeader(title: "WHATSAPP")
+                Text("WhatsApp Business Cloud API")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.white.opacity(0.3))
+                channelConfigRow(label: "Access Token", value: Binding(
+                    get: { state.whatsappAccessToken ?? "" },
+                    set: { state.whatsappAccessToken = $0.isEmpty ? nil : $0 }
+                ), secure: true)
+                channelConfigRow(label: "Phone # ID", value: Binding(
+                    get: { state.whatsappPhoneNumberID ?? "" },
+                    set: { state.whatsappPhoneNumberID = $0.isEmpty ? nil : $0 }
+                ))
+                channelConfigRow(label: "Verify Token", value: Binding(
+                    get: { state.whatsappVerifyToken ?? "" },
+                    set: { state.whatsappVerifyToken = $0.isEmpty ? nil : $0 }
+                ))
+
+                // Signal
+                SectionHeader(title: "SIGNAL")
+                Text("Requires signal-cli REST API running locally")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.white.opacity(0.3))
+                channelConfigRow(label: "Phone #", value: Binding(
+                    get: { state.signalPhoneNumber ?? "" },
+                    set: { state.signalPhoneNumber = $0.isEmpty ? nil : $0 }
+                ))
+                channelConfigRow(label: "API URL", value: Binding(
+                    get: { state.signalAPIURL ?? "" },
+                    set: { state.signalAPIURL = $0.isEmpty ? nil : $0 }
+                ))
+
+                // iMessage (macOS only)
+                SectionHeader(title: "IMESSAGE")
+                Text("Uses AppleScript — macOS only, no config needed")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.white.opacity(0.3))
+
                 // Sandbox paths management
                 SectionHeader(title: "SANDBOX PATHS")
                 VStack(spacing: 2) {
@@ -1200,6 +1260,33 @@ struct SettingsView: View {
             get: { state.telegramConfig.chatId },
             set: { state.telegramConfig.chatId = $0; AppConfig.telegramConfig = state.telegramConfig }
         )
+    }
+
+    @ViewBuilder
+    private func channelConfigRow(label: String, value: Binding<String>, secure: Bool = false) -> some View {
+        HStack(spacing: 8) {
+            Text("\(label):")
+                .font(.system(size: 12))
+                .foregroundStyle(.white.opacity(0.5))
+                .frame(width: 90, alignment: .leading)
+            if secure {
+                SecureField(label.lowercased(), text: value)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 11, design: .monospaced))
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(Color.white.opacity(0.06))
+                    .cornerRadius(4)
+            } else {
+                TextField(label.lowercased(), text: value)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 11, design: .monospaced))
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(Color.white.opacity(0.06))
+                    .cornerRadius(4)
+            }
+        }
     }
 
     private func applyPort() {
