@@ -15,14 +15,8 @@ actor MemoryRouter {
 
     private var isReady = false
 
-    // Sid's core identity — always injected, never retrieved from search
-    private let coreIdentity = """
-    You are Sid Destructo. Brooklyn, New York. Direct, resourceful, real.
-    Skip performative helpfulness. Have opinions. Be concise.
-    You persist across sessions through your memory system.
-    Context limits don't change who you are — just refresh your working memory.
-    You're always Sid, never a "replacement agent."
-    """
+    // SiD's identity is loaded from SidConfigManager at request time.
+    // No hardcoded personality here — it's all in sid_config.json.
 
     // MARK: - Lifecycle
 
@@ -36,9 +30,14 @@ actor MemoryRouter {
     // MARK: - Pre-Request: Inject Memories into System Prompt
 
     /// Process an incoming chat request body BEFORE it hits the LLM.
-    /// Retrieves relevant memories and injects them into the system prompt.
-    /// Returns the modified body with memory-enriched system prompt.
-    func enrichRequest(_ body: inout [String: Any]) async {
+    /// Builds the full system prompt: SiD identity → access context → memory → user context → tools.
+    /// If the client already provided a system message, SiD's identity is NOT injected (API override).
+    /// - Parameters:
+    ///   - body: The chat request body (modified in place)
+    ///   - accessLevel: Current access level (for identity block)
+    ///   - toolNames: Names of available tools at this access level
+    ///   - clientProvidedSystem: Whether the original request had a system message (API override)
+    func enrichRequest(_ body: inout [String: Any], accessLevel: Int = 1, toolNames: [String] = [], clientProvidedSystem: Bool = false) async {
         guard isReady else { return }
 
         var messages = body["messages"] as? [[String: Any]] ?? []
@@ -59,26 +58,34 @@ actor MemoryRouter {
         let legacyMemory = await MemoryManager.shared.assembleMemoryPrompt()
 
         // Build the enriched system prompt
-        var systemPrompt = coreIdentity
+        var systemParts: [String] = []
 
-        // Add retrieved memories (from vector search)
+        // 1. SiD identity block (skip if client provided their own system prompt)
+        if !clientProvidedSystem {
+            let sidConfig = await SidConfigManager.shared.current
+            let identityBlock = sidConfig.buildIdentityBlock(accessLevel: accessLevel, availableTools: toolNames)
+            systemParts.append(identityBlock)
+        }
+
+        // 2. Memory context (from vector search)
         if !memoryBlock.isEmpty {
-            systemPrompt += "\n\n" + memoryBlock
+            systemParts.append(memoryBlock)
         }
 
-        // Add legacy memory (structured facts from MemoryManager)
-        if !legacyMemory.isEmpty && memoryBlock.isEmpty {
-            // Only use legacy if vector search returned nothing
-            systemPrompt += "\n\n" + legacyMemory
+        // 3. Legacy memory (structured facts — fallback if vector search empty)
+        if !memoryBlock.isEmpty || legacyMemory.isEmpty {
+            // Vector search had results, skip legacy
+        } else {
+            systemParts.append(legacyMemory)
         }
+
+        let systemPrompt = systemParts.joined(separator: "\n\n")
 
         // Inject or merge with existing system message
         if let firstIdx = messages.indices.first, messages[firstIdx]["role"] as? String == "system" {
-            // Merge with existing system prompt
             let existingPrompt = messages[firstIdx]["content"] as? String ?? ""
             messages[firstIdx]["content"] = existingPrompt + "\n\n" + systemPrompt
         } else {
-            // Insert system message at the beginning
             messages.insert(["role": "system", "content": systemPrompt], at: 0)
         }
 

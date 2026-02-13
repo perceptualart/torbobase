@@ -1,88 +1,18 @@
 // Torbo Base — by Michael David Murphy & Orion (Claude Opus 4.6, Anthropic)
-// Secure Keychain storage for API keys and tokens
+// Secure file-based storage for API keys and tokens
 import Foundation
 #if canImport(Security)
 import Security
 #endif
 
-/// Thread-safe Keychain wrapper for storing sensitive data.
-/// All API keys and tokens go here — never in UserDefaults.
+/// Secure key-value storage for sensitive data.
+/// Uses file-based storage (~/.config/torbobase/keychain.json) on all platforms.
+/// File permissions are set to owner-only (600) for security.
 enum KeychainManager {
 
     private static let service = "ai.torbo.base"
 
-#if canImport(Security)
-
-    // MARK: - Core Operations (macOS/iOS Keychain)
-
-    /// Store a value securely in Keychain
-    @discardableResult
-    static func set(_ value: String, for key: String) -> Bool {
-        let data = Data(value.utf8)
-
-        // Delete any existing entry first
-        let deleteQuery: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: key
-        ]
-        SecItemDelete(deleteQuery as CFDictionary)
-
-        // Don't store empty strings
-        guard !value.isEmpty else { return true }
-
-        // Add new entry
-        let addQuery: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: key,
-            kSecValueData as String: data,
-            kSecAttrAccessible as String: kSecAttrAccessibleWhenUnlockedThisDeviceOnly
-        ]
-
-        let status = SecItemAdd(addQuery as CFDictionary, nil)
-        if status != errSecSuccess {
-            print("[Keychain] Failed to store '\(key)': \(status)")
-        }
-        return status == errSecSuccess
-    }
-
-    /// Retrieve a value from Keychain
-    static func get(_ key: String) -> String? {
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: key,
-            kSecReturnData as String: true,
-            kSecMatchLimit as String: kSecMatchLimitOne
-        ]
-
-        var result: AnyObject?
-        let status = SecItemCopyMatching(query as CFDictionary, &result)
-
-        guard status == errSecSuccess, let data = result as? Data else {
-            return nil
-        }
-        return String(data: data, encoding: .utf8)
-    }
-
-    /// Delete a value from Keychain
-    @discardableResult
-    static func delete(_ key: String) -> Bool {
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: key
-        ]
-        let status = SecItemDelete(query as CFDictionary)
-        return status == errSecSuccess || status == errSecItemNotFound
-    }
-
-#else
-
-    // MARK: - Core Operations (Linux fallback: file-based storage)
-    // Store keys in ~/.config/torbobase/keychain.json
-    // Simple JSON file with key-value pairs — not truly encrypted but functional for Linux servers
+    // MARK: - File-based storage (all platforms)
 
     private static var storageDir: String {
         let home = ProcessInfo.processInfo.environment["HOME"] ?? NSHomeDirectory()
@@ -105,13 +35,19 @@ enum KeychainManager {
     private static func saveStore(_ store: [String: String]) {
         let dirURL = URL(fileURLWithPath: storageDir)
         try? FileManager.default.createDirectory(at: dirURL, withIntermediateDirectories: true)
+        // Secure the directory (700 = owner rwx only)
+        chmod(storageDir, 0o700)
         let url = URL(fileURLWithPath: storagePath)
         if let data = try? JSONEncoder().encode(store) {
             try? data.write(to: url, options: .atomic)
+            // Secure the file (600 = owner rw only)
+            chmod(storagePath, 0o600)
         }
     }
 
-    /// Store a value in the file-based keychain
+    // MARK: - Core Operations
+
+    /// Store a value securely
     @discardableResult
     static func set(_ value: String, for key: String) -> Bool {
         var store = loadStore()
@@ -124,13 +60,12 @@ enum KeychainManager {
         return true
     }
 
-    /// Retrieve a value from the file-based keychain
+    /// Retrieve a value
     static func get(_ key: String) -> String? {
-        let store = loadStore()
-        return store[key]
+        loadStore()[key]
     }
 
-    /// Delete a value from the file-based keychain
+    /// Delete a value
     @discardableResult
     static func delete(_ key: String) -> Bool {
         var store = loadStore()
@@ -138,8 +73,6 @@ enum KeychainManager {
         saveStore(store)
         return true
     }
-
-#endif
 
     /// Check if a key exists
     static func exists(_ key: String) -> Bool {
@@ -213,11 +146,78 @@ enum KeychainManager {
         set { set(newValue, for: telegramTokenKey) }
     }
 
+    // MARK: - One-time migration from macOS Keychain to file store
+
+    /// Reads any remaining items from macOS Keychain, writes them to the file store,
+    /// then deletes the old Keychain items. After this, Keychain is never touched again.
+    static func migrateFromKeychainToFileStore() {
+        #if canImport(Security)
+        let defaults = UserDefaults.standard
+        guard !defaults.bool(forKey: "torbo_migrated_to_filestore") else { return }
+
+        let keysToMigrate = [
+            serverTokenKey,
+            "apikey.ANTHROPIC_API_KEY",
+            "apikey.OPENAI_API_KEY",
+            "apikey.XAI_API_KEY",
+            "apikey.GOOGLE_API_KEY",
+            "apikey.ELEVENLABS_API_KEY",
+            telegramTokenKey,
+        ]
+
+        var migrated = 0
+        for key in keysToMigrate {
+            let query: [String: Any] = [
+                kSecClass as String: kSecClassGenericPassword,
+                kSecAttrService as String: service,
+                kSecAttrAccount as String: key,
+                kSecReturnData as String: true,
+                kSecMatchLimit as String: kSecMatchLimitOne
+            ]
+            var result: AnyObject?
+            let status = SecItemCopyMatching(query as CFDictionary, &result)
+
+            // If user denied, abort — don't keep prompting. Try again next launch.
+            if status == errSecUserCanceled || status == errSecAuthFailed
+                || status == errSecInteractionNotAllowed {
+                print("[Keychain→File] User denied access, aborting migration")
+                return
+            }
+
+            if status == errSecSuccess,
+               let data = result as? Data,
+               let value = String(data: data, encoding: .utf8),
+               !value.isEmpty {
+                // Write to file store (only if not already there)
+                if get(key) == nil || get(key)?.isEmpty == true {
+                    set(value, for: key)
+                    migrated += 1
+                }
+            }
+        }
+
+        // Clean up old Keychain items
+        for key in keysToMigrate {
+            let deleteQuery: [String: Any] = [
+                kSecClass as String: kSecClassGenericPassword,
+                kSecAttrService as String: service,
+                kSecAttrAccount as String: key
+            ]
+            SecItemDelete(deleteQuery as CFDictionary)
+        }
+
+        if migrated > 0 {
+            print("[Keychain→File] Migrated \(migrated) item(s) to file-based storage")
+        }
+
+        defaults.set(true, forKey: "torbo_migrated_to_filestore")
+        #endif
+    }
+
     // MARK: - Migration from UserDefaults
 
-    /// One-time migration of secrets from UserDefaults to Keychain
+    /// One-time migration of secrets from UserDefaults to secure storage
     static func migrateFromUserDefaults() {
-        #if !os(Linux)
         let defaults = UserDefaults.standard
         var migrated = false
 
@@ -251,17 +251,14 @@ enum KeychainManager {
             }
             // Re-save config without the token in UserDefaults
             var cleaned = config
-            cleaned.botToken = "" // Token now in Keychain
+            cleaned.botToken = ""
             if let cleanData = try? JSONEncoder().encode(cleaned) {
                 defaults.set(cleanData, forKey: "torboTelegramConfig")
             }
         }
 
         if migrated {
-            print("[Keychain] Migrated secrets from UserDefaults to Keychain")
+            print("[KeychainManager] Migrated secrets from UserDefaults to file store")
         }
-        #else
-        print("[Keychain] Migration from UserDefaults not available on Linux")
-        #endif
     }
 }

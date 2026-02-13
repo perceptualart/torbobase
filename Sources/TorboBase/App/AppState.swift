@@ -459,8 +459,9 @@ final class AppState {
     }
 
     private init() {
-        // Run migration before reading any config
+        // Run migrations before reading any config
         AppConfig.migrateFromORBIfNeeded()
+        KeychainManager.migrateFromKeychainToFileStore()
 
         let saved = AppConfig.accessLevel
         // If access level was never explicitly set (defaults returns 0 = .off),

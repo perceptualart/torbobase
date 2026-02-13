@@ -99,19 +99,18 @@ actor TelegramBridge {
         }
     }
 
-    /// Handle incoming Telegram message — route to Ollama and reply
+    /// Handle incoming Telegram message — route through local gateway (so SiD identity is injected)
     private func handleIncomingMessage(_ text: String) async {
-        // Log user message
-        let userMsg = ConversationMessage(role: "user", content: text, model: "telegram", clientIP: "telegram")
-        await MainActor.run { AppState.shared.addMessage(userMsg) }
-
-        // Route to Ollama
-        let model = await MainActor.run { AppState.shared.ollamaModels.first ?? "qwen2.5:7b" }
-        guard let url = URL(string: "http://127.0.0.1:11434/v1/chat/completions") else { return }
+        // Route through the local Torbo Base gateway to get SiD identity + memory + tools
+        let (port, token, model) = await MainActor.run {
+            (AppState.shared.serverPort, AppState.shared.serverToken, AppState.shared.ollamaModels.first ?? "qwen2.5:7b")
+        }
+        guard let url = URL(string: "http://127.0.0.1:\(port)/v1/chat/completions") else { return }
 
         var req = URLRequest(url: url)
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         let body: [String: Any] = [
             "model": model,
             "messages": [["role": "user", "content": text]],
@@ -126,14 +125,10 @@ actor TelegramBridge {
                let first = choices.first,
                let message = first["message"] as? [String: Any],
                let content = message["content"] as? String {
-                // Log assistant message
-                let assistantMsg = ConversationMessage(role: "assistant", content: content, model: model, clientIP: "telegram")
-                await MainActor.run { AppState.shared.addMessage(assistantMsg) }
-                // Reply on Telegram
                 await send(content)
             }
         } catch {
-            await send("❌ Error: \(error.localizedDescription)")
+            await send("Error: \(error.localizedDescription)")
         }
     }
 }

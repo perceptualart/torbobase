@@ -29,7 +29,6 @@ actor MCPServerConnection {
     private var isInitialized = false
     private var responseBuffer = Data()
     private var pendingResponses: [Int: CheckedContinuation<[String: Any], Error>] = [:]
-    private var readTask: Task<Void, Never>?
 
     init(name: String, config: MCPServerConfig) {
         self.name = name
@@ -47,10 +46,9 @@ actor MCPServerConnection {
         if let extra = config.env {
             for (k, v) in extra { env[k] = v }
         }
-        // Ensure npx/node can be found
-        if env["PATH"] != nil {
-            env["PATH"] = "/usr/local/bin:/opt/homebrew/bin:" + (env["PATH"] ?? "")
-        }
+        // Ensure npx/node/python can be found (app bundles may have minimal PATH)
+        let basePath = "/usr/local/bin:/opt/homebrew/bin:/opt/homebrew/Caskroom/miniforge/base/bin:/usr/bin:/bin"
+        env["PATH"] = basePath + ":" + (env["PATH"] ?? "/usr/bin:/bin")
         proc.environment = env
 
         let stdin = Pipe()
@@ -74,17 +72,14 @@ actor MCPServerConnection {
 
         do {
             try proc.run()
-            print("[MCP] Started server '\(name)' (pid: \(proc.processIdentifier))")
+            print("[MCP] Started '\(name)' (pid: \(proc.processIdentifier), cmd: \(config.resolvedCommand))")
         } catch {
-            print("[MCP] Failed to start '\(name)': \(error)")
+            print("[MCP] Failed to start '\(name)': \(error) (cmd: \(config.resolvedCommand), exists: \(FileManager.default.fileExists(atPath: config.resolvedCommand)))")
             throw error
         }
 
-        // Start reading stdout in background
-        readTask = Task { [weak self] in
-            guard let self else { return }
-            await self.readLoop()
-        }
+        // Start reading stdout (non-blocking via readabilityHandler)
+        startReading()
 
         // Initialize handshake
         let initResult = try await sendRequest(method: "initialize", params: [
@@ -157,7 +152,7 @@ actor MCPServerConnection {
 
     /// Stop the server
     func stop() {
-        readTask?.cancel()
+        stdoutPipe?.fileHandleForReading.readabilityHandler = nil
         stdinPipe?.fileHandleForWriting.closeFile()
         stderrPipe?.fileHandleForReading.readabilityHandler = nil
 
@@ -175,7 +170,7 @@ actor MCPServerConnection {
 
     // MARK: - JSON-RPC Communication
 
-    private func sendRequest(method: String, params: [String: Any]?) async throws -> [String: Any] {
+    private func sendRequest(method: String, params: [String: Any]?, timeoutSeconds: Int = 30) async throws -> [String: Any] {
         let id = nextID
         nextID += 1
 
@@ -195,10 +190,25 @@ actor MCPServerConnection {
         guard let pipe = stdinPipe else { throw MCPError.notConnected }
         pipe.fileHandleForWriting.write(Data(line.utf8))
 
-        // Wait for response with matching ID
-        return try await withCheckedThrowingContinuation { continuation in
+        // Wait for response with matching ID, with timeout
+        let result: [String: Any] = try await withCheckedThrowingContinuation { continuation in
             pendingResponses[id] = continuation
+
+            // Schedule a timeout that cancels the pending response
+            Task { [weak self] in
+                try? await Task.sleep(nanoseconds: UInt64(timeoutSeconds) * 1_000_000_000)
+                guard let self else { return }
+                if let pending = await self.removePendingResponse(for: id) {
+                    pending.resume(throwing: MCPError.timeout)
+                }
+            }
         }
+        return result
+    }
+
+    /// Remove and return a pending response continuation (actor-isolated helper for timeout)
+    private func removePendingResponse(for id: Int) -> CheckedContinuation<[String: Any], Error>? {
+        pendingResponses.removeValue(forKey: id)
     }
 
     private func sendNotification(method: String, params: [String: Any]? = nil) {
@@ -214,24 +224,20 @@ actor MCPServerConnection {
         stdinPipe?.fileHandleForWriting.write(Data(line.utf8))
     }
 
-    /// Read stdout line by line and dispatch responses
-    private func readLoop() async {
+    /// Start reading stdout using readabilityHandler (non-blocking, runs on a background queue)
+    /// This avoids blocking the actor with synchronous availableData calls
+    private func startReading() {
         guard let pipe = stdoutPipe else { return }
-        let handle = pipe.fileHandleForReading
         var buffer = Data()
 
-        while !Task.isCancelled {
+        pipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
+            guard let self else { return }
             let chunk = handle.availableData
-            if chunk.isEmpty {
-                // EOF — process exited
-                try? await Task.sleep(nanoseconds: 100_000_000)
-                if process?.isRunning != true { break }
-                continue
-            }
+            guard !chunk.isEmpty else { return } // EOF
 
             buffer.append(chunk)
 
-            // Process complete lines
+            // Process complete JSON-RPC lines
             while let newlineIndex = buffer.firstIndex(of: UInt8(ascii: "\n")) {
                 let lineData = buffer[buffer.startIndex..<newlineIndex]
                 buffer = Data(buffer[buffer.index(after: newlineIndex)...])
@@ -240,27 +246,35 @@ actor MCPServerConnection {
                     continue
                 }
 
-                // Check if this is a response (has "id")
-                if let id = json["id"] as? Int {
-                    if let continuation = pendingResponses.removeValue(forKey: id) {
-                        if let error = json["error"] as? [String: Any] {
-                            let msg = error["message"] as? String ?? "Unknown error"
-                            let code = error["code"] as? Int ?? -1
-                            continuation.resume(throwing: MCPError.serverError(code: code, message: msg))
-                        } else if let result = json["result"] as? [String: Any] {
-                            continuation.resume(returning: result)
-                        } else {
-                            continuation.resume(returning: [:])
-                        }
-                    }
+                // Dispatch response handling to the actor
+                Task {
+                    await self.handleMessage(json)
                 }
-                // Notifications (no id) — handle list_changed
-                else if let method = json["method"] as? String {
-                    if method == "notifications/tools/list_changed" {
-                        print("[MCP] Server '\(name)' tools changed — re-discovering")
-                        Task { try? await discoverTools() }
-                    }
+            }
+        }
+    }
+
+    /// Handle an incoming JSON-RPC message (actor-isolated)
+    private func handleMessage(_ json: [String: Any]) {
+        // Check if this is a response (has "id")
+        if let id = json["id"] as? Int {
+            if let continuation = pendingResponses.removeValue(forKey: id) {
+                if let error = json["error"] as? [String: Any] {
+                    let msg = error["message"] as? String ?? "Unknown error"
+                    let code = error["code"] as? Int ?? -1
+                    continuation.resume(throwing: MCPError.serverError(code: code, message: msg))
+                } else if let result = json["result"] as? [String: Any] {
+                    continuation.resume(returning: result)
+                } else {
+                    continuation.resume(returning: [:])
                 }
+            }
+        }
+        // Notifications (no id) — handle list_changed
+        else if let method = json["method"] as? String {
+            if method == "notifications/tools/list_changed" {
+                print("[MCP] Server '\(name)' tools changed — re-discovering")
+                Task { try? await discoverTools() }
             }
         }
     }
@@ -285,9 +299,11 @@ actor MCPManager {
             return
         }
 
-        for (name, config) in configs {
-            // Skip template entries
-            if name.hasPrefix("_") { continue }
+        let activeConfigs = configs.filter { !$0.key.hasPrefix("_") }
+        print("[MCP] Starting \(activeConfigs.count) server(s) (skipping \(configs.count - activeConfigs.count) disabled)...")
+
+        for (name, config) in activeConfigs {
+            print("[MCP] → Initializing '\(name)' (cmd: \(config.resolvedCommand))...")
 
             let conn = MCPServerConnection(name: name, config: config)
             servers[name] = conn
@@ -296,8 +312,9 @@ actor MCPManager {
                 try await conn.start()
                 let tools = await conn.getTools()
                 allTools.append(contentsOf: tools)
+                print("[MCP] ✅ '\(name)' ready with \(tools.count) tool(s)")
             } catch {
-                print("[MCP] Failed to initialize server '\(name)': \(error)")
+                print("[MCP] ❌ '\(name)' failed: \(error)")
                 await conn.stop()
                 servers.removeValue(forKey: name)
             }

@@ -680,6 +680,53 @@ actor GatewayServer {
                 return HTTPResponse.json(["status": "sent"])
             }
 
+        // --- Agent Config (SiD) ---
+        case ("GET", "/v1/agent/config"):
+            return await guardedRoute(level: .chatOnly, current: currentLevel, clientIP: clientIP, req: req) {
+                let config = await SidConfigManager.shared.current
+                guard let data = await SidConfigManager.shared.exportJSON() else {
+                    return HTTPResponse.json(["error": "Failed to serialize config"])
+                }
+                return HTTPResponse(statusCode: 200, headers: ["Content-Type": "application/json"], body: data)
+            }
+        case ("PUT", "/v1/agent/config"):
+            return await guardedRoute(level: .chatOnly, current: currentLevel, clientIP: clientIP, req: req) {
+                guard let body = req.jsonBody else {
+                    return HTTPResponse.badRequest("Invalid JSON body")
+                }
+                guard let jsonData = try? JSONSerialization.data(withJSONObject: body) else {
+                    return HTTPResponse.badRequest("Could not serialize body")
+                }
+                let success = await SidConfigManager.shared.importJSON(jsonData)
+                if success {
+                    return HTTPResponse.json(["status": "updated"])
+                } else {
+                    return HTTPResponse.badRequest("Invalid config format")
+                }
+            }
+        case ("POST", "/v1/agent/reset"):
+            return await guardedRoute(level: .chatOnly, current: currentLevel, clientIP: clientIP, req: req) {
+                await SidConfigManager.shared.resetToDefaults()
+                return HTTPResponse.json(["status": "reset"])
+            }
+
+        // --- Skills ---
+        case ("GET", "/v1/skills"):
+            return await guardedRoute(level: .chatOnly, current: currentLevel, clientIP: clientIP, req: req) {
+                let skills = await SkillsManager.shared.listSkills()
+                return HTTPResponse.json(["skills": skills])
+            }
+        case ("PUT", "/v1/skills"):
+            return await guardedRoute(level: .chatOnly, current: currentLevel, clientIP: clientIP, req: req) {
+                guard let body = req.jsonBody,
+                      let skillId = body["id"] as? String,
+                      let enabled = body["enabled"] as? Bool else {
+                    return HTTPResponse.badRequest("Missing 'id' and 'enabled'")
+                }
+                await SkillsManager.shared.setEnabled(skillId: skillId, enabled: enabled)
+                return HTTPResponse.json(["status": "updated", "id": skillId, "enabled": enabled])
+            }
+
         // --- Browser Automation ---
         case ("POST", "/v1/browser/navigate"):
             return await guardedRoute(level: .readFiles, current: currentLevel, clientIP: clientIP, req: req) {
@@ -975,17 +1022,24 @@ actor GatewayServer {
 
         let isRoomRequest = req.headers["x-torbo-room"] == "true" || req.headers["X-Torbo-Room"] == "true"
 
+        // Detect if client provided their own system prompt (API override — skip SiD identity)
+        let hasClientSystem = clientProvidedSystemPrompt(body)
+
         await injectSystemPrompt(into: &body)
-        await MemoryRouter.shared.enrichRequest(&body)
 
         // Inject tools based on agent access level (web_search, web_fetch, file tools, MCP tools)
+        var toolNames: [String] = []
         if body["tools"] == nil {
             let tools = await ToolProcessor.toolDefinitionsWithMCP(for: accessLevel)
             if !tools.isEmpty {
                 body["tools"] = tools
                 body["tool_choice"] = "auto"
+                toolNames = extractToolNames(from: tools)
             }
         }
+
+        // Enrich with SiD identity + memory (SiD identity skipped if client provided system prompt)
+        await MemoryRouter.shared.enrichRequest(&body, accessLevel: accessLevel.rawValue, toolNames: toolNames, clientProvidedSystem: hasClientSystem)
 
         // Log user message (handles both string and array/vision content)
         if let messages = body["messages"] as? [[String: Any]],
@@ -1487,6 +1541,14 @@ actor GatewayServer {
 
     // MARK: - System Prompt Injection
 
+    /// Check if the client provided their own system message (API override — skip SiD identity)
+    private func clientProvidedSystemPrompt(_ body: [String: Any]) -> Bool {
+        guard let messages = body["messages"] as? [[String: Any]] else { return false }
+        return messages.first?["role"] as? String == "system"
+    }
+
+    /// Inject the user's custom system prompt from Settings (if enabled).
+    /// This is separate from SiD's identity — it's the additional prompt from the Settings panel.
     private func injectSystemPrompt(into body: inout [String: Any]) async {
         let (enabled, prompt) = await MainActor.run {
             (AppState.shared.systemPromptEnabled, AppState.shared.systemPrompt)
@@ -1501,6 +1563,13 @@ actor GatewayServer {
         }
     }
 
+    /// Extract tool names from tool definitions for SiD's context awareness
+    private func extractToolNames(from tools: [[String: Any]]) -> [String] {
+        tools.compactMap { tool in
+            (tool["function"] as? [String: Any])?["name"] as? String
+        }
+    }
+
     // MARK: - Chat Proxy (with streaming, logging & Telegram forwarding)
 
     private func proxyChatCompletion(_ req: HTTPRequest, clientIP: String, crewID: String, accessLevel: AccessLevel) async -> HTTPResponse {
@@ -1510,18 +1579,25 @@ actor GatewayServer {
         let model = (body["model"] as? String) ?? "qwen2.5:7b"
         if body["model"] == nil { body["model"] = model }
 
-        // Inject system prompt if configured
+        // Detect if client provided their own system prompt (API override — skip SiD identity)
+        let hasClientSystem = clientProvidedSystemPrompt(body)
+
+        // Inject user's custom system prompt from Settings (if enabled)
         await injectSystemPrompt(into: &body)
-        await MemoryRouter.shared.enrichRequest(&body)
 
         // Inject tools based on agent access level (including MCP tools)
+        var toolNames: [String] = []
         if body["tools"] == nil {
             let tools = await ToolProcessor.toolDefinitionsWithMCP(for: accessLevel)
             if !tools.isEmpty {
                 body["tools"] = tools
                 body["tool_choice"] = "auto"
+                toolNames = extractToolNames(from: tools)
             }
         }
+
+        // Enrich with SiD identity + memory (SiD identity skipped if client provided system prompt)
+        await MemoryRouter.shared.enrichRequest(&body, accessLevel: accessLevel.rawValue, toolNames: toolNames, clientProvidedSystem: hasClientSystem)
 
         // Force non-streaming for this path (streaming handled separately)
         body["stream"] = false
