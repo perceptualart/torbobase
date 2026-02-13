@@ -7,4 +7,8 @@ DerivedData/
 *.dSYM
 *.ipa
 *.app
+*.dmg
+*.zip
 .env
+dist/
+Resources/ORBBase.entitlements

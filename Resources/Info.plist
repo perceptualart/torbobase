@@ -3,19 +3,19 @@
 <plist version="1.0">
 <dict>
     <key>CFBundleName</key>
-    <string>ORB Base</string>
+    <string>Torbo Base</string>
     <key>CFBundleDisplayName</key>
-    <string>ORB Base</string>
+    <string>Torbo Base</string>
     <key>CFBundleIdentifier</key>
-    <string>ai.orb.base</string>
+    <string>ai.torbo.base</string>
     <key>CFBundleVersion</key>
-    <string>2</string>
+    <string>3</string>
     <key>CFBundleShortVersionString</key>
-    <string>2.0.0</string>
+    <string>3.0.0</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleExecutable</key>
-    <string>ORBBase</string>
+    <string>TorboBase</string>
     <key>CFBundleIconFile</key>
     <string>AppIcon</string>
     <key>CFBundleIconName</key>
@@ -36,19 +36,19 @@
         <true/>
     </dict>
     <key>NSLocalNetworkUsageDescription</key>
-    <string>ORB Base needs local network access so AI clients can connect to the gateway.</string>
+    <string>Torbo Base needs local network access so AI clients can connect to the gateway.</string>
     <key>NSBonjourServices</key>
     <array>
-        <string>_orb-base._tcp</string>
+        <string>_torbo-base._tcp</string>
     </array>
     <key>CFBundleURLTypes</key>
     <array>
         <dict>
             <key>CFBundleURLName</key>
-            <string>ai.orb.base</string>
+            <string>ai.torbo.base</string>
             <key>CFBundleURLSchemes</key>
             <array>
-                <string>orb-base</string>
+                <string>torbo-base</string>
             </array>
         </dict>
     </array>

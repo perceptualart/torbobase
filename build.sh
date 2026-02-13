@@ -2,19 +2,19 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-APP_NAME="ORB Base"
-BUNDLE_NAME="ORBBase"
-VERSION="2.0.0"
+APP_NAME="Torbo Base"
+BUNDLE_NAME="TorboBase"
+VERSION="3.0.0"
 BUILD_DIR="${SCRIPT_DIR}/.build"
 DIST_DIR="${SCRIPT_DIR}/dist"
 APP_BUNDLE="${DIST_DIR}/${APP_NAME}.app"
-DMG_NAME="ORBBase-${VERSION}"
+DMG_NAME="TorboBase-${VERSION}"
 DMG_PATH="${DIST_DIR}/${DMG_NAME}.dmg"
-ENTITLEMENTS="${SCRIPT_DIR}/Resources/ORBBase.entitlements"
+ENTITLEMENTS="${SCRIPT_DIR}/Resources/TorboBase.entitlements"
 
 echo ""
 echo "  ╔═══════════════════════════════════════╗"
-echo "  ║   ORB BASE v${VERSION}                    ║"
+echo "  ║   TORBO BASE v${VERSION}                  ║"
 echo "  ║   Build · Sign · Package              ║"
 echo "  ║   © 2026 Perceptual Art LLC           ║"
 echo "  ╚═══════════════════════════════════════╝"
@@ -49,7 +49,7 @@ echo ""
 echo "▸ [3/6] Generating app icon..."
 
 ICON_SCRIPT="${SCRIPT_DIR}/scripts/generate_icon.py"
-ICONSET="${DIST_DIR}/ORBBase.iconset"
+ICONSET="${DIST_DIR}/TorboBase.iconset"
 ICNS="${APP_BUNDLE}/Contents/Resources/AppIcon.icns"
 
 if [[ -f "${ICON_SCRIPT}" ]]; then
@@ -172,16 +172,16 @@ with open('${DMG_STAGING}/.background/bg.png','wb') as f: f.write(png(w,h,px))
 # Create README
 cat > "${DMG_STAGING}/README.txt" << 'README'
 ╔══════════════════════════════════════════╗
-║          ORB BASE v2.0.0                 ║
+║          TORBO BASE v3.0.0               ║
 ║    Local AI Gateway & Control Center     ║
 ║    © 2026 Perceptual Art LLC             ║
 ╚══════════════════════════════════════════╝
 
 INSTALLATION
-  Drag "ORB Base" → Applications folder.
+  Drag "Torbo Base" → Applications folder.
 
 FIRST LAUNCH
-  1. Open ORB Base from Applications
+  1. Open Torbo Base from Applications
   2. Accept the EULA and complete Setup Wizard
   3. Install Ollama if not already installed
   4. Pull your first local AI model
@@ -198,18 +198,18 @@ WEB CHAT
   http://localhost:4200/chat?token=YOUR_TOKEN
 
 PRIVACY
-  ORB Base collects ZERO data.
+  Torbo Base collects ZERO data.
   All AI processing stays on your device.
   API keys stored in macOS Keychain.
 
 SUPPORT
-  https://orbbase.ai
+  https://torbobase.ai
 README
 
 # Create writable DMG first
 rm -f "${DMG_PATH}"
 hdiutil create \
-    -volname "ORB Base" \
+    -volname "Torbo Base" \
     -srcfolder "${DMG_STAGING}" \
     -ov -format UDRW \
     "${DMG_TMP}" 2>/dev/null
@@ -221,7 +221,7 @@ if [[ -n "${MOUNT_DIR}" && -d "${MOUNT_DIR}" ]]; then
     # Use AppleScript to style the DMG Finder window
     osascript << APPLESCRIPT 2>/dev/null || true
 tell application "Finder"
-    tell disk "ORB Base"
+    tell disk "Torbo Base"
         open
         set current view of container window to icon view
         set toolbar visible of container window to false
@@ -233,7 +233,7 @@ tell application "Finder"
         try
             set background picture of theViewOptions to file ".background:bg.png"
         end try
-        set position of item "ORB Base.app" of container window to {160, 190}
+        set position of item "Torbo Base.app" of container window to {160, 190}
         set position of item "Applications" of container window to {500, 190}
         try
             set position of item "README.txt" of container window to {330, 330}
@@ -270,16 +270,16 @@ echo ""
 echo "▸ [6/6] Verifying..."
 APP_SIZE=$(du -sh "${APP_BUNDLE}" | awk '{print $1}')
 echo "  App size: ${APP_SIZE}"
-echo "  Bundle ID: ai.orb.base"
+echo "  Bundle ID: ai.torbo.base"
 echo "  Min macOS: 14.0"
 echo ""
 echo "  ╔═══════════════════════════════════════╗"
 echo "  ║   BUILD COMPLETE                      ║"
 echo "  ╠═══════════════════════════════════════╣"
-echo "  ║   App: dist/ORB Base.app              ║"
+echo "  ║   App: dist/Torbo Base.app            ║"
 echo "  ║   DMG: dist/${DMG_NAME}.dmg       ║"
 echo "  ╠═══════════════════════════════════════╣"
-echo "  ║   open dist/ORB\\ Base.app             ║"
+echo "  ║   open dist/Torbo\\ Base.app           ║"
 echo "  ║   open dist/${DMG_NAME}.dmg       ║"
 echo "  ╚═══════════════════════════════════════╝"
 echo ""

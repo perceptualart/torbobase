@@ -1,0 +1,8 @@
+.build/
+.git/
+.gitignore
+*.xcodeproj
+*.xcworkspace
+Dockerfile
+docker-compose.yml
+.dockerignore

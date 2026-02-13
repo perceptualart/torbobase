@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-ORB Base — App Icon Generator
+Torbo Base — App Icon Generator
 Multi-layer orb icon with aurora effects and macOS superellipse mask.
 © 2026 Perceptual Art LLC / Michael David Murphy
 """
@@ -106,7 +106,7 @@ def generate_orb_icon(size):
 
 def main():
     out = sys.argv[1] if len(sys.argv) > 1 else os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "dist")
-    iconset = os.path.join(out, "ORBBase.iconset")
+    iconset = os.path.join(out, "TorboBase.iconset")
     os.makedirs(iconset, exist_ok=True)
 
     for s in [16, 32, 64, 128, 256, 512, 1024]:
