@@ -76,7 +76,17 @@ final class PairingManager: _PairingManagerBase {
     private static let devicesKey = "torbo_paired_devices"
 
     private init() {
+        migrateFromORBIfNeeded()
         loadDevices()
+    }
+
+    /// One-time migration: copy paired devices from old "orb_paired_devices" key
+    private func migrateFromORBIfNeeded() {
+        let defaults = UserDefaults.standard
+        guard defaults.data(forKey: Self.devicesKey) == nil,
+              let oldData = defaults.data(forKey: "orb_paired_devices") else { return }
+        defaults.set(oldData, forKey: Self.devicesKey)
+        print("[Pairing] Migrated paired devices from ORB → Torbo")
     }
 
     // MARK: - Bonjour Publishing

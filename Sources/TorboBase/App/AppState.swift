@@ -203,6 +203,40 @@ enum TorboVersion {
 enum AppConfig {
     private static let defaults = UserDefaults.standard
 
+    /// One-time migration of UserDefaults keys from ORB-era ("orb*") to Torbo-era ("torbo*")
+    static func migrateFromORBIfNeeded() {
+        guard !defaults.bool(forKey: "torbo_config_migrated") else { return }
+
+        let mappings: [(old: String, new: String)] = [
+            ("orbAccessLevel",      "torboAccessLevel"),
+            ("orbServerPort",       "torboServerPort"),
+            ("orbSandboxPaths",     "torboSandboxPaths"),
+            ("orbRateLimit",        "torboRateLimit"),
+            ("orbSetupCompleted",   "torboSetupCompleted"),
+            ("orbSystemPrompt",     "torboSystemPrompt"),
+            ("orbSystemPromptEnabled", "torboSystemPromptEnabled"),
+            ("orbTelegramChatId",   "torboTelegramChatId"),
+            ("orbTelegramEnabled",  "torboTelegramEnabled"),
+            ("orb_paired_devices",  "torbo_paired_devices"),
+        ]
+
+        var migrated = 0
+        for m in mappings {
+            if defaults.object(forKey: m.new) == nil,
+               let old = defaults.object(forKey: m.old) {
+                defaults.set(old, forKey: m.new)
+                migrated += 1
+                print("[Config] Migrated: \(m.old) → \(m.new)")
+            }
+        }
+
+        if migrated > 0 {
+            print("[Config] Migrated \(migrated) UserDefaults key(s) from ORB → Torbo")
+        }
+
+        defaults.set(true, forKey: "torbo_config_migrated")
+    }
+
     static var accessLevel: Int {
         get { defaults.integer(forKey: "torboAccessLevel") }
         set { defaults.set(newValue, forKey: "torboAccessLevel") }
@@ -414,8 +448,17 @@ final class AppState {
     }
 
     private init() {
+        // Run migration before reading any config
+        AppConfig.migrateFromORBIfNeeded()
+
         let saved = AppConfig.accessLevel
-        self.accessLevel = AccessLevel(rawValue: saved) ?? .chatOnly
+        // If access level was never explicitly set (defaults returns 0 = .off),
+        // use .chatOnly as a safe default rather than silently disabling the gateway
+        if UserDefaults.standard.object(forKey: "torboAccessLevel") == nil {
+            self.accessLevel = .chatOnly
+        } else {
+            self.accessLevel = AccessLevel(rawValue: saved) ?? .chatOnly
+        }
         self.serverToken = AppConfig.serverToken
     }
 
