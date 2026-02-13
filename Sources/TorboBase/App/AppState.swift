@@ -203,9 +203,17 @@ enum TorboVersion {
 enum AppConfig {
     private static let defaults = UserDefaults.standard
 
-    /// One-time migration of UserDefaults keys from ORB-era ("orb*") to Torbo-era ("torbo*")
+    /// One-time migration of UserDefaults from ORB-era to Torbo-era.
+    /// The bundle ID changed from "ai.orb.base" to "ai.torbo.base", so
+    /// UserDefaults.standard now points to a different domain. We must
+    /// explicitly read from the old domain using UserDefaults(suiteName:).
     static func migrateFromORBIfNeeded() {
         guard !defaults.bool(forKey: "torbo_config_migrated") else { return }
+
+        // Old domain from previous bundle ID
+        let oldDefaults = UserDefaults(suiteName: "ai.orb.base")
+        // Also check ORBBase domain (used by some earlier builds)
+        let oldDefaults2 = UserDefaults(suiteName: "ORBBase")
 
         let mappings: [(old: String, new: String)] = [
             ("orbAccessLevel",      "torboAccessLevel"),
@@ -222,11 +230,14 @@ enum AppConfig {
 
         var migrated = 0
         for m in mappings {
-            if defaults.object(forKey: m.new) == nil,
-               let old = defaults.object(forKey: m.old) {
-                defaults.set(old, forKey: m.new)
-                migrated += 1
-                print("[Config] Migrated: \(m.old) → \(m.new)")
+            if defaults.object(forKey: m.new) == nil {
+                // Try old ai.orb.base domain first, then ORBBase domain
+                let old = oldDefaults?.object(forKey: m.old) ?? oldDefaults2?.object(forKey: m.old)
+                if let old {
+                    defaults.set(old, forKey: m.new)
+                    migrated += 1
+                    print("[Config] Migrated: \(m.old) → \(m.new)")
+                }
             }
         }
 

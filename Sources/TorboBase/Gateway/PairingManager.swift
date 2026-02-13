@@ -80,13 +80,17 @@ final class PairingManager: _PairingManagerBase {
         loadDevices()
     }
 
-    /// One-time migration: copy paired devices from old "orb_paired_devices" key
+    /// One-time migration: copy paired devices from old "orb_paired_devices" key.
+    /// Bundle ID changed (ai.orb.base → ai.torbo.base) so old data is in a different domain.
     private func migrateFromORBIfNeeded() {
         let defaults = UserDefaults.standard
-        guard defaults.data(forKey: Self.devicesKey) == nil,
-              let oldData = defaults.data(forKey: "orb_paired_devices") else { return }
+        guard defaults.data(forKey: Self.devicesKey) == nil else { return }
+
+        let oldData = UserDefaults(suiteName: "ai.orb.base")?.data(forKey: "orb_paired_devices")
+                   ?? UserDefaults(suiteName: "ORBBase")?.data(forKey: "orb_paired_devices")
+        guard let oldData else { return }
         defaults.set(oldData, forKey: Self.devicesKey)
-        print("[Pairing] Migrated paired devices from ORB → Torbo")
+        print("[Pairing] Migrated paired devices from ORB → Torbo (\(oldData.count) bytes)")
     }
 
     // MARK: - Bonjour Publishing
