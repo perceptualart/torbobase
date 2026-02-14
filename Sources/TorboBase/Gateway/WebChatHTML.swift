@@ -520,7 +520,7 @@ enum WebChatHTML {
             <option value="sid">SiD</option>
         </select>
         <span class="agent-name" id="agentName">SiD</span>
-        <select class="model-select" id="model">
+        <select class="model-select" id="model" onchange="agentModelMap[currentAgentID] = this.value">
             <option value="qwen2.5:7b">Loading models...</option>
         </select>
         <span class="status" id="status">Connecting...</span>
@@ -681,6 +681,8 @@ enum WebChatHTML {
     let pendingAttachments = []; // { name, type, dataUrl, base64 }
     // Per-agent conversation histories for room mode
     let roomConversations = {};
+    // Per-agent model selection — remembers which model each agent uses
+    const agentModelMap = {};
     // localStorage keys
     const STORAGE_PREFIX = 'torbo_';
     const THEME_KEY = STORAGE_PREFIX + 'theme';
@@ -1037,7 +1039,13 @@ enum WebChatHTML {
     // ─── Switch Agent ───
     async function switchAgent() {
         saveConversation(); // save current agent's chat before switching
+        // Remember current agent's model
+        agentModelMap[currentAgentID] = modelEl.value;
         currentAgentID = agentSelectEl.value;
+        // Restore this agent's model (if previously set)
+        if (agentModelMap[currentAgentID] && modelEl.querySelector('option[value="' + CSS.escape(agentModelMap[currentAgentID]) + '"]')) {
+            modelEl.value = agentModelMap[currentAgentID];
+        }
         conversationHistory = [];
         messagesEl.innerHTML = '';
         setOrbFull();
@@ -1317,19 +1325,20 @@ enum WebChatHTML {
             roomConversations[aid].push({ role: 'user', content: msgContent });
         });
 
-        // Send to all agents in parallel, each gets its own bubble
+        // Send to all agents in parallel, each gets its own bubble and model
         const promises = agents.map(async (aid) => {
             const agent = agentsList.find(a => a.id === aid);
             const agentName = agent?.name || aid;
+            const agentModel = agentModelMap[aid] || modelEl.value;
             const div = document.createElement('div');
             div.className = 'message assistant';
             const time = new Date().toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'});
-            div.innerHTML = `<div class="agent-label">${escapeHtml(agentName)}</div><div class="bubble streaming"><span class="cursor">\\u2588</span></div><div class="meta">${modelEl.value} \\u00b7 ${time}</div>`;
+            div.innerHTML = `<div class="agent-label">${escapeHtml(agentName)}</div><div class="bubble streaming"><span class="cursor">\\u2588</span></div><div class="meta">${agentModel} \\u00b7 ${time}</div>`;
             messagesEl.appendChild(div);
             const bubble = div.querySelector('.bubble');
             messagesEl.scrollTop = messagesEl.scrollHeight;
 
-            const fullContent = await streamToAgent(aid, roomConversations[aid], bubble);
+            const fullContent = await streamToAgent(aid, roomConversations[aid], bubble, agentModel);
             if (fullContent) {
                 roomConversations[aid].push({ role: 'assistant', content: fullContent });
                 // Post AI response to room if multi-user
@@ -1345,7 +1354,8 @@ enum WebChatHTML {
     // Track active fetch controllers so we can abort on new send or page unload
     let activeAbortControllers = new Set();
 
-    async function streamToAgent(agentID, messages, bubble) {
+    async function streamToAgent(agentID, messages, bubble, overrideModel) {
+        const useModel = overrideModel || agentModelMap[agentID] || modelEl.value;
         let fullContent = '';
         const controller = new AbortController();
         activeAbortControllers.add(controller);
@@ -1359,7 +1369,7 @@ enum WebChatHTML {
                     'Authorization': 'Bearer ' + TOKEN,
                     'x-torbo-agent-id': agentID
                 },
-                body: JSON.stringify({ model: modelEl.value, messages: messages, stream: true })
+                body: JSON.stringify({ model: useModel, messages: messages, stream: true })
             });
 
             if (!res.ok) {
