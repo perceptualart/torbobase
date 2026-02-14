@@ -90,6 +90,7 @@ struct SetupWizardView: View {
     @State private var tailscaleInstalled = false
     @State private var tailscaleRunning = false
     @State private var tailscaleIP: String = ""
+    @State private var keySaveTask: Task<Void, Never>?
     var onComplete: () -> Void
 
     var body: some View {
@@ -1208,7 +1209,12 @@ struct SetupWizardView: View {
             get: { state.cloudAPIKeys[keyName] ?? "" },
             set: {
                 state.cloudAPIKeys[keyName] = $0
-                AppConfig.cloudAPIKeys = state.cloudAPIKeys
+                keySaveTask?.cancel()
+                keySaveTask = Task {
+                    try? await Task.sleep(nanoseconds: 500_000_000)
+                    guard !Task.isCancelled else { return }
+                    AppConfig.cloudAPIKeys = state.cloudAPIKeys
+                }
             }
         )
     }

@@ -41,10 +41,14 @@ enum KeychainManager {
 
     // MARK: - Encryption
 
+    /// Cached encryption key — derived once per process lifetime.
+    private static var _cachedEncryptionKey: Data?
+
     /// Derive a 256-bit encryption key from machine-specific data.
     /// Uses SHA-256 hash of (hardware UUID + salt + username) so the encrypted
-    /// file is tied to this machine and user.
+    /// file is tied to this machine and user. Cached after first derivation.
     private static var encryptionKey: Data {
+        if let cached = _cachedEncryptionKey { return cached }
         var seed = "torbo-base-keychain-v1"
         // Add machine-specific entropy
         if let hwUUID = getMachineUUID() { seed += hwUUID }
@@ -56,26 +60,41 @@ enum KeychainManager {
         seedData.withUnsafeBytes { ptr in
             _ = CC_SHA256(ptr.baseAddress, CC_LONG(seedData.count), &hash)
         }
-        return Data(hash)
+        let key = Data(hash)
+        _cachedEncryptionKey = key
+        return key
     }
 
+    /// Cached machine UUID — IOKit is only called once per process lifetime.
+    private static var _cachedMachineUUID: String?
+    private static var _uuidFetched = false
+
     /// Get the machine's hardware UUID (macOS) using IOKit directly.
-    /// Previous implementation used Process() + ioreg which crashed when called
-    /// from the main thread (waitUntilExit triggers CFRunLoop with null observers).
+    /// Cached after first call to avoid repeated IOKit calls on the main thread
+    /// (which caused SIGSEGV crashes during SwiftUI layout passes).
     private static func getMachineUUID() -> String? {
+        if _uuidFetched { return _cachedMachineUUID }
         #if os(macOS) && canImport(IOKit)
-        let service = IOServiceGetMatchingService(kIOMasterPortDefault,
+        let service = IOServiceGetMatchingService(kIOMainPortDefault,
                                                    IOServiceMatching("IOPlatformExpertDevice"))
-        guard service != 0 else { return nil }
+        guard service != 0 else {
+            _uuidFetched = true
+            return nil
+        }
         defer { IOObjectRelease(service) }
         if let uuidCF = IORegistryEntryCreateCFProperty(service,
                                                          "IOPlatformUUID" as CFString,
                                                          kCFAllocatorDefault, 0)?.takeRetainedValue() {
-            return uuidCF as? String
+            _cachedMachineUUID = uuidCF as? String
+            _uuidFetched = true
+            return _cachedMachineUUID
         }
+        _uuidFetched = true
         return nil
         #else
-        return ProcessInfo.processInfo.hostName
+        _cachedMachineUUID = ProcessInfo.processInfo.hostName
+        _uuidFetched = true
+        return _cachedMachineUUID
         #endif
     }
 
@@ -234,12 +253,21 @@ enum KeychainManager {
         return result
     }
 
-    /// Save all API keys from a dictionary
+    /// Save all API keys from a dictionary in a single load/save cycle.
+    /// Previously called setAPIKey() per provider (5 × loadStore + saveStore).
+    /// Now does one loadStore + one saveStore to avoid main-thread I/O storms.
     static func setAllAPIKeys(_ keys: [String: String]) {
+        var store = loadStore()
         for provider in CloudProvider.allCases {
+            let fullKey = "apikey.\(provider.keyName)"
             let val = keys[provider.keyName] ?? ""
-            setAPIKey(val, for: provider)
+            if val.isEmpty {
+                store.removeValue(forKey: fullKey)
+            } else {
+                store[fullKey] = val
+            }
         }
+        saveStore(store)
     }
 
     // MARK: - Convenience: Server Token

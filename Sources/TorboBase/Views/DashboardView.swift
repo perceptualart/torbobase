@@ -908,6 +908,7 @@ struct SettingsView: View {
     @State private var launchAtLogin = LaunchAtLogin.isEnabled
     @State private var portText = String(AppConfig.serverPort)
     @State private var portNeedsRestart = false
+    @State private var keySaveTask: Task<Void, Never>?
 
     private let systemPromptPresets: [(String, String)] = [
         ("Concise", "You are a helpful assistant. Be concise and direct. Avoid unnecessary preamble."),
@@ -1282,7 +1283,12 @@ struct SettingsView: View {
             get: { state.cloudAPIKeys[provider.keyName] ?? "" },
             set: { newValue in
                 state.cloudAPIKeys[provider.keyName] = newValue
-                AppConfig.cloudAPIKeys = state.cloudAPIKeys
+                keySaveTask?.cancel()
+                keySaveTask = Task {
+                    try? await Task.sleep(nanoseconds: 500_000_000)
+                    guard !Task.isCancelled else { return }
+                    AppConfig.cloudAPIKeys = state.cloudAPIKeys
+                }
             }
         )
     }
@@ -1292,7 +1298,12 @@ struct SettingsView: View {
             get: { state.cloudAPIKeys["ELEVENLABS_API_KEY"] ?? "" },
             set: { newValue in
                 state.cloudAPIKeys["ELEVENLABS_API_KEY"] = newValue
-                AppConfig.cloudAPIKeys = state.cloudAPIKeys
+                keySaveTask?.cancel()
+                keySaveTask = Task {
+                    try? await Task.sleep(nanoseconds: 500_000_000)
+                    guard !Task.isCancelled else { return }
+                    AppConfig.cloudAPIKeys = state.cloudAPIKeys
+                }
             }
         )
     }
