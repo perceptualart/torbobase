@@ -1401,7 +1401,9 @@ enum WebChatHTML {
                             const delta = chunk.choices?.[0]?.delta?.content || '';
                             if (delta) {
                                 fullContent += delta;
-                                bubble.innerHTML = renderMarkdown(fullContent) + '<span class="cursor">\\u2588</span>';
+                                // Strip tool progress labels (e.g. [using: tool_name], [searching: ...])
+                                const display = fullContent.replace(/\\[[a-z]+:\\s*[^\\]]*\\]/g, '').trim();
+                                bubble.innerHTML = renderMarkdown(display) + '<span class="cursor">\\u2588</span>';
                                 messagesEl.scrollTop = messagesEl.scrollHeight;
                             }
                         } catch(e) {}
@@ -1418,6 +1420,8 @@ enum WebChatHTML {
                 }
             }
 
+            // Strip any tool progress labels from final content
+            fullContent = fullContent.replace(/\\[[a-z]+:\\s*[^\\]]*\\]/g, '').trim();
             bubble.innerHTML = renderMarkdown(fullContent);
             bubble.classList.remove('streaming');
         } catch(e) {

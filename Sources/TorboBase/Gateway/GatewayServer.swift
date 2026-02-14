@@ -1440,8 +1440,9 @@ actor GatewayServer {
                     return ToolProcessor.canExecute(name)
                 }
 
-                // If there are non-built-in tool calls, can't handle — return the text we have
+                // If there are non-built-in tool calls, can't handle them
                 if builtInCalls.count != toolCalls.count {
+                    // If there's text content alongside the unexecutable tool calls, use it
                     if let content = message["content"] as? String, !content.isEmpty {
                         if headersSent {
                             sendSSETextChunk(content, id: chunkID, model: model, writer: writer)
@@ -1450,8 +1451,29 @@ actor GatewayServer {
                         } else {
                             simulateStreamResponse(content, model: model, writer: writer)
                         }
+                        return
+                    }
+                    // No text content — retry without tools so the model gives a plain text response
+                    TorboLog.info("Model called unexecutable tool(s), retrying without tools", subsystem: "Gateway")
+                    var retryBody = currentBody
+                    retryBody.removeValue(forKey: "tools")
+                    retryBody.removeValue(forKey: "tool_choice")
+                    let retryResponse = await sendChatRequest(body: retryBody, model: model, clientIP: clientIP)
+                    if let retryJson = try? JSONSerialization.jsonObject(with: retryResponse.body) as? [String: Any],
+                       let retryChoices = retryJson["choices"] as? [[String: Any]],
+                       let retryMsg = retryChoices.first?["message"] as? [String: Any],
+                       let retryContent = retryMsg["content"] as? String, !retryContent.isEmpty {
+                        if headersSent {
+                            sendSSETextChunk(retryContent, id: chunkID, model: model, writer: writer)
+                            sendSSEFinishChunk(id: chunkID, model: model, writer: writer)
+                            writer.sendSSEDone()
+                        } else {
+                            simulateStreamResponse(retryContent, model: model, writer: writer)
+                        }
                     } else {
-                        writer.sendResponse(response)
+                        // Even retry failed — send whatever we got
+                        if headersSent { writer.sendSSEDone() }
+                        else { writer.sendResponse(retryResponse) }
                     }
                     return
                 }
@@ -1721,6 +1743,7 @@ actor GatewayServer {
                 var currentToolName = ""
                 var currentToolArgs = ""
                 var hasToolCalls = false
+                var currentBlockType = ""   // Track content block type to skip thinking blocks
 
                 for try await byte in bytes {
                     let char = Character(UnicodeScalar(byte))
@@ -1733,8 +1756,19 @@ actor GatewayServer {
                               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                               let type = json["type"] as? String else { continue }
 
+                        // Track content block types — skip thinking blocks entirely
+                        if type == "content_block_start",
+                           let contentBlock = json["content_block"] as? [String: Any],
+                           let blockType = contentBlock["type"] as? String {
+                            currentBlockType = blockType
+                        } else if type == "content_block_stop" {
+                            currentBlockType = ""
+                        }
+
                         if type == "content_block_delta",
                            let delta = json["delta"] as? [String: Any] {
+                            // Skip thinking block deltas — don't forward to client
+                            if currentBlockType == "thinking" { continue }
                             if let text = delta["text"] as? String {
                                 fullContent += text
                                 let chunk: [String: Any] = [
