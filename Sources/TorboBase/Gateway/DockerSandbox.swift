@@ -1,3 +1,5 @@
+// Copyright 2026 Perceptual Art LLC. All rights reserved.
+// Licensed under Apache 2.0 — see LICENSE file.
 // Torbo Base — Docker Sandbox
 // DockerSandbox.swift — Container-based code execution for maximum isolation
 // Falls back to process-based sandbox (CodeSandbox) if Docker is unavailable
@@ -35,7 +37,7 @@ actor DockerSandbox {
     ]
 
     init() {
-        let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+        let appSupport = PlatformPaths.appSupportDir
         baseDir = appSupport.appendingPathComponent("TorboBase/docker-sandbox").path
         try? FileManager.default.createDirectory(atPath: baseDir, withIntermediateDirectories: true)
     }
@@ -56,9 +58,9 @@ actor DockerSandbox {
         isDockerAvailable = available
 
         if available {
-            print("[Docker] Available — version: \(result.stdout.trimmingCharacters(in: .whitespacesAndNewlines))")
+            TorboLog.info("Available — version: \(result.stdout.trimmingCharacters(in: .whitespacesAndNewlines))", subsystem: "Docker")
         } else {
-            print("[Docker] Not available — will use process sandbox")
+            TorboLog.warn("Not available — will use process sandbox", subsystem: "Docker")
         }
 
         return available
@@ -83,7 +85,7 @@ actor DockerSandbox {
 
         // Fallback to process sandbox
         guard dockerAvailable else {
-            print("[Docker] Falling back to process sandbox")
+            TorboLog.info("Falling back to process sandbox", subsystem: "Docker")
             var sandboxConfig = SandboxConfig()
             sandboxConfig.timeout = config.timeout
             sandboxConfig.maxOutputSize = config.maxOutputSize
@@ -164,7 +166,7 @@ actor DockerSandbox {
             dockerArgs += ["/bin/sh", "/workspace/code.sh"]
         }
 
-        print("[Docker] Executing \(language.rawValue) in \(image) (exec \(execID))")
+        TorboLog.info("Executing \(language.rawValue) in \(image) (exec \(execID))", subsystem: "Docker")
 
         // Find docker executable
         let dockerPath = findDocker()
@@ -230,9 +232,9 @@ actor DockerSandbox {
             truncated: truncated
         )
 
-        print("[Docker] \(language.rawValue) execution complete — exit: \(result.exitCode), " +
+        TorboLog.info("\(language.rawValue) execution complete — exit: \(result.exitCode), " +
               "stdout: \(stdout.count) chars, files: \(generatedFiles.count), " +
-              "time: \(String(format: "%.1f", executionResult.executionTime))s")
+              "time: \(String(format: "%.1f", executionResult.executionTime))s", subsystem: "Docker")
 
         // Schedule cleanup
         Task {
@@ -318,8 +320,13 @@ actor DockerSandbox {
         which.arguments = ["docker"]
         let pipe = Pipe()
         which.standardOutput = pipe
-        try? which.run()
-        which.waitUntilExit()
+        do {
+            try which.run()
+            which.waitUntilExit()
+        } catch {
+            TorboLog.debug("Process failed to start: \(error)", subsystem: "Docker")
+            return nil
+        }
         let data = pipe.fileHandleForReading.readDataToEndOfFile()
         let path = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines)
         if let p = path, !p.isEmpty { return p }

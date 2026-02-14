@@ -1,3 +1,5 @@
+// Copyright 2026 Perceptual Art LLC. All rights reserved.
+// Licensed under Apache 2.0 — see LICENSE file.
 // Torbo Base — Screen Capture Integration
 // Extension to wire ScreenCapture into ToolProcessor
 import Foundation
@@ -26,7 +28,7 @@ extension ToolProcessor {
 extension ToolProcessor {
     /// Execute screen capture and system tools
     func executeAllBuiltInTools(_ toolCalls: [[String: Any]], accessLevel: AccessLevel) async -> [[String: Any]] {
-        var results = await executeBuiltInTools(toolCalls, accessLevel: accessLevel)
+        var results = await executeBuiltInTools(toolCalls, accessLevel: accessLevel, agentID: "sid")
         
         // Handle capture_screen calls
         for call in toolCalls {

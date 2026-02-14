@@ -1,3 +1,5 @@
+// Copyright 2026 Perceptual Art LLC. All rights reserved.
+// Licensed under Apache 2.0 — see LICENSE file.
 // Torbo Base — Discord Bridge
 // DiscordBridge.swift — Bidirectional messaging with Discord via Bot API
 // Polls for messages, forwards to gateway, sends responses back
@@ -9,6 +11,7 @@ actor DiscordBridge {
 
     private let session: URLSession
     private var isPolling = false
+    private var shouldRun = false
     private var lastMessageID: String?
     private let baseURL = "https://discord.com/api/v10"
 
@@ -41,10 +44,14 @@ actor DiscordBridge {
         let token = await botToken
         let channel = await channelID
 
-        // Discord has 2000 char limit — split if needed
-        let chunks = splitMessage(text, maxLength: 1900)
+        // Format for Discord and split into platform-safe chunks
+        let formatted = BridgeFormatter.format(text, for: .discord)
+        let chunks = BridgeFormatter.truncate(formatted, for: .discord)
         for chunk in chunks {
-            let url = URL(string: "\(baseURL)/channels/\(channel)/messages")!
+            guard let url = URL(string: "\(baseURL)/channels/\(channel)/messages") else {
+                TorboLog.error("Invalid channel URL for channel: \(channel)", subsystem: "Discord")
+                continue
+            }
             var request = URLRequest(url: url)
             request.httpMethod = "POST"
             request.setValue("Bot \(token)", forHTTPHeaderField: "Authorization")
@@ -56,10 +63,10 @@ actor DiscordBridge {
             do {
                 let (_, response) = try await session.data(for: request)
                 if let http = response as? HTTPURLResponse, http.statusCode != 200 {
-                    print("[Discord] Send failed: HTTP \(http.statusCode)")
+                    TorboLog.error("Send failed: HTTP \(http.statusCode)", subsystem: "Discord")
                 }
             } catch {
-                print("[Discord] Send error: \(error.localizedDescription)")
+                TorboLog.error("Send error: \(error.localizedDescription)", subsystem: "Discord")
             }
         }
     }
@@ -77,19 +84,26 @@ actor DiscordBridge {
 
     func startPolling() async {
         guard await isEnabled else {
-            print("[Discord] Disabled — no bot token or channel ID configured")
+            TorboLog.warn("Disabled — no bot token or channel ID configured", subsystem: "Discord")
             return
         }
         guard !isPolling else { return }
         isPolling = true
-        print("[Discord] Starting message polling on channel \(await channelID)")
+        shouldRun = true
+        var reconnectAttempts = 0
+        let channel = await channelID
+        TorboLog.info("Starting message polling on channel \(channel)", subsystem: "Discord")
 
-        while isPolling {
+        while isPolling && shouldRun {
             do {
                 try await pollMessages()
+                reconnectAttempts = 0
             } catch {
-                print("[Discord] Poll error: \(error.localizedDescription)")
-                try? await Task.sleep(nanoseconds: 5_000_000_000)
+                reconnectAttempts += 1
+                TorboLog.error("Poll error (\(reconnectAttempts)): \(error.localizedDescription)", subsystem: "Discord")
+                let backoff = min(Double(reconnectAttempts) * 2.0, 60.0)
+                let jitter = backoff * Double.random(in: -0.25...0.25)
+                try? await Task.sleep(nanoseconds: UInt64((backoff + jitter) * 1_000_000_000))
             }
             try? await Task.sleep(nanoseconds: 2_000_000_000) // Poll every 2s
         }
@@ -97,7 +111,13 @@ actor DiscordBridge {
 
     func stopPolling() {
         isPolling = false
-        print("[Discord] Stopped polling")
+        TorboLog.info("Stopped polling", subsystem: "Discord")
+    }
+
+    /// Stop the Discord bridge gracefully.
+    func stop() {
+        shouldRun = false
+        TorboLog.info("Bridge stopped", subsystem: "Discord")
     }
 
     private func pollMessages() async throws {
@@ -127,7 +147,7 @@ actor DiscordBridge {
                   !content.isEmpty else { continue }
 
             lastMessageID = id
-            print("[Discord] Received: \(content.prefix(100))")
+            TorboLog.info("Received: \(content.prefix(100))", subsystem: "Discord")
             await handleIncomingMessage(content)
         }
 
@@ -140,8 +160,20 @@ actor DiscordBridge {
     // MARK: - Incoming Message Handler
 
     private func handleIncomingMessage(_ text: String) async {
+        let channel = await channelID
+        let channelKey = "discord:\(channel)"
+
+        // Group filter — Discord channels are not DMs by default
+        let filterResult = BridgeGroupFilter.filter(text: text, platform: .discord, isDirectMessage: false, botIdentifier: "")
+        guard filterResult.shouldProcess else { return }
+        let filteredText = filterResult.cleanedText
+
+        // Add user message to conversation context
+        await BridgeConversationContext.shared.addMessage(channelKey: channelKey, role: "user", content: filteredText)
+        let history = await BridgeConversationContext.shared.getHistory(channelKey: channelKey)
+
         // Log to AppState
-        let userMsg = ConversationMessage(role: "user", content: text, model: "discord", clientIP: "discord")
+        let userMsg = ConversationMessage(role: "user", content: filteredText, model: "discord", clientIP: "discord")
         await MainActor.run { AppState.shared.addMessage(userMsg) }
 
         // Route through gateway
@@ -151,7 +183,7 @@ actor DiscordBridge {
 
         let body: [String: Any] = [
             "model": model,
-            "messages": [["role": "user", "content": text]],
+            "messages": history,
             "stream": false
         ]
 
@@ -160,6 +192,7 @@ actor DiscordBridge {
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue("discord", forHTTPHeaderField: "x-torbo-platform")
         request.timeoutInterval = 120
         request.httpBody = try? JSONSerialization.data(withJSONObject: body)
 
@@ -173,6 +206,9 @@ actor DiscordBridge {
                 await send("⚠️ Failed to get response from gateway")
                 return
             }
+
+            // Add assistant response to conversation context
+            await BridgeConversationContext.shared.addMessage(channelKey: channelKey, role: "assistant", content: content)
 
             let assistantMsg = ConversationMessage(role: "assistant", content: content, model: model, clientIP: "discord")
             await MainActor.run { AppState.shared.addMessage(assistantMsg) }

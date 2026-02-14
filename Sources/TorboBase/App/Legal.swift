@@ -1,3 +1,5 @@
+// Copyright 2026 Perceptual Art LLC. All rights reserved.
+// Licensed under Apache 2.0 — see LICENSE file.
 import Foundation
 
 /// Legal text embedded in the binary — no external file dependencies

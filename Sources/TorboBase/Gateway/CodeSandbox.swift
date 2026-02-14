@@ -1,3 +1,5 @@
+// Copyright 2026 Perceptual Art LLC. All rights reserved.
+// Licensed under Apache 2.0 — see LICENSE file.
 // Torbo Base — Code Interpreter Sandbox
 // CodeSandbox.swift — Secure execution environment for Python and Node.js
 // Gives agents real computational power: data analysis, math, plotting, file generation
@@ -95,12 +97,12 @@ actor CodeSandbox {
     private var executionCount = 0
 
     init() {
-        let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+        let appSupport = PlatformPaths.appSupportDir
         baseDir = appSupport.appendingPathComponent("TorboBase/sandbox").path
 
         // Ensure sandbox directory exists
         try? FileManager.default.createDirectory(atPath: baseDir, withIntermediateDirectories: true)
-        print("[Sandbox] Initialized at \(baseDir)")
+        TorboLog.info("Initialized at \(baseDir)", subsystem: "Sandbox")
     }
 
     // MARK: - Execute Code
@@ -115,9 +117,10 @@ actor CodeSandbox {
         let workDir = config.workingDirectory ?? "\(baseDir)/exec_\(execID)"
         try? FileManager.default.createDirectory(atPath: workDir, withIntermediateDirectories: true)
 
-        // Write code to file
+        // Write code to file with restricted permissions (user-only read/write)
         let codeFile = "\(workDir)/code\(language.fileExtension)"
         try? code.write(toFile: codeFile, atomically: true, encoding: .utf8)
+        try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: codeFile)
 
         // Find the interpreter
         let interpreterPath = findInterpreter(language)
@@ -133,7 +136,7 @@ actor CodeSandbox {
             )
         }
 
-        print("[Sandbox] Executing \(language.rawValue) code (exec \(execID), timeout: \(Int(config.timeout))s)")
+        TorboLog.info("Executing \(language.rawValue) code (exec \(execID), timeout: \(Int(config.timeout))s)", subsystem: "Sandbox")
 
         // Build the process
         let process = Process()
@@ -260,15 +263,15 @@ actor CodeSandbox {
             truncated: truncated
         )
 
-        print("[Sandbox] \(language.rawValue) execution complete — exit: \(result.exitCode), " +
+        TorboLog.info("\(language.rawValue) execution complete — exit: \(result.exitCode), " +
               "stdout: \(stdout.count) chars, files: \(generatedFiles.count), " +
-              "time: \(String(format: "%.1f", result.executionTime))s")
+              "time: \(String(format: "%.1f", result.executionTime))s", subsystem: "Sandbox")
 
-        // Schedule cleanup (keep files for 1 hour)
+        // Schedule cleanup (keep files for 5 minutes — shorter to reduce exposure)
         Task {
-            try? await Task.sleep(nanoseconds: 3600 * 1_000_000_000)
+            try? await Task.sleep(nanoseconds: 300 * 1_000_000_000)
             try? FileManager.default.removeItem(atPath: workDir)
-            print("[Sandbox] Cleaned up exec_\(execID)")
+            TorboLog.info("Cleaned up exec_\(execID)", subsystem: "Sandbox")
         }
 
         return result
@@ -298,7 +301,7 @@ actor CodeSandbox {
     func getFile(path: String) -> Data? {
         // Security: only serve files from our sandbox directory
         guard path.hasPrefix(baseDir) else {
-            print("[Sandbox] Rejected file access outside sandbox: \(path)")
+            TorboLog.warn("Rejected file access outside sandbox: \(path)", subsystem: "Sandbox")
             return nil
         }
         return FileManager.default.contents(atPath: path)
@@ -330,7 +333,7 @@ actor CodeSandbox {
     // MARK: - Cleanup
 
     /// Clean up old execution directories
-    func cleanup(olderThan interval: TimeInterval = 3600) {
+    func cleanup(olderThan interval: TimeInterval = 300) {
         guard let execDirs = try? FileManager.default.contentsOfDirectory(atPath: baseDir) else { return }
         let cutoff = Date().addingTimeInterval(-interval)
 
@@ -390,8 +393,13 @@ actor CodeSandbox {
         which.arguments = [language.command]
         let pipe = Pipe()
         which.standardOutput = pipe
-        try? which.run()
-        which.waitUntilExit()
+        do {
+            try which.run()
+            which.waitUntilExit()
+        } catch {
+            TorboLog.debug("Process failed to start: \(error)", subsystem: "Sandbox")
+            return nil
+        }
 
         let data = pipe.fileHandleForReading.readDataToEndOfFile()
         let path = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines)

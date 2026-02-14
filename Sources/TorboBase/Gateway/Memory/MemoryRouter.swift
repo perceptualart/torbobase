@@ -1,3 +1,5 @@
+// Copyright 2026 Perceptual Art LLC. All rights reserved.
+// Licensed under Apache 2.0 — see LICENSE file.
 // Torbo Base — Memory Router
 // Intercepts every message, retrieves relevant memories, injects into context,
 // and triggers memory extraction after responses.
@@ -15,8 +17,8 @@ actor MemoryRouter {
 
     private var isReady = false
 
-    // SiD's identity is loaded from SidConfigManager at request time.
-    // No hardcoded personality here — it's all in sid_config.json.
+    // Agent identity is loaded from AgentConfigManager at request time.
+    // No hardcoded personality here — it's all in agents/{id}.json.
 
     // MARK: - Lifecycle
 
@@ -24,20 +26,21 @@ actor MemoryRouter {
         guard !isReady else { return }
         await MemoryArmy.shared.start()
         isReady = true
-        print("[MemoryRouter] Initialized and ready")
+        TorboLog.info("Initialized and ready", subsystem: "MemoryRouter")
     }
 
     // MARK: - Pre-Request: Inject Memories into System Prompt
 
     /// Process an incoming chat request body BEFORE it hits the LLM.
-    /// Builds the full system prompt: SiD identity → access context → memory → user context → tools.
-    /// If the client already provided a system message, SiD's identity is NOT injected (API override).
+    /// Builds the full system prompt: agent identity → access context → memory → user context → tools.
+    /// If the client already provided a system message, the agent's identity is NOT injected (API override).
     /// - Parameters:
     ///   - body: The chat request body (modified in place)
     ///   - accessLevel: Current access level (for identity block)
     ///   - toolNames: Names of available tools at this access level
     ///   - clientProvidedSystem: Whether the original request had a system message (API override)
-    func enrichRequest(_ body: inout [String: Any], accessLevel: Int = 1, toolNames: [String] = [], clientProvidedSystem: Bool = false) async {
+    ///   - agentID: Which agent is handling this request (loads per-agent identity)
+    func enrichRequest(_ body: inout [String: Any], accessLevel: Int = 1, toolNames: [String] = [], clientProvidedSystem: Bool = false, agentID: String = "sid", platform: String? = nil) async {
         guard isReady else { return }
 
         var messages = body["messages"] as? [[String: Any]] ?? []
@@ -60,11 +63,21 @@ actor MemoryRouter {
         // Build the enriched system prompt
         var systemParts: [String] = []
 
-        // 1. SiD identity block (skip if client provided their own system prompt)
+        // 1. Agent identity block (skip if client provided their own system prompt)
         if !clientProvidedSystem {
-            let sidConfig = await SidConfigManager.shared.current
-            let identityBlock = sidConfig.buildIdentityBlock(accessLevel: accessLevel, availableTools: toolNames)
+            let agentConfig: AgentConfig
+            if let found = await AgentConfigManager.shared.agent(agentID) {
+                agentConfig = found
+            } else {
+                agentConfig = await AgentConfigManager.shared.defaultAgent
+            }
+            let identityBlock = agentConfig.buildIdentityBlock(accessLevel: accessLevel, availableTools: toolNames)
             systemParts.append(identityBlock)
+        }
+
+        // 1.5. Platform context (for bridge conversations)
+        if let platform = platform, !platform.isEmpty {
+            systemParts.append(platformContextNote(platform))
         }
 
         // 2. Memory context (from vector search)
@@ -72,11 +85,19 @@ actor MemoryRouter {
             systemParts.append(memoryBlock)
         }
 
-        // 3. Legacy memory (structured facts — fallback if vector search empty)
-        if !memoryBlock.isEmpty || legacyMemory.isEmpty {
-            // Vector search had results, skip legacy
-        } else {
+        // 3. Legacy memory (structured facts — always include if available)
+        //    Legacy holds identity/user/project knowledge that vector search may not surface.
+        if !legacyMemory.isEmpty {
             systemParts.append(legacyMemory)
+        }
+
+        // 4. Skills prompt additions (enabled skills at current access level, filtered by agent)
+        if !clientProvidedSystem {
+            let agentSkillIDs = await AgentConfigManager.shared.agent(agentID)?.enabledSkillIDs ?? []
+            let skillsBlock = await SkillsManager.shared.skillsPromptBlock(forAccessLevel: accessLevel, allowedSkillIDs: agentSkillIDs)
+            if !skillsBlock.isEmpty {
+                systemParts.append(skillsBlock)
+            }
         }
 
         let systemPrompt = systemParts.joined(separator: "\n\n")
@@ -175,5 +196,22 @@ actor MemoryRouter {
             }.joined(separator: " ")
         }
         return ""
+    }
+
+    private func platformContextNote(_ platform: String) -> String {
+        switch platform {
+        case "discord":
+            return "<platform>User is messaging via Discord. Use Discord markdown (```code```, **bold**, > quotes). Keep responses concise — long messages feel heavy in chat. Emoji are natural here.</platform>"
+        case "telegram":
+            return "<platform>User is messaging via Telegram. Use Telegram Markdown (*bold*, _italic_, `code`). Messages can be moderate length. Markdown links work: [text](url).</platform>"
+        case "slack":
+            return "<platform>User is messaging via Slack. Use Slack mrkdwn (*bold*, _italic_, `code`, ```code blocks```). Keep professional tone. Thread-aware context.</platform>"
+        case "signal":
+            return "<platform>User is messaging via Signal. Plain text only — no markdown rendering. Keep responses short and direct. Privacy-conscious context.</platform>"
+        case "whatsapp":
+            return "<platform>User is messaging via WhatsApp. Use WhatsApp formatting (*bold*, _italic_, ```code```). Keep responses mobile-friendly and concise.</platform>"
+        default:
+            return ""
+        }
     }
 }

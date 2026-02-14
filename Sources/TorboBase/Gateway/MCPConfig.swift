@@ -1,3 +1,5 @@
+// Copyright 2026 Perceptual Art LLC. All rights reserved.
+// Licensed under Apache 2.0 — see LICENSE file.
 // Torbo Base — MCP Server Configuration
 // MCPConfig.swift — Loads and manages MCP server definitions
 // Model Context Protocol: https://modelcontextprotocol.io
@@ -24,6 +26,12 @@ struct MCPServerConfig: Codable {
 /// File: ~/Library/Application Support/TorboBase/mcp_servers.json
 struct MCPConfigFile: Codable {
     let mcpServers: [String: MCPServerConfig]
+    let allowedCommands: [String]?
+}
+
+/// Default allowed commands for MCP servers. User can expand via `allowedCommands` in config.
+enum MCPDefaults {
+    static let allowedCommands: Set<String> = ["npx", "node", "python3", "python", "uvx", "deno", "ruby", "docker"]
 }
 
 // MARK: - Config Loader
@@ -31,7 +39,7 @@ struct MCPConfigFile: Codable {
 enum MCPConfigLoader {
     /// Default config file path
     static var configPath: String {
-        let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+        let appSupport = PlatformPaths.appSupportDir
         return appSupport.appendingPathComponent("TorboBase/mcp_servers.json").path
     }
 
@@ -39,19 +47,30 @@ enum MCPConfigLoader {
     static func load(from path: String? = nil) -> [String: MCPServerConfig] {
         let filePath = path ?? configPath
         guard FileManager.default.fileExists(atPath: filePath) else {
-            print("[MCP] No config file at \(filePath)")
+            TorboLog.info("No config file at \(filePath)", subsystem: "MCP")
             return [:]
         }
 
         do {
             let data = try Data(contentsOf: URL(fileURLWithPath: filePath))
             let config = try JSONDecoder().decode(MCPConfigFile.self, from: data)
-            print("[MCP] Loaded \(config.mcpServers.count) server(s) from config")
+            TorboLog.info("Loaded \(config.mcpServers.count) server(s) from config", subsystem: "MCP")
             return config.mcpServers
         } catch {
-            print("[MCP] Failed to parse config: \(error)")
+            TorboLog.error("Failed to parse config: \(error)", subsystem: "MCP")
             return [:]
         }
+    }
+
+    /// Load user-specified allowed commands from config
+    static func loadAllowedCommands() -> [String] {
+        let filePath = configPath
+        guard FileManager.default.fileExists(atPath: filePath),
+              let data = try? Data(contentsOf: URL(fileURLWithPath: filePath)),
+              let config = try? JSONDecoder().decode(MCPConfigFile.self, from: data) else {
+            return []
+        }
+        return config.allowedCommands ?? []
     }
 
     /// Create a template config file if none exists
@@ -75,7 +94,7 @@ enum MCPConfigLoader {
 
         if let data = try? JSONSerialization.data(withJSONObject: template, options: .prettyPrinted) {
             try? data.write(to: URL(fileURLWithPath: path))
-            print("[MCP] Created template config at \(path)")
+            TorboLog.info("Created template config at \(path)", subsystem: "MCP")
         }
     }
 }

@@ -1,4 +1,6 @@
-// Torbo Base — by Michael David Murphy & Orion (Claude Opus 4.6, Anthropic)
+// Copyright 2026 Perceptual Art LLC. All rights reserved.
+// Licensed under Apache 2.0 — see LICENSE file.
+// Torbo Base — by Michael David Murphy
 // Setup Wizard — first-launch experience with unmissable step numbering
 #if canImport(SwiftUI)
 import SwiftUI
@@ -252,33 +254,34 @@ struct SetupWizardView: View {
                 // Step dots with labels
                 HStack(spacing: 0) {
                     ForEach(1...SetupStep.userStepCount, id: \.self) { num in
-                        let step = SetupStep(rawValue: num)!
-                        let isCurrent = num == stepNum
-                        let isComplete = num < stepNum
+                        if let step = SetupStep(rawValue: num) {
+                            let isCurrent = num == stepNum
+                            let isComplete = num < stepNum
 
-                        HStack(spacing: 4) {
-                            ZStack {
-                                Circle()
-                                    .fill(isComplete ? step.iconColor.opacity(0.3) : isCurrent ? step.iconColor : Color.white.opacity(0.06))
-                                    .frame(width: 22, height: 22)
-                                if isComplete {
-                                    Image(systemName: "checkmark")
-                                        .font(.system(size: 9, weight: .bold))
-                                        .foregroundStyle(step.iconColor)
-                                } else {
-                                    Text("\(num)")
-                                        .font(.system(size: 10, weight: .bold, design: .monospaced))
-                                        .foregroundStyle(isCurrent ? .black : .white.opacity(0.25))
+                            HStack(spacing: 4) {
+                                ZStack {
+                                    Circle()
+                                        .fill(isComplete ? step.iconColor.opacity(0.3) : isCurrent ? step.iconColor : Color.white.opacity(0.06))
+                                        .frame(width: 22, height: 22)
+                                    if isComplete {
+                                        Image(systemName: "checkmark")
+                                            .font(.system(size: 9, weight: .bold))
+                                            .foregroundStyle(step.iconColor)
+                                    } else {
+                                        Text("\(num)")
+                                            .font(.system(size: 10, weight: .bold, design: .monospaced))
+                                            .foregroundStyle(isCurrent ? .black : .white.opacity(0.25))
+                                    }
                                 }
+                                Text(step.title)
+                                    .font(.system(size: 8, weight: isCurrent ? .bold : .medium))
+                                    .foregroundStyle(isCurrent ? .white.opacity(0.6) : .white.opacity(0.15))
+                                    .lineLimit(1)
                             }
-                            Text(step.title)
-                                .font(.system(size: 8, weight: isCurrent ? .bold : .medium))
-                                .foregroundStyle(isCurrent ? .white.opacity(0.6) : .white.opacity(0.15))
-                                .lineLimit(1)
-                        }
 
-                        if num < SetupStep.userStepCount {
-                            Spacer()
+                            if num < SetupStep.userStepCount {
+                                Spacer()
+                            }
                         }
                     }
                 }

@@ -1,4 +1,6 @@
-// Torbo Base — by Michael David Murphy & Orion (Claude Opus 4.6, Anthropic)
+// Copyright 2026 Perceptual Art LLC. All rights reserved.
+// Licensed under Apache 2.0 — see LICENSE file.
+// Torbo Base — by Michael David Murphy
 // Conversation persistence — stores messages and sessions to disk
 import Foundation
 
@@ -19,7 +21,7 @@ actor ConversationStore {
     private let batchInterval: TimeInterval = 5.0 // Write every 5 seconds
 
     init() {
-        let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+        let appSupport = PlatformPaths.appSupportDir
         storageDir = appSupport.appendingPathComponent("TorboBase", isDirectory: true)
         messagesFile = storageDir.appendingPathComponent("messages.jsonl")
         sessionsFile = storageDir.appendingPathComponent("sessions.json")
@@ -30,7 +32,7 @@ actor ConversationStore {
         // Ensure directory exists
         try? FileManager.default.createDirectory(at: storageDir, withIntermediateDirectories: true)
 
-        print("[Store] Data directory: \(storageDir.path)")
+        TorboLog.info("Data directory: \(storageDir.path)", subsystem: "ConvStore")
     }
 
     // MARK: - Messages
@@ -78,10 +80,14 @@ actor ConversationStore {
             }
         } else {
             // Create new file
-            try? lines.write(to: messagesFile, atomically: true, encoding: .utf8)
+            do {
+                try lines.write(to: messagesFile, atomically: true, encoding: .utf8)
+            } catch {
+                TorboLog.error("Failed to create messages file: \(error)", subsystem: "ConvStore")
+            }
         }
 
-        print("[Store] Flushed \(toWrite.count) messages to disk")
+        TorboLog.info("Flushed \(toWrite.count) messages to disk", subsystem: "ConvStore")
     }
 
     /// Load all messages from disk
@@ -98,10 +104,10 @@ actor ConversationStore {
                     messages.append(msg)
                 }
             }
-            print("[Store] Loaded \(messages.count) messages from disk")
+            TorboLog.info("Loaded \(messages.count) messages from disk", subsystem: "ConvStore")
             return messages
         } catch {
-            print("[Store] Failed to load messages: \(error)")
+            TorboLog.error("Failed to load messages: \(error)", subsystem: "ConvStore")
             return []
         }
     }
@@ -127,7 +133,7 @@ actor ConversationStore {
             let data = try encoder.encode(sessions)
             try data.write(to: sessionsFile, options: .atomic)
         } catch {
-            print("[Store] Failed to save sessions: \(error)")
+            TorboLog.error("Failed to save sessions: \(error)", subsystem: "ConvStore")
         }
     }
 
@@ -138,7 +144,7 @@ actor ConversationStore {
             let data = try Data(contentsOf: sessionsFile)
             return try decoder.decode([ConversationSession].self, from: data)
         } catch {
-            print("[Store] Failed to load sessions: \(error)")
+            TorboLog.error("Failed to load sessions: \(error)", subsystem: "ConvStore")
             return []
         }
     }
@@ -172,20 +178,13 @@ actor ConversationStore {
         writeTask = nil
         try? FileManager.default.removeItem(at: messagesFile)
         try? FileManager.default.removeItem(at: sessionsFile)
-        print("[Store] Cleared all conversation data")
+        TorboLog.info("Cleared all conversation data", subsystem: "ConvStore")
     }
 
     /// Export conversations as a JSON file, returns the file URL
     func exportConversations() -> URL? {
         let messages = loadMessages()
         let sessions = loadSessions()
-
-        let export: [String: Any] = [
-            "version": "2.0.0",
-            "exportedAt": ISO8601DateFormatter().string(from: Date()),
-            "messageCount": messages.count,
-            "sessionCount": sessions.count
-        ]
 
         // Write combined export
         let exportFile = storageDir.appendingPathComponent("torbo-base-export-\(dateStamp()).json")
@@ -207,10 +206,10 @@ actor ConversationStore {
         do {
             let jsonData = try encoder.encode(data)
             try jsonData.write(to: exportFile, options: .atomic)
-            print("[Store] Exported to \(exportFile.path)")
+            TorboLog.info("Exported to \(exportFile.path)", subsystem: "ConvStore")
             return exportFile
         } catch {
-            print("[Store] Export failed: \(error)")
+            TorboLog.error("Export failed: \(error)", subsystem: "ConvStore")
             return nil
         }
     }

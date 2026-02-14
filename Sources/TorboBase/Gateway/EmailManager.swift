@@ -1,3 +1,5 @@
+// Copyright 2026 Perceptual Art LLC. All rights reserved.
+// Licensed under Apache 2.0 — see LICENSE file.
 // Torbo Base — Email Manager
 import Foundation
 
@@ -81,13 +83,22 @@ actor EmailManager {
     
     // MARK: - Email Operations
     
+    /// Sanitize a string for safe AppleScript interpolation — escape quotes and backslashes
+    private func sanitizeForAppleScript(_ input: String) -> String {
+        input.replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\"", with: "\\\"")
+            .replacingOccurrences(of: "\n", with: "")
+            .replacingOccurrences(of: "\r", with: "")
+    }
+
     /// Check for recent unread emails
     func checkEmail(limit: Int = 10, mailbox: String = "INBOX") async -> String {
         let actualLimit = min(max(1, limit), 50) // Clamp between 1 and 50
-        
+        let safeMailbox = sanitizeForAppleScript(mailbox)
+
         let script = """
         tell application "Mail"
-            set unreadMessages to messages of mailbox "\(mailbox)" whose read status is false
+            set unreadMessages to messages of mailbox "\(safeMailbox)" whose read status is false
             set messageCount to count of unreadMessages
             set outputList to {}
             
@@ -111,7 +122,7 @@ actor EmailManager {
                 set end of outputList to msgInfo
             end repeat
             
-            return "Found " & messageCount & " unread email(s) in \(mailbox) (showing " & limitCount & "):\\n" & my joinList(outputList, "\\n")
+            return "Found " & messageCount & " unread email(s) in \(safeMailbox) (showing " & limitCount & "):\\n" & my joinList(outputList, "\\n")
         end tell
         
         on joinList(theList, delimiter)
@@ -128,10 +139,14 @@ actor EmailManager {
     
     /// Read a specific email by ID
     func readEmail(id: String) async -> String {
+        // Sanitize ID — must be numeric to prevent AppleScript injection
+        let safeID = id.filter { $0.isNumber }
+        guard !safeID.isEmpty else { return "Error: Invalid email ID" }
+
         let script = """
         tell application "Mail"
             try
-                set targetMessage to first message whose id is \(id)
+                set targetMessage to first message whose id is \(safeID)
                 
                 set msgSubject to subject of targetMessage
                 set msgSender to sender of targetMessage

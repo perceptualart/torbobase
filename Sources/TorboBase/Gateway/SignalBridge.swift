@@ -1,3 +1,5 @@
+// Copyright 2026 Perceptual Art LLC. All rights reserved.
+// Licensed under Apache 2.0 — see LICENSE file.
 // Torbo Base — Signal Bridge
 // SignalBridge.swift — Signal messaging via signal-cli REST API
 // Requires signal-cli running as REST server: https://github.com/bbernhard/signal-cli-rest-api
@@ -40,27 +42,36 @@ actor SignalBridge {
         let api = await apiURL
         let phone = await phoneNumber
 
-        let url = URL(string: "\(api)/v2/send")!
+        guard let url = URL(string: "\(api)/v2/send") else {
+            TorboLog.error("Invalid API URL: \(api)", subsystem: "Signal")
+            return
+        }
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
 
+        // Format for Signal and split into platform-safe chunks
+        let formatted = BridgeFormatter.format(text, for: .signal)
+        let chunks = BridgeFormatter.truncate(formatted, for: .signal)
+
         // Send to configured phone if no recipient specified
         let target = recipient ?? phone
-        let body: [String: Any] = [
-            "message": String(text.prefix(4096)),
-            "number": phone,
-            "recipients": [target]
-        ]
-        request.httpBody = try? JSONSerialization.data(withJSONObject: body)
+        for chunk in chunks {
+            let body: [String: Any] = [
+                "message": chunk,
+                "number": phone,
+                "recipients": [target]
+            ]
+            request.httpBody = try? JSONSerialization.data(withJSONObject: body)
 
-        do {
-            let (_, response) = try await session.data(for: request)
-            if let http = response as? HTTPURLResponse, http.statusCode != 201 && http.statusCode != 200 {
-                print("[Signal] Send failed: HTTP \(http.statusCode)")
+            do {
+                let (_, response) = try await session.data(for: request)
+                if let http = response as? HTTPURLResponse, http.statusCode != 201 && http.statusCode != 200 {
+                    TorboLog.error("Send failed: HTTP \(http.statusCode)", subsystem: "Signal")
+                }
+            } catch {
+                TorboLog.error("Send error: \(error.localizedDescription)", subsystem: "Signal")
             }
-        } catch {
-            print("[Signal] Send error: \(error.localizedDescription)")
         }
     }
 
@@ -72,19 +83,20 @@ actor SignalBridge {
 
     func startPolling() async {
         guard await isEnabled else {
-            print("[Signal] Disabled — no phone number or API URL configured")
+            TorboLog.warn("Disabled — no phone number or API URL configured", subsystem: "Signal")
             return
         }
         guard !isPolling else { return }
         isPolling = true
         lastTimestamp = Int64(Date().timeIntervalSince1970 * 1000)
-        print("[Signal] Starting message polling via \(await apiURL)")
+        let url = await apiURL
+        TorboLog.info("Starting message polling via \(url)", subsystem: "Signal")
 
         while isPolling {
             do {
                 try await pollMessages()
             } catch {
-                print("[Signal] Poll error: \(error.localizedDescription)")
+                TorboLog.error("Poll error: \(error.localizedDescription)", subsystem: "Signal")
                 try? await Task.sleep(nanoseconds: 5_000_000_000)
             }
             try? await Task.sleep(nanoseconds: 2_000_000_000)
@@ -93,7 +105,7 @@ actor SignalBridge {
 
     func stopPolling() {
         isPolling = false
-        print("[Signal] Stopped polling")
+        TorboLog.info("Stopped polling", subsystem: "Signal")
     }
 
     private func pollMessages() async throws {
@@ -120,7 +132,7 @@ actor SignalBridge {
             guard timestamp > lastTimestamp else { continue }
             lastTimestamp = timestamp
 
-            print("[Signal] Received from \(source): \(text.prefix(100))")
+            TorboLog.info("Received from \(source): \(text.prefix(100))", subsystem: "Signal")
             await handleIncomingMessage(text, from: source)
         }
     }
@@ -128,7 +140,18 @@ actor SignalBridge {
     // MARK: - Incoming Handler
 
     private func handleIncomingMessage(_ text: String, from sender: String) async {
-        let userMsg = ConversationMessage(role: "user", content: text, model: "signal", clientIP: "signal/\(sender)")
+        let channelKey = "signal:\(sender)"
+
+        // Group filter — Signal DMs are direct context
+        let filterResult = BridgeGroupFilter.filter(text: text, platform: .signal, isDirectMessage: true, botIdentifier: "")
+        guard filterResult.shouldProcess else { return }
+        let filteredText = filterResult.cleanedText
+
+        // Add user message to conversation context
+        await BridgeConversationContext.shared.addMessage(channelKey: channelKey, role: "user", content: filteredText)
+        let history = await BridgeConversationContext.shared.getHistory(channelKey: channelKey)
+
+        let userMsg = ConversationMessage(role: "user", content: filteredText, model: "signal", clientIP: "signal/\(sender)")
         await MainActor.run { AppState.shared.addMessage(userMsg) }
 
         let token = await MainActor.run { AppState.shared.serverToken }
@@ -137,7 +160,7 @@ actor SignalBridge {
 
         let body: [String: Any] = [
             "model": model,
-            "messages": [["role": "user", "content": text]],
+            "messages": history,
             "stream": false
         ]
 
@@ -146,6 +169,7 @@ actor SignalBridge {
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue("signal", forHTTPHeaderField: "x-torbo-platform")
         request.timeoutInterval = 120
         request.httpBody = try? JSONSerialization.data(withJSONObject: body)
 
@@ -159,6 +183,9 @@ actor SignalBridge {
                 await send("Failed to process message", to: sender)
                 return
             }
+
+            // Add assistant response to conversation context
+            await BridgeConversationContext.shared.addMessage(channelKey: channelKey, role: "assistant", content: content)
 
             let assistantMsg = ConversationMessage(role: "assistant", content: content, model: model, clientIP: "signal/\(sender)")
             await MainActor.run { AppState.shared.addMessage(assistantMsg) }

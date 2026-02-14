@@ -1,3 +1,5 @@
+// Copyright 2026 Perceptual Art LLC. All rights reserved.
+// Licensed under Apache 2.0 — see LICENSE file.
 // Torbo Base — by Michael David Murphy & Sid Destructo
 // Privacy Filter — Strip PII before sending to cloud providers
 

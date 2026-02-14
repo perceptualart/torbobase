@@ -1,3 +1,5 @@
+// Copyright 2026 Perceptual Art LLC. All rights reserved.
+// Licensed under Apache 2.0 — see LICENSE file.
 // Torbo Base — DMG Builder Tool
 import Foundation
 
@@ -20,8 +22,21 @@ actor DMGBuilder {
         ] as [String: Any]
     ]
     
-    private let projectPath = NSString(string: "~/Documents/torbo master/torbo base").expandingTildeInPath
-    private let buildScriptPath = NSString(string: "~/Documents/torbo master/torbo base/build.sh").expandingTildeInPath
+    private let projectPath: String = {
+        let binary = ProcessInfo.processInfo.arguments[0]
+        var dir = URL(fileURLWithPath: binary).deletingLastPathComponent()
+        for _ in 0..<6 {
+            if FileManager.default.fileExists(atPath: dir.appendingPathComponent("Package.swift").path) {
+                return dir.path
+            }
+            dir = dir.deletingLastPathComponent()
+        }
+        return FileManager.default.currentDirectoryPath
+    }()
+
+    private var buildScriptPath: String {
+        (projectPath as NSString).appendingPathComponent("build.sh")
+    }
     
     /// Build the DMG installer
     func buildDMG() async -> String {

@@ -1,8 +1,13 @@
+// Copyright 2026 Perceptual Art LLC. All rights reserved.
+// Licensed under Apache 2.0 — see LICENSE file.
 // Torbo Base — Webhook & Event Trigger System
 // WebhookManager.swift — Receive webhooks, trigger tasks, schedule cron-style events
-// Enables: GitHub push → SiD reviews code, email received → Mira drafts reply, etc.
+// Enables: GitHub push → agent reviews code, email received → agent drafts reply, etc.
 
 import Foundation
+#if canImport(CommonCrypto)
+import CommonCrypto
+#endif
 
 // MARK: - Webhook Definition
 
@@ -10,7 +15,7 @@ struct WebhookDefinition: Codable, Identifiable {
     let id: String
     let name: String                        // Human-readable name
     let description: String                 // What this webhook does
-    let assignedTo: String                  // Crew member to handle events
+    let assignedTo: String                  // Agent to handle events
     let action: WebhookAction               // What to do when triggered
     var enabled: Bool
     var secret: String?                     // Shared secret for HMAC verification
@@ -34,7 +39,7 @@ struct ScheduledEvent: Codable, Identifiable {
     let id: String
     let name: String
     let description: String                 // What the agent should do
-    let assignedTo: String                  // Crew member
+    let assignedTo: String                  // Agent
     let schedule: Schedule
     var enabled: Bool
     let createdAt: Date
@@ -57,6 +62,9 @@ actor WebhookManager {
 
     private var webhooks: [String: WebhookDefinition] = [:]
     private var scheduledEvents: [String: ScheduledEvent] = [:]
+
+    /// Replay protection: track recent delivery IDs to prevent duplicate processing
+    private var recentDeliveryIDs: [String: Date] = [:]
     private var schedulerTask: Task<Void, Never>?
     private let storePath = NSHomeDirectory() + "/Library/Application Support/TorboBase/webhooks.json"
     private let schedulePath = NSHomeDirectory() + "/Library/Application Support/TorboBase/schedules.json"
@@ -67,7 +75,7 @@ actor WebhookManager {
         loadWebhooks()
         loadSchedules()
         startScheduler()
-        print("[Webhooks] Initialized: \(webhooks.count) webhook(s), \(scheduledEvents.count) schedule(s)")
+        TorboLog.info("Initialized: \(webhooks.count) webhook(s), \(scheduledEvents.count) schedule(s)", subsystem: "Webhook")
     }
 
     // MARK: - Webhook CRUD
@@ -89,14 +97,14 @@ actor WebhookManager {
         )
         webhooks[webhook.id] = webhook
         saveWebhooks()
-        print("[Webhooks] Created '\(name)' → \(assignedTo) (ID: \(webhook.id))")
+        TorboLog.info("Created '\(name)' → \(assignedTo) (ID: \(webhook.id))", subsystem: "Webhook")
         return webhook
     }
 
     func deleteWebhook(_ id: String) -> Bool {
         guard webhooks.removeValue(forKey: id) != nil else { return false }
         saveWebhooks()
-        print("[Webhooks] Deleted webhook \(id)")
+        TorboLog.info("Deleted webhook \(id)", subsystem: "Webhook")
         return true
     }
 
@@ -125,17 +133,56 @@ actor WebhookManager {
             return (false, "Webhook is disabled")
         }
 
-        // Verify secret if configured
+        // Verify secret if configured — HMAC-SHA256 signature verification
         if let secret = webhook.secret, !secret.isEmpty {
             let sig = headers["x-hub-signature-256"] ?? headers["x-webhook-signature"] ?? ""
             if sig.isEmpty {
                 return (false, "Missing signature header")
             }
-            // Basic secret check (in production, use HMAC-SHA256)
-            if sig != secret && !sig.contains(secret) {
-                print("[Webhooks] Signature mismatch for '\(webhook.name)'")
+            // Compute HMAC-SHA256 of the body using the webhook secret
+            let bodyString = (try? JSONSerialization.data(withJSONObject: payload)).flatMap { String(data: $0, encoding: .utf8) } ?? ""
+            let bodyData = Data(bodyString.utf8)
+            let keyData = Data(secret.utf8)
+            var hmac = [UInt8](repeating: 0, count: Int(CC_SHA256_DIGEST_LENGTH))
+            keyData.withUnsafeBytes { keyPtr in
+                bodyData.withUnsafeBytes { dataPtr in
+                    CCHmac(CCHmacAlgorithm(kCCHmacAlgSHA256), keyPtr.baseAddress, keyData.count, dataPtr.baseAddress, bodyData.count, &hmac)
+                }
+            }
+            let expectedSig = "sha256=" + hmac.map { String(format: "%02x", $0) }.joined()
+            // Constant-time comparison to prevent timing attacks
+            let sigBytes = Array(sig.utf8)
+            let expectedBytes = Array(expectedSig.utf8)
+            let hmacMatch = sigBytes.count == expectedBytes.count && zip(sigBytes, expectedBytes).reduce(0) { $0 | ($1.0 ^ $1.1) } == 0
+            // Also accept exact secret match for simple webhook providers (NOT substring match)
+            if !hmacMatch && sig != secret {
+                TorboLog.error("Signature mismatch for '\(webhook.name)'", subsystem: "Webhook")
                 return (false, "Invalid signature")
             }
+        }
+
+        // Replay protection: check timestamp freshness
+        if let tsStr = headers["x-webhook-timestamp"],
+           let timestamp = Double(tsStr) {
+            let age = abs(Date().timeIntervalSince1970 - timestamp)
+            if age > 300 { // 5 minute window
+                TorboLog.warn("Stale webhook timestamp for '\(webhook.name)' (age: \(Int(age))s)", subsystem: "Webhook")
+                return (false, "Webhook timestamp too old")
+            }
+        }
+
+        // Replay protection: reject duplicate delivery IDs
+        let deliveryID = headers["x-webhook-delivery"] ?? headers["x-request-id"] ?? ""
+        if !deliveryID.isEmpty {
+            if recentDeliveryIDs[deliveryID] != nil {
+                TorboLog.warn("Duplicate delivery ID '\(deliveryID)' for '\(webhook.name)'", subsystem: "Webhook")
+                return (false, "Duplicate delivery")
+            }
+            recentDeliveryIDs[deliveryID] = Date()
+
+            // Prune old delivery IDs (keep last 10 minutes)
+            let cutoff = Date().addingTimeInterval(-600)
+            recentDeliveryIDs = recentDeliveryIDs.filter { $0.value > cutoff }
         }
 
         // Update trigger stats
@@ -172,7 +219,7 @@ actor WebhookManager {
                 assignedBy: "webhook/\(webhookID)",
                 priority: prio
             )
-            print("[Webhooks] '\(webhook.name)' triggered → task '\(task.id.prefix(8))' for \(webhook.assignedTo)")
+            TorboLog.info("'\(webhook.name)' triggered → task '\(task.id.prefix(8))' for \(webhook.assignedTo)", subsystem: "Webhook")
             return (true, "Task created: \(task.id)")
 
         case .createWorkflow(let template):
@@ -180,11 +227,11 @@ actor WebhookManager {
                 description: "\(template)\n\nContext from webhook:\n\(payloadStr.prefix(2000))",
                 createdBy: "webhook/\(webhookID)"
             )
-            print("[Webhooks] '\(webhook.name)' triggered → workflow '\(workflow.id.prefix(8))'")
+            TorboLog.info("'\(webhook.name)' triggered → workflow '\(workflow.id.prefix(8))'", subsystem: "Webhook")
             return (true, "Workflow created: \(workflow.id)")
 
         case .notify:
-            print("[Webhooks] '\(webhook.name)' triggered (notify only)")
+            TorboLog.info("'\(webhook.name)' triggered (notify only)", subsystem: "Webhook")
             return (true, "Event logged")
         }
     }
@@ -207,7 +254,7 @@ actor WebhookManager {
         )
         scheduledEvents[event.id] = event
         saveSchedules()
-        print("[Scheduler] Created '\(name)' → \(assignedTo) (next run: \(event.nextRunAt?.description ?? "?"))")
+        TorboLog.info("Created '\(name)' → \(assignedTo) (next run: \(event.nextRunAt?.description ?? "?"))", subsystem: "Webhook")
         return event
     }
 
@@ -235,7 +282,7 @@ actor WebhookManager {
     private func startScheduler() {
         schedulerTask?.cancel()
         schedulerTask = Task {
-            print("[Scheduler] Started — checking every 30s")
+            TorboLog.info("Scheduler started — checking every 30s", subsystem: "Webhook")
             while !Task.isCancelled {
                 await checkSchedules()
                 try? await Task.sleep(nanoseconds: 30 * 1_000_000_000) // Check every 30s
@@ -246,7 +293,7 @@ actor WebhookManager {
     func stopScheduler() {
         schedulerTask?.cancel()
         schedulerTask = nil
-        print("[Scheduler] Stopped")
+        TorboLog.info("Scheduler stopped", subsystem: "Webhook")
     }
 
     private func checkSchedules() async {
@@ -258,7 +305,7 @@ actor WebhookManager {
                   nextRun <= now else { continue }
 
             // Time to run this event
-            print("[Scheduler] Running '\(event.name)' → \(event.assignedTo)")
+            TorboLog.info("Scheduler running '\(event.name)' → \(event.assignedTo)", subsystem: "Webhook")
 
             // Create a task for this scheduled event
             let _ = await TaskQueue.shared.createTask(
@@ -327,7 +374,11 @@ actor WebhookManager {
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
         guard let data = try? encoder.encode(Array(webhooks.values)) else { return }
-        try? data.write(to: URL(fileURLWithPath: storePath))
+        do {
+            try data.write(to: URL(fileURLWithPath: storePath))
+        } catch {
+            TorboLog.error("Failed to write webhooks.json: \(error)", subsystem: "Webhooks")
+        }
     }
 
     private func loadWebhooks() {
@@ -343,7 +394,11 @@ actor WebhookManager {
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
         guard let data = try? encoder.encode(Array(scheduledEvents.values)) else { return }
-        try? data.write(to: URL(fileURLWithPath: schedulePath))
+        do {
+            try data.write(to: URL(fileURLWithPath: schedulePath))
+        } catch {
+            TorboLog.error("Failed to write schedules.json: \(error)", subsystem: "Webhooks")
+        }
     }
 
     private func loadSchedules() {

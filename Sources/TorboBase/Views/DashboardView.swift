@@ -1,4 +1,6 @@
-// Torbo Base — by Michael David Murphy & Orion (Claude Opus 4.6, Anthropic)
+// Copyright 2026 Perceptual Art LLC. All rights reserved.
+// Licensed under Apache 2.0 — see LICENSE file.
+// Torbo Base — by Michael David Murphy
 // Main dashboard — dark, gorgeous, the Torbo at the center of everything
 #if canImport(SwiftUI)
 import SwiftUI
@@ -88,6 +90,10 @@ struct DashboardView: View {
                 switch state.currentTab {
                 case .home:
                     HomeView()
+                case .agents:
+                    AgentsView()
+                case .skills:
+                    SkillsView()
                 case .models:
                     ModelsView()
                 case .sessions:
@@ -154,7 +160,7 @@ struct HomeView: View {
                 HStack(spacing: 8) {
                     Button {
                         let url = "http://\(state.localIP):\(state.serverPort)/chat?token=\(state.serverToken)"
-                        NSWorkspace.shared.open(URL(string: url)!)
+                        if let parsed = URL(string: url) { NSWorkspace.shared.open(parsed) }
                     } label: {
                         Label("Web Chat", systemImage: "globe")
                             .font(.system(size: 11, weight: .medium))
@@ -587,7 +593,7 @@ struct ModelsView: View {
 
     private func pullModel(_ name: String) async {
         await MainActor.run { state.pullingModel = name; state.pullProgress = 0 }
-        guard let url = URL(string: "http://127.0.0.1:11434/api/pull") else { return }
+        guard let url = URL(string: OllamaManager.baseURL + "/api/pull") else { return }
         var req = URLRequest(url: url)
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -621,13 +627,13 @@ struct ModelsView: View {
             await MainActor.run { state.pullProgress = 100; state.pullingModel = nil }
             await OllamaManager.shared.checkAndUpdate()
         } catch {
-            print("[Ollama] Pull error: \(error)")
+            TorboLog.error("Pull error: \(error)", subsystem: "Ollama")
             await MainActor.run { state.pullingModel = nil }
         }
     }
 
     private func deleteModel(_ name: String) async {
-        guard let url = URL(string: "http://127.0.0.1:11434/api/delete") else { return }
+        guard let url = URL(string: OllamaManager.baseURL + "/api/delete") else { return }
         var req = URLRequest(url: url)
         req.httpMethod = "DELETE"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -817,6 +823,56 @@ struct SecurityView: View {
                         .onChange(of: state.rateLimit) { _, val in
                             AppConfig.rateLimit = val
                         }
+                }
+
+                // Global capability limits
+                SectionHeader(title: "GLOBAL CAPABILITIES")
+                VStack(spacing: 2) {
+                    ForEach(CapabilityCategory.allCases, id: \.self) { category in
+                        let tools = CapabilityRegistry.byCategory[category] ?? []
+                        HStack(spacing: 10) {
+                            Image(systemName: category.icon)
+                                .font(.system(size: 12))
+                                .foregroundStyle(state.globalCapabilities[category.rawValue] == false ? .red.opacity(0.5) : .cyan)
+                                .frame(width: 18)
+                            VStack(alignment: .leading, spacing: 1) {
+                                Text(category.label)
+                                    .font(.system(size: 12, weight: .medium))
+                                    .foregroundStyle(.white.opacity(state.globalCapabilities[category.rawValue] == false ? 0.3 : 0.8))
+                                Text(tools.map { $0.toolName }.joined(separator: ", "))
+                                    .font(.system(size: 9, design: .monospaced))
+                                    .foregroundStyle(.white.opacity(0.2))
+                                    .lineLimit(1)
+                            }
+                            Spacer()
+                            Toggle("", isOn: Binding(
+                                get: { state.globalCapabilities[category.rawValue] != false },
+                                set: { enabled in
+                                    if enabled {
+                                        state.globalCapabilities.removeValue(forKey: category.rawValue)
+                                    } else {
+                                        state.globalCapabilities[category.rawValue] = false
+                                    }
+                                }
+                            ))
+                            .toggleStyle(.switch)
+                            .labelsHidden()
+                            .scaleEffect(0.7)
+                            .tint(.cyan)
+                        }
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 5)
+                        .background(Color.white.opacity(0.02))
+                        .cornerRadius(4)
+                    }
+                }
+                HStack(spacing: 4) {
+                    Image(systemName: "exclamationmark.triangle")
+                        .font(.system(size: 9))
+                        .foregroundStyle(.orange.opacity(0.5))
+                    Text("Disabled categories are hidden from ALL agents, overriding per-agent settings.")
+                        .font(.system(size: 10))
+                        .foregroundStyle(.white.opacity(0.3))
                 }
 
                 // Audit log full view
@@ -1561,7 +1617,7 @@ enum LaunchAtLogin {
                     try SMAppService.mainApp.unregister()
                 }
             } catch {
-                print("[LaunchAtLogin] Error: \(error)")
+                TorboLog.error("Error: \(error)", subsystem: "LaunchAtLogin")
             }
         }
         #endif

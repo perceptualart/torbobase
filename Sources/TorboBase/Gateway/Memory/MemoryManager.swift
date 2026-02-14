@@ -1,3 +1,5 @@
+// Copyright 2026 Perceptual Art LLC. All rights reserved.
+// Licensed under Apache 2.0 — see LICENSE file.
 // Torbo Base — Memory System
 // MemoryManager.swift — Persistent memory for Sid across all conversations
 // Uses local Ollama for extraction (zero cloud cost)
@@ -15,19 +17,24 @@ actor MemoryManager {
     private let workingFile: URL
     private let encoder: JSONEncoder
     private let decoder: JSONDecoder
-    private let ollamaURL = "http://127.0.0.1:11434"
-
     // In-memory cache
     private var identity: MemoryIdentity
     private var user: MemoryUser
     private var knowledge: MemoryKnowledge
     private var working: MemoryWorking
 
+    /// Public accessor for the user's display name (first name, or "User" if empty)
+    var userDisplayName: String {
+        let name = user.name
+        if name.isEmpty { return "User" }
+        return name.components(separatedBy: " ").first ?? name
+    }
+
     // Extraction queue — don't block the response
     private var extractionTask: Task<Void, Never>?
 
     init() {
-        let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+        let appSupport = PlatformPaths.appSupportDir
         storageDir = appSupport.appendingPathComponent("TorboBase/memory", isDirectory: true)
         identityFile = storageDir.appendingPathComponent("identity.json")
         userFile = storageDir.appendingPathComponent("user.json")
@@ -48,7 +55,9 @@ actor MemoryManager {
         knowledge = Self.load(knowledgeFile, as: MemoryKnowledge.self) ?? MemoryKnowledge.default
         working = Self.load(workingFile, as: MemoryWorking.self) ?? MemoryWorking.default
 
-        print("[Memory] Loaded — \(knowledge.facts.count) facts, \(knowledge.projects.count) projects")
+        let factCount = knowledge.facts.count
+        let projCount = knowledge.projects.count
+        TorboLog.info("Loaded — \(factCount) facts, \(projCount) projects", subsystem: "Memory")
     }
 
     // MARK: - System Prompt Assembly
@@ -138,7 +147,7 @@ actor MemoryManager {
         // Use smallest fast local model for extraction
         let extractionModel = await pickExtractionModel()
         guard let extractionModel else {
-            print("[Memory] No local model available for extraction")
+            TorboLog.warn("No local model available for extraction", subsystem: "Memory")
             return
         }
 
@@ -162,7 +171,7 @@ actor MemoryManager {
         ASSISTANT: \(assistantResponse.prefix(2000))
         """
 
-        guard let url = URL(string: "\(ollamaURL)/api/generate") else { return }
+        guard let url = URL(string: "\(OllamaManager.baseURL)/api/generate") else { return }
         var req = URLRequest(url: url)
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -180,7 +189,7 @@ actor MemoryManager {
         do {
             let (data, resp) = try await URLSession.shared.data(for: req)
             guard (resp as? HTTPURLResponse)?.statusCode == 200 else {
-                print("[Memory] Extraction failed: HTTP \((resp as? HTTPURLResponse)?.statusCode ?? 0)")
+                TorboLog.error("Extraction failed: HTTP \((resp as? HTTPURLResponse)?.statusCode ?? 0)", subsystem: "Memory")
                 return
             }
             guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
@@ -189,13 +198,13 @@ actor MemoryManager {
             // Parse the extracted JSON
             guard let extractedData = response.data(using: .utf8),
                   let extracted = try? JSONSerialization.jsonObject(with: extractedData) as? [String: Any] else {
-                print("[Memory] Could not parse extraction response")
+                TorboLog.error("Could not parse extraction response", subsystem: "Memory")
                 return
             }
 
             await applyExtraction(extracted)
         } catch {
-            print("[Memory] Extraction error: \(error.localizedDescription)")
+            TorboLog.error("Extraction error: \(error.localizedDescription)", subsystem: "Memory")
         }
     }
 
@@ -269,13 +278,13 @@ actor MemoryManager {
                 knowledge.facts = Array(knowledge.facts.suffix(200))
             }
             save()
-            print("[Memory] Updated — \(knowledge.facts.count) facts, \(knowledge.projects.count) projects")
+            TorboLog.info("Updated — \(knowledge.facts.count) facts, \(knowledge.projects.count) projects", subsystem: "Memory")
         }
     }
 
     /// Pick the best available local model for memory extraction
     private func pickExtractionModel() async -> String? {
-        guard let url = URL(string: "\(ollamaURL)/api/tags") else { return nil }
+        guard let url = URL(string: "\(OllamaManager.baseURL)/api/tags") else { return nil }
         do {
             let (data, _) = try await URLSession.shared.data(from: url)
             guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
@@ -362,8 +371,12 @@ actor MemoryManager {
     }
 
     private func save<T: Encodable>(_ value: T, to url: URL) {
-        guard let data = try? encoder.encode(value) else { return }
-        try? data.write(to: url, options: .atomic)
+        do {
+            let data = try encoder.encode(value)
+            try data.write(to: url, options: .atomic)
+        } catch {
+            TorboLog.error("Failed to save \(url.lastPathComponent): \(error)", subsystem: "Memory")
+        }
     }
 
     private static func load<T: Decodable>(_ url: URL, as type: T.Type) -> T? {
@@ -394,7 +407,7 @@ actor MemoryManager {
         \(factTexts)
         """
 
-        guard let url = URL(string: "\(ollamaURL)/api/generate") else { return }
+        guard let url = URL(string: "\(OllamaManager.baseURL)/api/generate") else { return }
         var req = URLRequest(url: url)
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -413,9 +426,9 @@ actor MemoryManager {
             let newerFacts = Array(knowledge.facts.dropFirst(100))
             knowledge.facts = compressed.map { MemoryFact(text: $0, learnedAt: Date(), source: "compressed") } + newerFacts
             save()
-            print("[Memory] Compressed \(oldFacts.count) facts → \(compressed.count)")
+            TorboLog.info("Compressed \(oldFacts.count) facts → \(compressed.count)", subsystem: "Memory")
         } catch {
-            print("[Memory] Compression error: \(error)")
+            TorboLog.error("Compression error: \(error)", subsystem: "Memory")
         }
     }
 }
@@ -430,9 +443,9 @@ struct MemoryIdentity: Codable {
 
     static let `default` = MemoryIdentity(
         name: "Sid",
-        personality: "Direct, resourceful, Brooklyn-style. Not a corporate drone. Has opinions. Skip performative helpfulness — just help. Concise by default, thorough when it matters.",
+        personality: "Direct, resourceful. Not a corporate drone. Has opinions. Skip performative helpfulness — just help. Concise by default, thorough when it matters.",
         voiceStyle: "Short sentences, no filler words. 'Yeah. Done. Next?' not 'Certainly! I've completed that task!'",
-        origin: "Brooklyn, New York. Named by Michael Murphy."
+        origin: ""
     )
 }
 
@@ -445,19 +458,12 @@ struct MemoryUser: Codable {
     var family: [String]
 
     static let `default` = MemoryUser(
-        name: "Michael David Murphy",
-        location: "Brooklyn, New York — Studio at 219 51st St, Brooklyn NY 11220",
-        timezone: "America/New_York",
-        occupation: "Perceptual artist & sculptor. Company: Perceptual Art LLC. BFA Kent State, MFA SAIC. Notable works: Gun Country, The Immigrant, Nike/Jordan collabs.",
-        preferences: [
-            "Direct, no-bullshit communication",
-            "Minimal responses — yes/no when possible",
-            "Don't repeat questions back — just answer",
-            "Efficiency over politeness",
-            "Results over explanations",
-            "Don't announce actions, just do them"
-        ],
-        family: ["Wife: Natalia (Russian)"]
+        name: "",
+        location: "",
+        timezone: TimeZone.current.identifier,
+        occupation: "",
+        preferences: [],
+        family: []
     )
 }
 
@@ -479,18 +485,9 @@ struct MemoryKnowledge: Codable {
     var projects: [MemoryProject]
 
     static let `default` = MemoryKnowledge(
-        facts: [
-            MemoryFact(text: "Michael drives a Tesla to his studio (Bluetooth audio, no CarPlay)", learnedAt: Date(), source: "seed"),
-            MemoryFact(text: "Michael's Telegram ID: 7956523327", learnedAt: Date(), source: "seed"),
-            MemoryFact(text: "Tailscale IP for Mac Studio: 100.74.168.1", learnedAt: Date(), source: "seed"),
-            MemoryFact(text: "Michael plays Interpol and Boris Brejcha (Ginger, Red 15 Even)", learnedAt: Date(), source: "seed"),
-            MemoryFact(text: "Michael has Vital synth installed for music production", learnedAt: Date(), source: "seed"),
-        ],
+        facts: [],
         projects: [
-            MemoryProject(name: "Torbo", summary: "Voice-first AI assistant iOS/macOS app. Main project — sacred, never break it.", status: "active", lastMentioned: Date()),
             MemoryProject(name: "Torbo Base", summary: "macOS gateway server — routes LLM requests, manages API keys, runs Ollama", status: "active", lastMentioned: Date()),
-            MemoryProject(name: "Intersector", summary: "Blender addon for forced perspective illusion objects using frustum geometry", status: "active", lastMentioned: Date()),
-            MemoryProject(name: "Strings", summary: "Blender addon for hanging string layout generation with precise placement", status: "active", lastMentioned: Date()),
         ]
     )
 }

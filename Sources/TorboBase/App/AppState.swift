@@ -1,4 +1,6 @@
-// Torbo Base — by Michael David Murphy & Orion (Claude Opus 4.6, Anthropic)
+// Copyright 2026 Perceptual Art LLC. All rights reserved.
+// Licensed under Apache 2.0 — see LICENSE file.
+// Torbo Base — by Michael David Murphy
 #if canImport(SwiftUI)
 import SwiftUI
 #endif
@@ -236,13 +238,13 @@ enum AppConfig {
                 if let old {
                     defaults.set(old, forKey: m.new)
                     migrated += 1
-                    print("[Config] Migrated: \(m.old) → \(m.new)")
+                    TorboLog.info("Migrated: \(m.old) → \(m.new)", subsystem: "Config")
                 }
             }
         }
 
         if migrated > 0 {
-            print("[Config] Migrated \(migrated) UserDefaults key(s) from ORB → Torbo")
+            TorboLog.info("Migrated \(migrated) UserDefaults key(s) from ORB → Torbo", subsystem: "Config")
         }
 
         defaults.set(true, forKey: "torbo_config_migrated")
@@ -351,18 +353,27 @@ final class AppState {
         }
     }
 
-    /// Per-crew access levels (capped by global level)
-    var crewAccessLevels: [String: AccessLevel] = [
-        "sid": .fullAccess,
-        "orion": .fullAccess,
-        "mira": .readFiles,
-        "ada": .readFiles
-    ]
+    /// Per-agent access levels — synced from AgentConfigManager
+    var agentAccessLevels: [String: AccessLevel] = ["sid": .fullAccess]
 
-    func accessLevel(for crewID: String) -> AccessLevel {
+    func accessLevel(for agentID: String) -> AccessLevel {
         if accessLevel == .off { return .off }
-        let crewLevel = crewAccessLevels[crewID] ?? .chatOnly
-        return AccessLevel(rawValue: min(crewLevel.rawValue, accessLevel.rawValue)) ?? .chatOnly
+        let agentLevel = agentAccessLevels[agentID] ?? .chatOnly
+        return AccessLevel(rawValue: min(agentLevel.rawValue, accessLevel.rawValue)) ?? .chatOnly
+    }
+
+    /// Sync agent access levels from AgentConfigManager
+    func refreshAgentLevels() {
+        Task {
+            let levels = await AgentConfigManager.shared.agentAccessLevels
+            await MainActor.run {
+                var mapped: [String: AccessLevel] = [:]
+                for (id, raw) in levels {
+                    mapped[id] = AccessLevel(rawValue: raw) ?? .chatOnly
+                }
+                self.agentAccessLevels = mapped
+            }
+        }
     }
 
     // Server
@@ -370,6 +381,13 @@ final class AppState {
     var serverPort: UInt16 = AppConfig.serverPort
     var serverError: String?
     var serverToken: String
+
+    /// Allow connections from other devices on the local network (phone, tablet).
+    /// When false, the gateway binds to 127.0.0.1 (Mac only).
+    /// When true, the gateway binds to 0.0.0.0 (all interfaces — required for phone pairing).
+    var allowLANAccess: Bool {
+        didSet { UserDefaults.standard.set(allowLANAccess, forKey: "torboAllowLANAccess") }
+    }
 
     // Ollama
     var ollamaRunning = false
@@ -390,6 +408,35 @@ final class AppState {
 
     // Rate limiting
     var rateLimit: Int = AppConfig.rateLimit
+
+    // Global capability toggles — categories set to false are disabled for ALL agents
+    var globalCapabilities: [String: Bool] = {
+        if let data = UserDefaults.standard.data(forKey: "torboGlobalCapabilities"),
+           let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Bool] {
+            return dict
+        }
+        return [:]
+    }() {
+        didSet {
+            if let data = try? JSONSerialization.data(withJSONObject: globalCapabilities) {
+                UserDefaults.standard.set(data, forKey: "torboGlobalCapabilities")
+            }
+        }
+    }
+
+    // Parallel execution
+    var maxConcurrentTasks: Int = 3 {
+        didSet {
+            let clamped = max(1, min(maxConcurrentTasks, 10))
+            if clamped != maxConcurrentTasks { maxConcurrentTasks = clamped }
+            Task { await ParallelExecutor.shared.updateMaxSlots(clamped) }
+        }
+    }
+
+    // Logging
+    var logLevel: String = "info" {
+        didSet { TorboLog.minimumLevel = LogLevel.from(logLevel) }
+    }
 
     // Conversations
     var sessions: [ConversationSession] = []
@@ -472,6 +519,13 @@ final class AppState {
             self.accessLevel = AccessLevel(rawValue: saved) ?? .chatOnly
         }
         self.serverToken = AppConfig.serverToken
+
+        // Default to LAN access ON — required for phone pairing to work
+        if UserDefaults.standard.object(forKey: "torboAllowLANAccess") == nil {
+            self.allowLANAccess = true
+        } else {
+            self.allowLANAccess = UserDefaults.standard.bool(forKey: "torboAllowLANAccess")
+        }
     }
 
     func addAuditEntry(_ entry: AuditEntry) {
@@ -531,7 +585,7 @@ final class AppState {
 
     func updateSystemStats() {
         // CPU usage approximation
-        let load = ProcessInfo.processInfo.systemUptime
+        _ = ProcessInfo.processInfo.systemUptime
         cpuUsage = min(100, Double(ProcessInfo.processInfo.activeProcessorCount) / Double(ProcessInfo.processInfo.processorCount) * 100)
 
         // Memory
@@ -572,6 +626,8 @@ final class AppState {
 
 enum DashboardTab: String, CaseIterable {
     case home = "Home"
+    case agents = "Agents"
+    case skills = "Skills"
     case models = "Models"
     case sessions = "Sessions"
     case security = "Security"
@@ -580,6 +636,8 @@ enum DashboardTab: String, CaseIterable {
     var icon: String {
         switch self {
         case .home: return "circle.hexagongrid.fill"
+        case .agents: return "person.2.fill"
+        case .skills: return "puzzlepiece.fill"
         case .models: return "cube.fill"
         case .sessions: return "bubble.left.and.bubble.right.fill"
         case .security: return "shield.checkered"

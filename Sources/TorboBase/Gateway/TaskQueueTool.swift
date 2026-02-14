@@ -1,3 +1,5 @@
+// Copyright 2026 Perceptual Art LLC. All rights reserved.
+// Licensed under Apache 2.0 — see LICENSE file.
 // Torbo Base — Task Queue Tool
 import Foundation
 
@@ -11,7 +13,7 @@ actor TaskQueueTool {
         "type": "function",
         "function": [
             "name": "create_task",
-            "description": "Create a new task and assign it to a crew member. Use this to delegate work or track objectives. Returns task ID and details.",
+            "description": "Create a new task. Use this to delegate work or track objectives. Returns task ID and details.",
             "parameters": [
                 "type": "object",
                 "properties": [
@@ -25,7 +27,7 @@ actor TaskQueueTool {
                     ] as [String: Any],
                     "assigned_to": [
                         "type": "string",
-                        "description": "Crew member ID to assign this task to (sid, orion, mira, ada)"
+                        "description": "Agent ID to assign this task to (default: sid)"
                     ] as [String: Any],
                     "priority": [
                         "type": "string",
@@ -54,7 +56,7 @@ actor TaskQueueTool {
                     ] as [String: Any],
                     "assigned_to": [
                         "type": "string",
-                        "description": "Optional: Filter by crew member ID (sid, orion, mira, ada)"
+                        "description": "Optional: Filter by agent ID (default: sid)"
                     ] as [String: Any]
                 ] as [String: Any],
                 "required": [] as [String]
@@ -125,14 +127,14 @@ actor TaskQueueTool {
     }
     
     /// List tasks with optional filtering
-    func listTasks(filter: String = "all", assignedTo: String? = nil, requestingCrew: String) async -> String {
-        var tasks: [TaskQueue.CrewTask] = []
-        
+    func listTasks(filter: String = "all", assignedTo: String? = nil, requestingAgent: String) async -> String {
+        var tasks: [TaskQueue.AgentTask] = []
+
         // Apply filtering
         if filter.lowercased() == "mine" {
-            tasks = await queue.tasksForCrew(requestingCrew)
+            tasks = await queue.tasksForAgent(requestingAgent)
         } else if let assignee = assignedTo {
-            tasks = await queue.tasksForCrew(assignee)
+            tasks = await queue.tasksForAgent(assignee)
         } else {
             switch filter.lowercased() {
             case "pending":
@@ -224,15 +226,15 @@ actor TaskQueueTool {
     }
     
     /// Complete a task
-    func completeTask(taskId: String, result: String, completingCrew: String) async -> String {
+    func completeTask(taskId: String, result: String, completingAgent: String) async -> String {
         // Verify task exists
         guard let task = await queue.taskByID(taskId) else {
             return "❌ Task not found: \(taskId)"
         }
         
-        // Verify crew member is assigned to this task
-        if task.assignedTo != completingCrew {
-            return "⚠️ Warning: This task is assigned to \(task.assignedTo), not you (\(completingCrew)). Completing anyway..."
+        // Verify agent is assigned to this task
+        if task.assignedTo != completingAgent {
+            return "⚠️ Warning: This task is assigned to \(task.assignedTo), not you (\(completingAgent)). Completing anyway..."
         }
         
         // Check if already completed

@@ -1,4 +1,6 @@
-// Torbo Base — by Michael David Murphy & Orion (Claude Opus 4.6, Anthropic)
+// Copyright 2026 Perceptual Art LLC. All rights reserved.
+// Licensed under Apache 2.0 — see LICENSE file.
+// Torbo Base — by Michael David Murphy
 import Foundation
 #if canImport(Network)
 import Network
@@ -42,6 +44,65 @@ struct NWConnectionWriter: ResponseWriter {
 }
 #endif
 
+// MARK: - Chat Room (multi-user)
+
+struct ChatRoomMessage: Codable {
+    let id: String
+    let sender: String
+    let content: String
+    let timestamp: Double
+    let role: String   // "user" or "assistant"
+    let agentID: String?
+}
+
+actor ChatRoomStore {
+    static let shared = ChatRoomStore()
+    private var rooms: [String: [ChatRoomMessage]] = [:]
+    private var roomCreated: [String: Double] = [:]
+
+    func createRoom(_ roomID: String) {
+        if rooms[roomID] == nil {
+            rooms[roomID] = []
+            roomCreated[roomID] = Date().timeIntervalSince1970
+        }
+    }
+
+    func postMessage(room: String, sender: String, content: String, role: String, agentID: String? = nil) -> ChatRoomMessage {
+        let msg = ChatRoomMessage(
+            id: UUID().uuidString,
+            sender: sender,
+            content: content,
+            timestamp: Date().timeIntervalSince1970,
+            role: role,
+            agentID: agentID
+        )
+        if rooms[room] == nil { rooms[room] = [] }
+        rooms[room]!.append(msg)
+        // Cap at 500 messages per room
+        if rooms[room]!.count > 500 {
+            rooms[room] = Array(rooms[room]!.suffix(500))
+        }
+        return msg
+    }
+
+    func messages(room: String, since: Double) -> [ChatRoomMessage] {
+        guard let msgs = rooms[room] else { return [] }
+        return msgs.filter { $0.timestamp > since }
+    }
+
+    func roomExists(_ roomID: String) -> Bool {
+        return rooms[roomID] != nil
+    }
+
+    func cleanup(olderThan seconds: TimeInterval = 86400) {
+        let cutoff = Date().timeIntervalSince1970 - seconds
+        for (id, created) in roomCreated where created < cutoff {
+            rooms.removeValue(forKey: id)
+            roomCreated.removeValue(forKey: id)
+        }
+    }
+}
+
 // MARK: - Gateway Server
 
 actor GatewayServer {
@@ -52,7 +113,6 @@ actor GatewayServer {
     private var connections: [ObjectIdentifier: NWConnection] = [:]
     #endif
     private weak var appState: AppState?
-    private let ollamaURL = "http://127.0.0.1:11434"
     private var requestLog: [String: [Date]] = [:]
 
     #if canImport(Network)
@@ -63,20 +123,67 @@ actor GatewayServer {
         do {
             let params = NWParameters.tcp
             params.allowLocalEndpointReuse = true
-            listener = try NWListener(using: params, on: NWEndpoint.Port(rawValue: port)!)
-
-            listener?.stateUpdateHandler = { [weak self] state in
-                Task { await self?.handleListenerState(state) }
+            guard let nwPort = NWEndpoint.Port(rawValue: port), port > 0 else {
+                TorboLog.error("Invalid port: \(port)", subsystem: "Gateway")
+                await MainActor.run {
+                    appState.serverRunning = false
+                    appState.serverError = "Invalid port: \(port)"
+                }
+                return
             }
+
+            // Bind to all interfaces if LAN access is enabled (required for phone pairing),
+            // otherwise bind to localhost only for maximum security.
+            let lanEnabled = await MainActor.run { appState.allowLANAccess }
+            let bindHost: NWEndpoint.Host = lanEnabled ? .ipv4(.any) : .ipv4(.loopback)
+            params.requiredLocalEndpoint = NWEndpoint.hostPort(host: bindHost, port: nwPort)
+            TorboLog.info("Binding to \(lanEnabled ? "0.0.0.0" : "127.0.0.1"):\(port)", subsystem: "Gateway")
+            listener = try NWListener(using: params)
+
             listener?.newConnectionHandler = { [weak self] conn in
                 Task { await self?.handleConnection(conn) }
             }
-            listener?.start(queue: .global(qos: .userInitiated))
+
+            // Wait for the listener to actually bind before declaring success
+            let ready: Bool = await withCheckedContinuation { continuation in
+                listener?.stateUpdateHandler = { [weak self] state in
+                    switch state {
+                    case .ready:
+                        continuation.resume(returning: true)
+                    case .failed(let err):
+                        TorboLog.error("Listener failed to bind: \(err)", subsystem: "Gateway")
+                        Task { await self?.handleListenerState(state) }
+                        continuation.resume(returning: false)
+                    case .cancelled:
+                        continuation.resume(returning: false)
+                    default:
+                        break  // .setup, .waiting — keep waiting
+                    }
+                }
+                listener?.start(queue: .global(qos: .userInitiated))
+            }
+
+            guard ready else {
+                let s = appState
+                await MainActor.run {
+                    s.serverRunning = false
+                    if s.serverError == nil {
+                        s.serverError = "Failed to bind to port \(port)"
+                    }
+                }
+                return
+            }
+
+            // Listener is confirmed bound — now switch to ongoing state monitoring
+            listener?.stateUpdateHandler = { [weak self] state in
+                Task { await self?.handleListenerState(state) }
+            }
 
             await MainActor.run {
                 appState.serverRunning = true
                 appState.serverError = nil
             }
+            TorboLog.info("Listener bound to port \(port)", subsystem: "Gateway")
 
             await MainActor.run {
                 PairingManager.shared.startAdvertising(port: port)
@@ -95,6 +202,11 @@ actor GatewayServer {
             // Start Document Store (RAG)
             Task {
                 await DocumentStore.shared.initialize()
+            }
+
+            // Start Skills Manager
+            Task {
+                await SkillsManager.shared.initialize()
             }
 
             // Start Workflow Engine
@@ -121,13 +233,13 @@ actor GatewayServer {
                 await TelegramBridge.shared.notify("Gateway started on port \(port)")
             }
 
-            print("[Gateway] Started on port \(port)")
+            TorboLog.info("Started on port \(port)", subsystem: "Gateway")
         } catch {
             await MainActor.run {
                 appState.serverRunning = false
                 appState.serverError = error.localizedDescription
             }
-            print("[Gateway] Failed to start: \(error)")
+            TorboLog.error("Failed to start: \(error)", subsystem: "Gateway")
         }
     }
 
@@ -144,16 +256,26 @@ actor GatewayServer {
             PairingManager.shared.stopAdvertising()
         }
         Task { await TelegramBridge.shared.notify("Gateway stopped") }
-        print("[Gateway] Stopped")
+        TorboLog.info("Stopped", subsystem: "Gateway")
     }
 
     // MARK: - Connection Handling
 
     private func handleListenerState(_ state: NWListener.State) async {
-        if case .failed(let err) = state {
-            print("[Gateway] Listener failed: \(err)")
+        switch state {
+        case .failed(let err):
+            TorboLog.error("Listener failed: \(err)", subsystem: "Gateway")
             let s = appState
-            await MainActor.run { s?.serverRunning = false }
+            await MainActor.run {
+                s?.serverRunning = false
+                s?.serverError = "Listener failed: \(err.localizedDescription)"
+            }
+        case .cancelled:
+            TorboLog.info("Listener cancelled", subsystem: "Gateway")
+        case .ready:
+            TorboLog.info("Listener ready", subsystem: "Gateway")
+        default:
+            break
         }
     }
 
@@ -222,16 +344,16 @@ actor GatewayServer {
                 appState.serverRunning = true
                 appState.serverError = nil
             }
-            print("[Gateway] Started on port \(port) (SwiftNIO)")
+            TorboLog.info("Started on port \(port) (SwiftNIO)", subsystem: "Gateway")
         } catch {
             await MainActor.run {
                 appState.serverRunning = false
                 appState.serverError = error.localizedDescription
             }
-            print("[Gateway] Failed to start NIO server: \(error)")
+            TorboLog.error("Failed to start NIO server: \(error)", subsystem: "Gateway")
         }
         #else
-        print("[Gateway] ⚠️ No TCP server available — need Network.framework or SwiftNIO")
+        TorboLog.warn("No TCP server available — need Network.framework or SwiftNIO", subsystem: "Gateway")
         await MainActor.run {
             appState.serverRunning = false
             appState.serverError = "No TCP server available on this platform"
@@ -242,6 +364,7 @@ actor GatewayServer {
         Task { await MemoryRouter.shared.initialize() }
         Task { await MCPManager.shared.initialize() }
         Task { await DocumentStore.shared.initialize() }
+        Task { await SkillsManager.shared.initialize() }
         Task { await WorkflowEngine.shared.loadFromDisk() }
         Task { await WebhookManager.shared.initialize() }
         Task { await TelegramBridge.shared.startPolling() }
@@ -264,7 +387,7 @@ actor GatewayServer {
             PairingManager.shared.stopAdvertising()
         }
         Task { await TelegramBridge.shared.notify("Gateway stopped") }
-        print("[Gateway] Stopped")
+        TorboLog.info("Stopped", subsystem: "Gateway")
     }
     #endif
 
@@ -344,7 +467,10 @@ actor GatewayServer {
         // Web chat UI — serves the built-in chat interface
         if req.method == "GET" && req.path == "/chat" {
             return HTTPResponse(statusCode: 200,
-                              headers: ["Content-Type": "text/html; charset=utf-8"],
+                              headers: [
+                                "Content-Type": "text/html; charset=utf-8",
+                                "Permissions-Policy": "microphone=(self), camera=()"
+                              ],
                               body: Data(WebChatHTML.page.utf8))
         }
 
@@ -355,12 +481,25 @@ actor GatewayServer {
             return HTTPResponse.json(["level": level])
         }
 
+        // Rate limit unauthenticated endpoints (prevents brute-force pairing)
+        if req.method == "POST" && (req.path == "/pair" || req.path == "/pair/verify") {
+            if isRateLimited(clientIP: clientIP) {
+                return HTTPResponse(statusCode: 429, headers: ["Content-Type": "application/json"],
+                                  body: Data("{\"error\":\"Too many requests\"}".utf8))
+            }
+        }
+
         // Pairing endpoints (no auth)
         if req.method == "POST" && req.path == "/pair" {
             return await handlePair(req, clientIP: clientIP)
         }
         if req.method == "POST" && req.path == "/pair/verify" {
             return await handlePairVerify(req)
+        }
+
+        // Auto-pair for trusted networks (Tailscale 100.x.x.x only)
+        if req.method == "POST" && req.path == "/pair/auto" {
+            return await handleAutoPair(req, clientIP: clientIP)
         }
 
         // --- Everything below requires auth ---
@@ -384,8 +523,9 @@ actor GatewayServer {
             stateRef?.connectedClients = stateRef?.activeClientIPs.count ?? 0
         }
 
-        let crewID = req.headers["x-torbo-agent-id"] ?? req.headers["X-Torbo-Agent-Id"] ?? "unknown"
-        // iOS sends per-agent access level; cap it by global level for safety
+        let agentID = req.headers["x-torbo-agent-id"] ?? req.headers["X-Torbo-Agent-Id"] ?? "sid"
+        let platform = req.headers["x-torbo-platform"] ?? req.headers["X-Torbo-Platform"]
+        // Client can request an access level; cap it by global level for safety
         let clientLevel: AccessLevel? = {
             let raw = req.headers["x-torbo-access-level"] ?? req.headers["X-Torbo-Access-Level"]
             guard let str = raw, let val = Int(str) else { return nil }
@@ -398,8 +538,7 @@ actor GatewayServer {
                 // Client-requested level, capped by global
                 return AccessLevel(rawValue: min(requested.rawValue, state.accessLevel.rawValue)) ?? .chatOnly
             }
-            // Fallback to server-side per-crew defaults
-            return state.accessLevel(for: crewID)
+            return state.accessLevel(for: agentID)
         }
 
         if currentLevel == .off {
@@ -407,6 +546,16 @@ actor GatewayServer {
                        required: .chatOnly, granted: false, detail: "Gateway OFF")
             return HTTPResponse(statusCode: 403, headers: ["Content-Type": "application/json"],
                               body: Data("{\"error\":\"Gateway is OFF\"}".utf8))
+        }
+
+        // MARK: - LoA (Library of Alexandria) Shortcuts
+        if req.path.hasPrefix("/v1/loa") {
+            return await handleLoARoute(req, clientIP: clientIP)
+        }
+
+        // MARK: - Memory Management API
+        if req.path.hasPrefix("/v1/memory") {
+            return await handleMemoryRoute(req, clientIP: clientIP)
         }
 
         switch (req.method, req.path) {
@@ -425,11 +574,11 @@ actor GatewayServer {
                 }
                 await audit(clientIP: clientIP, method: req.method, path: req.path,
                            required: .chatOnly, granted: true, detail: "OK (streaming)")
-                await streamChatCompletion(req, clientIP: clientIP, crewID: crewID, accessLevel: currentLevel, writer: writer)
+                await streamChatCompletion(req, clientIP: clientIP, agentID: agentID, accessLevel: currentLevel, platform: platform, writer: writer)
                 return nil // Already streamed
             }
             return await guardedRoute(level: .chatOnly, current: currentLevel, clientIP: clientIP, req: req) {
-                await self.proxyChatCompletion(req, clientIP: clientIP, crewID: crewID, accessLevel: currentLevel)
+                await self.proxyChatCompletion(req, clientIP: clientIP, agentID: agentID, accessLevel: currentLevel, platform: platform)
             }
         case ("GET", "/v1/models"):
             return await guardedRoute(level: .chatOnly, current: currentLevel, clientIP: clientIP, req: req) {
@@ -444,6 +593,53 @@ actor GatewayServer {
         case ("GET", "/v1/messages"):
             return await guardedRoute(level: .chatOnly, current: currentLevel, clientIP: clientIP, req: req) {
                 await self.listMessages()
+            }
+
+        // --- Chat Rooms (multi-user) ---
+        case ("POST", "/v1/room/create"):
+            return await guardedRoute(level: .chatOnly, current: currentLevel, clientIP: clientIP, req: req) {
+                let body = req.jsonBody ?? [:]
+                let roomID = body["room"] as? String ?? UUID().uuidString.prefix(8).lowercased()
+                let sender = body["sender"] as? String ?? "Anonymous"
+                await ChatRoomStore.shared.createRoom(String(roomID))
+                return HTTPResponse.json(["room": roomID, "sender": sender, "status": "created"])
+            }
+        case ("POST", "/v1/room/message"):
+            return await guardedRoute(level: .chatOnly, current: currentLevel, clientIP: clientIP, req: req) {
+                guard let body = req.jsonBody,
+                      let room = body["room"] as? String,
+                      let sender = body["sender"] as? String,
+                      let content = body["content"] as? String else {
+                    return HTTPResponse.badRequest("Missing room, sender, or content")
+                }
+                let role = body["role"] as? String ?? "user"
+                let agentIDVal = body["agentID"] as? String
+                let msg = await ChatRoomStore.shared.postMessage(room: room, sender: sender, content: content, role: role, agentID: agentIDVal)
+                let msgDict: [String: Any] = [
+                    "id": msg.id, "sender": msg.sender, "content": msg.content,
+                    "timestamp": msg.timestamp, "role": msg.role, "agentID": msg.agentID ?? ""
+                ]
+                return HTTPResponse.json(["status": "ok", "message": msgDict])
+            }
+        case ("GET", "/v1/room/messages"):
+            return await guardedRoute(level: .chatOnly, current: currentLevel, clientIP: clientIP, req: req) {
+                let room = req.queryParam("room") ?? ""
+                let since = Double(req.queryParam("since") ?? "0") ?? 0
+                guard !room.isEmpty else {
+                    return HTTPResponse.badRequest("Missing room parameter")
+                }
+                let msgs = await ChatRoomStore.shared.messages(room: room, since: since)
+                let list: [[String: Any]] = msgs.map { m in
+                    ["id": m.id, "sender": m.sender, "content": m.content,
+                     "timestamp": m.timestamp, "role": m.role, "agentID": m.agentID ?? ""]
+                }
+                return HTTPResponse.json(["messages": list, "count": list.count])
+            }
+        case ("GET", "/v1/room/exists"):
+            return await guardedRoute(level: .chatOnly, current: currentLevel, clientIP: clientIP, req: req) {
+                let room = req.queryParam("room") ?? ""
+                let exists = await ChatRoomStore.shared.roomExists(room)
+                return HTTPResponse.json(["room": room, "exists": exists])
             }
 
         // --- Level 2: Read ---
@@ -484,7 +680,9 @@ actor GatewayServer {
 
         // --- Control ---
         case ("POST", "/control/level"):
-            return await handleSetLevel(req, clientIP: clientIP)
+            return await guardedRoute(level: .fullAccess, current: currentLevel, clientIP: clientIP, req: req) {
+                await self.handleSetLevel(req, clientIP: clientIP)
+            }
 
         // --- Capabilities ---
         case ("POST", "/v1/audio/speech"):
@@ -512,27 +710,7 @@ actor GatewayServer {
                 await self.handleImageGeneration(req)
             }
 
-        // --- Memory API ---
-        case ("POST", "/v1/memory/search"):
-            return await guardedRoute(level: .chatOnly, current: currentLevel, clientIP: clientIP, req: req) {
-                await self.handleMemorySearch(req)
-            }
-        case ("POST", "/v1/memory/add"):
-            return await guardedRoute(level: .chatOnly, current: currentLevel, clientIP: clientIP, req: req) {
-                await self.handleMemoryAdd(req)
-            }
-        case ("DELETE", "/v1/memory"):
-            return await guardedRoute(level: .chatOnly, current: currentLevel, clientIP: clientIP, req: req) {
-                await self.handleMemoryRemove(req)
-            }
-        case ("GET", "/v1/memory/stats"):
-            return await guardedRoute(level: .chatOnly, current: currentLevel, clientIP: clientIP, req: req) {
-                await self.handleMemoryStats()
-            }
-        case ("POST", "/v1/memory/repair"):
-            return await guardedRoute(level: .chatOnly, current: currentLevel, clientIP: clientIP, req: req) {
-                await self.handleMemoryRepair()
-            }
+        // --- Memory API (handled by /v1/memory prefix route above) ---
 
         // --- Document Store (RAG) ---
         case ("POST", "/v1/documents/ingest"):
@@ -680,33 +858,60 @@ actor GatewayServer {
                 return HTTPResponse.json(["status": "sent"])
             }
 
-        // --- Agent Config (SiD) ---
+        // --- Agents (Multi-Agent CRUD) ---
+        case ("GET", "/v1/agents"):
+            return await guardedRoute(level: .chatOnly, current: currentLevel, clientIP: clientIP, req: req) {
+                let agents = await AgentConfigManager.shared.listAgents()
+                guard let agentsData = try? JSONEncoder.torboBase.encode(agents),
+                      let agentsArray = try? JSONSerialization.jsonObject(with: agentsData) else {
+                    return HTTPResponse.json(["error": "Failed to serialize agents"])
+                }
+                let wrapped: [String: Any] = ["agents": agentsArray]
+                guard let data = try? JSONSerialization.data(withJSONObject: wrapped) else {
+                    return HTTPResponse.json(["error": "Failed to serialize agents"])
+                }
+                return HTTPResponse(statusCode: 200, headers: ["Content-Type": "application/json"], body: data)
+            }
+        case ("POST", "/v1/agents"):
+            return await guardedRoute(level: .chatOnly, current: currentLevel, clientIP: clientIP, req: req) {
+                guard let body = req.jsonBody,
+                      let jsonData = try? JSONSerialization.data(withJSONObject: body),
+                      let config = try? JSONDecoder.torboBase.decode(AgentConfig.self, from: jsonData) else {
+                    return HTTPResponse.badRequest("Invalid agent config")
+                }
+                do {
+                    try await AgentConfigManager.shared.createAgent(config)
+                    let appState = self.appState
+                    await MainActor.run { appState?.refreshAgentLevels() }
+                    guard let responseData = try? JSONEncoder.torboBase.encode(config) else {
+                        return HTTPResponse.json(["status": "created", "id": config.id])
+                    }
+                    return HTTPResponse(statusCode: 201, headers: ["Content-Type": "application/json"], body: responseData)
+                } catch {
+                    return HTTPResponse.badRequest(error.localizedDescription)
+                }
+            }
+
+        // Backward compat: /v1/agent/config → SiD's config
         case ("GET", "/v1/agent/config"):
             return await guardedRoute(level: .chatOnly, current: currentLevel, clientIP: clientIP, req: req) {
-                let config = await SidConfigManager.shared.current
-                guard let data = await SidConfigManager.shared.exportJSON() else {
+                guard let data = await AgentConfigManager.shared.exportAgent("sid") else {
                     return HTTPResponse.json(["error": "Failed to serialize config"])
                 }
                 return HTTPResponse(statusCode: 200, headers: ["Content-Type": "application/json"], body: data)
             }
         case ("PUT", "/v1/agent/config"):
             return await guardedRoute(level: .chatOnly, current: currentLevel, clientIP: clientIP, req: req) {
-                guard let body = req.jsonBody else {
+                guard let body = req.jsonBody,
+                      let jsonData = try? JSONSerialization.data(withJSONObject: body) else {
                     return HTTPResponse.badRequest("Invalid JSON body")
                 }
-                guard let jsonData = try? JSONSerialization.data(withJSONObject: body) else {
-                    return HTTPResponse.badRequest("Could not serialize body")
-                }
-                let success = await SidConfigManager.shared.importJSON(jsonData)
-                if success {
-                    return HTTPResponse.json(["status": "updated"])
-                } else {
-                    return HTTPResponse.badRequest("Invalid config format")
-                }
+                let success = await AgentConfigManager.shared.importAgent(jsonData)
+                return success ? HTTPResponse.json(["status": "updated"]) : HTTPResponse.badRequest("Invalid config format")
             }
         case ("POST", "/v1/agent/reset"):
             return await guardedRoute(level: .chatOnly, current: currentLevel, clientIP: clientIP, req: req) {
-                await SidConfigManager.shared.resetToDefaults()
+                await AgentConfigManager.shared.resetAgent("sid")
                 return HTTPResponse.json(["status": "reset"])
             }
 
@@ -839,6 +1044,64 @@ actor GatewayServer {
             }
 
         default:
+            // Per-agent routes: /v1/agents/{id}, /v1/agents/{id}/reset
+            if req.path.hasPrefix("/v1/agents/") {
+                let pathAfterAgents = String(req.path.dropFirst("/v1/agents/".count))
+                let components = pathAfterAgents.split(separator: "/")
+                if let firstComponent = components.first {
+                    let targetAgentID = String(firstComponent)
+
+                    // GET /v1/agents/{id} — get single agent config
+                    if components.count == 1 && req.method == "GET" {
+                        return await guardedRoute(level: .chatOnly, current: currentLevel, clientIP: clientIP, req: req) {
+                            guard let data = await AgentConfigManager.shared.exportAgent(targetAgentID) else {
+                                return HTTPResponse.notFound()
+                            }
+                            return HTTPResponse(statusCode: 200, headers: ["Content-Type": "application/json"], body: data)
+                        }
+                    }
+
+                    // PUT /v1/agents/{id} — update agent config
+                    if components.count == 1 && req.method == "PUT" {
+                        return await guardedRoute(level: .writeFiles, current: currentLevel, clientIP: clientIP, req: req) {
+                            guard let body = req.jsonBody,
+                                  let jsonData = try? JSONSerialization.data(withJSONObject: body),
+                                  var config = try? JSONDecoder.torboBase.decode(AgentConfig.self, from: jsonData) else {
+                                return HTTPResponse.badRequest("Invalid agent config")
+                            }
+                            // Prevent privilege escalation: cap agent accessLevel to the caller's level
+                            config.accessLevel = min(config.accessLevel, currentLevel.rawValue)
+                            await AgentConfigManager.shared.updateAgent(config)
+                            let appState = self.appState
+                            await MainActor.run { appState?.refreshAgentLevels() }
+                            return HTTPResponse.json(["status": "updated", "id": targetAgentID])
+                        }
+                    }
+
+                    // DELETE /v1/agents/{id} — delete agent (not SiD)
+                    if components.count == 1 && req.method == "DELETE" {
+                        return await guardedRoute(level: .chatOnly, current: currentLevel, clientIP: clientIP, req: req) {
+                            do {
+                                try await AgentConfigManager.shared.deleteAgent(targetAgentID)
+                                let appState = self.appState
+                                await MainActor.run { appState?.refreshAgentLevels() }
+                                return HTTPResponse.json(["status": "deleted", "id": targetAgentID])
+                            } catch {
+                                return HTTPResponse.badRequest(error.localizedDescription)
+                            }
+                        }
+                    }
+
+                    // POST /v1/agents/{id}/reset — reset agent to defaults
+                    if components.count == 2 && components[1] == "reset" && req.method == "POST" {
+                        return await guardedRoute(level: .chatOnly, current: currentLevel, clientIP: clientIP, req: req) {
+                            await AgentConfigManager.shared.resetAgent(targetAgentID)
+                            return HTTPResponse.json(["status": "reset", "id": targetAgentID])
+                        }
+                    }
+                }
+            }
+
             // WhatsApp webhook handler
             if req.path == "/v1/whatsapp/webhook" {
                 if req.method == "GET" {
@@ -846,9 +1109,9 @@ actor GatewayServer {
                     let mode = req.queryParam("hub.mode")
                     let token = req.queryParam("hub.verify_token")
                     let challenge = req.queryParam("hub.challenge")
-                    let result = await WhatsAppBridge.shared.handleVerification(mode: mode, token: token, challenge: challenge)
                     let configuredToken = await MainActor.run { AppState.shared.whatsappVerifyToken ?? "" }
-                    if result.valid && token == configuredToken, let ch = result.challenge {
+                    let result = await WhatsAppBridge.shared.handleVerification(mode: mode, token: token, challenge: challenge, storedVerifyToken: configuredToken)
+                    if result.valid, let ch = result.challenge {
                         return HTTPResponse(statusCode: 200, headers: ["Content-Type": "text/plain"], body: Data(ch.utf8))
                     }
                     return HTTPResponse(statusCode: 403, headers: [:], body: Data("Forbidden".utf8))
@@ -946,8 +1209,6 @@ actor GatewayServer {
     private func authenticate(_ req: HTTPRequest) -> Bool {
         guard let auth = req.headers["authorization"] ?? req.headers["Authorization"] else { return false }
         let token = auth.hasPrefix("Bearer ") ? String(auth.dropFirst(7)) : auth
-        // Debug: accept known token directly
-        if token == "dicOGnJDJCXCP9aLJyF6PCJVvATy-fM35p7kwvOubAQ" { return true }
         if token == KeychainManager.serverToken { return true }
         return PairedDeviceStore.isAuthorized(token: token)
     }
@@ -983,7 +1244,58 @@ actor GatewayServer {
         return HTTPResponse.json(["valid": valid])
     }
 
+    /// Auto-pair: trusted Tailscale clients (100.x.x.x) can pair without a code.
+    /// The device sends its name; Base issues a token automatically.
+    /// This is safe because Tailscale IPs are already authenticated via WireGuard keys.
+    private func handleAutoPair(_ req: HTTPRequest, clientIP: String) async -> HTTPResponse {
+        // Only allow auto-pair from Tailscale IPs (100.x.x.x/8)
+        guard clientIP.hasPrefix("100.") else {
+            TorboLog.warn("Auto-pair rejected from non-Tailscale IP: \(clientIP)", subsystem: "Pairing")
+            return HTTPResponse(statusCode: 403, headers: ["Content-Type": "application/json"],
+                              body: Data("{\"error\":\"Auto-pair only available on Tailscale network\"}".utf8))
+        }
+
+        guard let body = req.jsonBody,
+              let deviceName = body["deviceName"] as? String, !deviceName.isEmpty else {
+            return HTTPResponse.badRequest("Missing 'deviceName'")
+        }
+
+        // Check if this device is already paired (by name) — return existing token
+        let existing: (token: String, id: String)? = await MainActor.run {
+            if let device = PairingManager.shared.pairedDevices.first(where: { $0.name == deviceName }) {
+                return (device.token, device.id)
+            }
+            return nil
+        }
+        if let existing {
+            TorboLog.info("Auto-pair: returning existing token for \(deviceName)", subsystem: "Pairing")
+            return HTTPResponse.json(["token": existing.token, "deviceId": existing.id, "status": "existing"])
+        }
+
+        // Create a new paired device directly (no code needed — Tailscale is the trust anchor)
+        let result: (token: String, deviceId: String) = await MainActor.run {
+            PairingManager.shared.autoPair(deviceName: deviceName)
+        }
+
+        let token = result.token
+        let deviceId = result.deviceId
+
+        guard !token.isEmpty else {
+            TorboLog.error("Auto-pair failed for \(deviceName)", subsystem: "Pairing")
+            return HTTPResponse(statusCode: 500, headers: ["Content-Type": "application/json"],
+                              body: Data("{\"error\":\"Auto-pair failed\"}".utf8))
+        }
+
+        TorboLog.info("Auto-paired \(deviceName) from Tailscale IP \(clientIP)", subsystem: "Pairing")
+        await audit(clientIP: clientIP, method: "POST", path: "/pair/auto",
+                   required: .chatOnly, granted: true, detail: "Auto-paired: \(deviceName)")
+        Task { await TelegramBridge.shared.notify("Device auto-paired: \(deviceName) (Tailscale)") }
+        return HTTPResponse.json(["token": token, "deviceId": deviceId, "status": "new"])
+    }
+
     // MARK: - Rate Limiting
+
+    private var rateLimitCheckCount = 0
 
     private func isRateLimited(clientIP: String) -> Bool {
         let now = Date()
@@ -992,7 +1304,24 @@ actor GatewayServer {
         var timestamps = requestLog[clientIP] ?? []
         timestamps = timestamps.filter { now.timeIntervalSince($0) < window }
         timestamps.append(now)
-        requestLog[clientIP] = timestamps
+
+        // Clean up: remove IP key if only the current timestamp remains (effectively empty history)
+        if timestamps.count <= 1 && timestamps.count <= limit {
+            // Keep it for this request but mark for future cleanup
+            requestLog[clientIP] = timestamps
+        } else {
+            requestLog[clientIP] = timestamps
+        }
+
+        // Periodic full sweep every 1000 checks to prevent unbounded dict growth
+        rateLimitCheckCount += 1
+        if rateLimitCheckCount % 1000 == 0 {
+            let cutoff = now.addingTimeInterval(-window)
+            requestLog = requestLog.filter { _, dates in
+                dates.contains { $0 > cutoff }
+            }
+        }
+
         return timestamps.count > limit
     }
 
@@ -1006,21 +1335,19 @@ actor GatewayServer {
             requiredLevel: required, granted: granted, detail: detail
         )
         let emoji = granted ? "✅" : "🚫"
-        print("[Audit] \(emoji) \(method) \(path) from \(clientIP) — \(detail)")
+        TorboLog.info("\(emoji) \(method) \(path) from \(clientIP) — \(detail)", subsystem: "Gateway")
         let state = appState
         await MainActor.run { state?.addAuditEntry(entry) }
     }
 
     // MARK: - Streaming Chat Completion (SSE)
 
-    private func streamChatCompletion(_ req: HTTPRequest, clientIP: String, crewID: String, accessLevel: AccessLevel, writer: ResponseWriter) async {
+    private func streamChatCompletion(_ req: HTTPRequest, clientIP: String, agentID: String, accessLevel: AccessLevel, platform: String? = nil, writer: ResponseWriter) async {
         guard var body = req.jsonBody else {
             writer.sendResponse(.badRequest("Invalid JSON body")); return
         }
         let model = (body["model"] as? String) ?? "qwen2.5:7b"
         if body["model"] == nil { body["model"] = model }
-
-        let isRoomRequest = req.headers["x-torbo-room"] == "true" || req.headers["X-Torbo-Room"] == "true"
 
         // Detect if client provided their own system prompt (API override — skip SiD identity)
         let hasClientSystem = clientProvidedSystemPrompt(body)
@@ -1030,7 +1357,7 @@ actor GatewayServer {
         // Inject tools based on agent access level (web_search, web_fetch, file tools, MCP tools)
         var toolNames: [String] = []
         if body["tools"] == nil {
-            let tools = await ToolProcessor.toolDefinitionsWithMCP(for: accessLevel)
+            let tools = await ToolProcessor.toolDefinitionsWithMCP(for: accessLevel, agentID: agentID)
             if !tools.isEmpty {
                 body["tools"] = tools
                 body["tool_choice"] = "auto"
@@ -1038,8 +1365,8 @@ actor GatewayServer {
             }
         }
 
-        // Enrich with SiD identity + memory (SiD identity skipped if client provided system prompt)
-        await MemoryRouter.shared.enrichRequest(&body, accessLevel: accessLevel.rawValue, toolNames: toolNames, clientProvidedSystem: hasClientSystem)
+        // Enrich with agent identity + memory (identity skipped if client provided system prompt)
+        await MemoryRouter.shared.enrichRequest(&body, accessLevel: accessLevel.rawValue, toolNames: toolNames, clientProvidedSystem: hasClientSystem, agentID: agentID, platform: platform)
 
         // Log user message (handles both string and array/vision content)
         if let messages = body["messages"] as? [[String: Any]],
@@ -1050,12 +1377,17 @@ actor GatewayServer {
             await MainActor.run { s?.addMessage(userMsg) }
         }
 
-        // Room requests: use non-streaming tool loop, then simulate SSE output
-        // This lets agents use web_search/web_fetch during room discussions
-        if isRoomRequest && body["tools"] != nil {
+        // Tool execution loop: use non-streaming tool loop, then simulate SSE output.
+        // When the gateway injected tools (toolNames non-empty), we must execute them server-side
+        // because the client can't run web_search, write_file, run_command, etc.
+        // This applies to ALL models — cloud and local Ollama alike.
+        let gatewayManagedTools = !toolNames.isEmpty
+        if gatewayManagedTools {
             body["stream"] = false
             var currentBody = body
             let maxToolRounds = 5
+            let chunkID = "chatcmpl-tool-\(UUID().uuidString.prefix(8))"
+            var headersSent = false
 
             for round in 0..<maxToolRounds {
                 let response = await sendChatRequest(body: currentBody, model: model, clientIP: clientIP)
@@ -1063,17 +1395,34 @@ actor GatewayServer {
                 guard response.statusCode == 200,
                       let json = try? JSONSerialization.jsonObject(with: response.body) as? [String: Any],
                       await ToolProcessor.shared.hasBuiltInToolCalls(json) else {
-                    // No tool calls (or error) — extract text and simulate-stream it
+                    // No tool calls (or error) — extract text and stream it
                     if let json = try? JSONSerialization.jsonObject(with: response.body) as? [String: Any],
                        let choices = json["choices"] as? [[String: Any]],
                        let first = choices.first,
                        let message = first["message"] as? [String: Any],
                        let content = message["content"] as? String {
-                        simulateStreamResponse(content, model: model, writer: writer)
+                        if headersSent {
+                            // Already streaming progress — send final text + finish in same stream
+                            sendSSETextChunk(content, id: chunkID, model: model, writer: writer)
+                            sendSSEFinishChunk(id: chunkID, model: model, writer: writer)
+                            writer.sendSSEDone()
+                        } else {
+                            simulateStreamResponse(content, model: model, writer: writer)
+                        }
                         logAssistantResponse(response, model: model, clientIP: clientIP, originalMessages: req.jsonBody?["messages"])
                     } else {
-                        // Error — forward as-is
-                        writer.sendResponse(response)
+                        let bodyStr = String(data: response.body, encoding: .utf8) ?? "(empty)"
+                        TorboLog.warn("Tool loop: empty/unparseable response from \(model) (status \(response.statusCode)): \(bodyStr.prefix(500))", subsystem: "Gateway")
+                        let errorMsg = response.statusCode == 200
+                            ? "I got an empty response from the model. Try asking again."
+                            : "The model returned an error (status \(response.statusCode)). Try again in a moment."
+                        if headersSent {
+                            sendSSETextChunk(errorMsg, id: chunkID, model: model, writer: writer)
+                            sendSSEFinishChunk(id: chunkID, model: model, writer: writer)
+                            writer.sendSSEDone()
+                        } else {
+                            writer.sendResponse(response)
+                        }
                     }
                     return
                 }
@@ -1094,15 +1443,35 @@ actor GatewayServer {
                 // If there are non-built-in tool calls, can't handle — return the text we have
                 if builtInCalls.count != toolCalls.count {
                     if let content = message["content"] as? String, !content.isEmpty {
-                        simulateStreamResponse(content, model: model, writer: writer)
+                        if headersSent {
+                            sendSSETextChunk(content, id: chunkID, model: model, writer: writer)
+                            sendSSEFinishChunk(id: chunkID, model: model, writer: writer)
+                            writer.sendSSEDone()
+                        } else {
+                            simulateStreamResponse(content, model: model, writer: writer)
+                        }
                     } else {
                         writer.sendResponse(response)
                     }
                     return
                 }
 
-                let toolResults = await ToolProcessor.shared.executeBuiltInTools(builtInCalls)
-                print("[RoomToolLoop] Round \(round + 1): Executed \(builtInCalls.count) tool(s) for \(crewID)")
+                // Start streaming progress to the client
+                if !headersSent {
+                    writer.sendStreamHeaders()
+                    headersSent = true
+                }
+
+                // Send progress indicator for each tool being executed
+                let toolLabels = builtInCalls.compactMap { call -> String? in
+                    guard let name = (call["function"] as? [String: Any])?["name"] as? String else { return nil }
+                    return Self.toolProgressLabel(name, args: (call["function"] as? [String: Any])?["arguments"] as? String)
+                }
+                let progressText = toolLabels.joined(separator: "\n") + "\n\n"
+                sendSSETextChunk(progressText, id: chunkID, model: model, writer: writer)
+
+                let toolResults = await ToolProcessor.shared.executeBuiltInTools(builtInCalls, accessLevel: accessLevel, agentID: agentID)
+                TorboLog.info("Round \(round + 1): Executed \(builtInCalls.count) tool(s) for \(agentID)", subsystem: "Gateway")
 
                 var messages = currentBody["messages"] as? [[String: Any]] ?? []
                 messages.append(message)
@@ -1116,9 +1485,20 @@ actor GatewayServer {
                let choices = json["choices"] as? [[String: Any]],
                let message = choices.first?["message"] as? [String: Any],
                let content = message["content"] as? String {
-                simulateStreamResponse(content, model: model, writer: writer)
+                if headersSent {
+                    sendSSETextChunk(content, id: chunkID, model: model, writer: writer)
+                    sendSSEFinishChunk(id: chunkID, model: model, writer: writer)
+                    writer.sendSSEDone()
+                } else {
+                    simulateStreamResponse(content, model: model, writer: writer)
+                }
             } else {
-                writer.sendResponse(finalResponse)
+                if headersSent {
+                    sendSSEFinishChunk(id: chunkID, model: model, writer: writer)
+                    writer.sendSSEDone()
+                } else {
+                    writer.sendResponse(finalResponse)
+                }
             }
             return
         }
@@ -1132,13 +1512,13 @@ actor GatewayServer {
         }
 
         // Stream from Ollama
-        guard let url = URL(string: "\(ollamaURL)/v1/chat/completions") else {
+        guard let url = URL(string: "\(OllamaManager.baseURL)/v1/chat/completions") else {
             writer.sendResponse(.serverError("Bad Ollama URL")); return
         }
         var urlReq = URLRequest(url: url)
         urlReq.httpMethod = "POST"
         urlReq.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        urlReq.timeoutInterval = 300
+        urlReq.timeoutInterval = 60
         do { urlReq.httpBody = try JSONSerialization.data(withJSONObject: body) }
         catch { writer.sendResponse(.badRequest("JSON encode error")); return }
 
@@ -1204,7 +1584,13 @@ actor GatewayServer {
                 }
             }
         } catch {
-            writer.sendResponse(.serverError("Streaming error: \(error.localizedDescription)"))
+            TorboLog.error("Ollama stream error: \(error.localizedDescription)", subsystem: "Gateway")
+            // Send error as SSE chunk (headers already sent, can't send HTTP response)
+            let errChunk = """
+            {"id":"err","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"content":"\\n\\n[Stream interrupted: \(error.localizedDescription.replacingOccurrences(of: "\"", with: "'"))]"},"finish_reason":"stop"}]}
+            """
+            writer.sendSSEChunk(errChunk)
+            writer.sendSSEDone()
         }
     }
 
@@ -1239,7 +1625,7 @@ actor GatewayServer {
             req.httpMethod = "POST"
             req.setValue("application/json", forHTTPHeaderField: "Content-Type")
             req.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
-            req.timeoutInterval = 300
+            req.timeoutInterval = 60
             req.httpBody = try? JSONSerialization.data(withJSONObject: streamBody)
 
             do {
@@ -1247,7 +1633,7 @@ actor GatewayServer {
                 let httpResp = resp as? HTTPURLResponse
                 if httpResp?.statusCode != 200 {
                     let errMsg = await self.drainErrorBody(bytes: bytes, provider: providerName, code: httpResp?.statusCode ?? 500)
-                    print("❌ \(providerName) streaming error (\(httpResp?.statusCode ?? 0)): \(errMsg)")
+                    TorboLog.error("\(providerName) streaming error (\(httpResp?.statusCode ?? 0)): \(errMsg)", subsystem: "Gateway")
                     writer.sendResponse(.serverError(errMsg)); return
                 }
                 writer.sendStreamHeaders()
@@ -1272,7 +1658,13 @@ actor GatewayServer {
                 }
                 writer.sendSSEDone()
             } catch {
-                writer.sendResponse(.serverError("\(providerName) stream error: \(error.localizedDescription)")); return
+                TorboLog.error("\(providerName) stream error: \(error.localizedDescription)", subsystem: "Gateway")
+                let errChunk = """
+                {"id":"err","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"content":"\\n\\n[Stream interrupted: \(error.localizedDescription.replacingOccurrences(of: "\"", with: "'"))]"},"finish_reason":"stop"}]}
+                """
+                writer.sendSSEChunk(errChunk)
+                writer.sendSSEDone()
+                return
             }
 
         } else if model.hasPrefix("claude") {
@@ -1310,7 +1702,7 @@ actor GatewayServer {
             req.setValue("application/json", forHTTPHeaderField: "Content-Type")
             req.setValue(apiKey, forHTTPHeaderField: "x-api-key")
             req.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
-            req.timeoutInterval = 300
+            req.timeoutInterval = 60
             req.httpBody = try? JSONSerialization.data(withJSONObject: anthropicBody)
 
             do {
@@ -1438,7 +1830,13 @@ actor GatewayServer {
                 }
                 writer.sendSSEDone()
             } catch {
-                writer.sendResponse(.serverError("Anthropic stream error: \(error.localizedDescription)")); return
+                TorboLog.error("Anthropic stream error: \(error.localizedDescription)", subsystem: "Gateway")
+                let errChunk = """
+                {"id":"err","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"content":"\\n\\n[Stream interrupted: \(error.localizedDescription.replacingOccurrences(of: "\"", with: "'"))]"},"finish_reason":"stop"}]}
+                """
+                writer.sendSSEChunk(errChunk)
+                writer.sendSSEDone()
+                return
             }
 
         } else if model.hasPrefix("gemini") {
@@ -1461,7 +1859,7 @@ actor GatewayServer {
             var req = URLRequest(url: url)
             req.httpMethod = "POST"
             req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-            req.timeoutInterval = 300
+            req.timeoutInterval = 60
             req.httpBody = try? JSONSerialization.data(withJSONObject: geminiBody)
 
             do {
@@ -1515,7 +1913,13 @@ actor GatewayServer {
                 }
                 writer.sendSSEDone()
             } catch {
-                writer.sendResponse(.serverError("Gemini stream error: \(error.localizedDescription)")); return
+                TorboLog.error("Gemini stream error: \(error.localizedDescription)", subsystem: "Gateway")
+                let errChunk = """
+                {"id":"err","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"content":"\\n\\n[Stream interrupted: \(error.localizedDescription.replacingOccurrences(of: "\"", with: "'"))]"},"finish_reason":"stop"}]}
+                """
+                writer.sendSSEChunk(errChunk)
+                writer.sendSSEDone()
+                return
             }
         } else {
             // Unknown cloud model — fall back to non-streaming
@@ -1572,7 +1976,7 @@ actor GatewayServer {
 
     // MARK: - Chat Proxy (with streaming, logging & Telegram forwarding)
 
-    private func proxyChatCompletion(_ req: HTTPRequest, clientIP: String, crewID: String, accessLevel: AccessLevel) async -> HTTPResponse {
+    private func proxyChatCompletion(_ req: HTTPRequest, clientIP: String, agentID: String, accessLevel: AccessLevel, platform: String? = nil) async -> HTTPResponse {
         guard var body = req.jsonBody else {
             return HTTPResponse.badRequest("Invalid JSON body")
         }
@@ -1588,7 +1992,7 @@ actor GatewayServer {
         // Inject tools based on agent access level (including MCP tools)
         var toolNames: [String] = []
         if body["tools"] == nil {
-            let tools = await ToolProcessor.toolDefinitionsWithMCP(for: accessLevel)
+            let tools = await ToolProcessor.toolDefinitionsWithMCP(for: accessLevel, agentID: agentID)
             if !tools.isEmpty {
                 body["tools"] = tools
                 body["tool_choice"] = "auto"
@@ -1596,8 +2000,8 @@ actor GatewayServer {
             }
         }
 
-        // Enrich with SiD identity + memory (SiD identity skipped if client provided system prompt)
-        await MemoryRouter.shared.enrichRequest(&body, accessLevel: accessLevel.rawValue, toolNames: toolNames, clientProvidedSystem: hasClientSystem)
+        // Enrich with agent identity + memory (identity skipped if client provided system prompt)
+        await MemoryRouter.shared.enrichRequest(&body, accessLevel: accessLevel.rawValue, toolNames: toolNames, clientProvidedSystem: hasClientSystem, agentID: agentID, platform: platform)
 
         // Force non-streaming for this path (streaming handled separately)
         body["stream"] = false
@@ -1647,8 +2051,8 @@ actor GatewayServer {
             if !clientCalls.isEmpty { return response }
 
             // Execute built-in tools
-            let toolResults = await ToolProcessor.shared.executeBuiltInTools(builtInCalls)
-            print("[ToolLoop] Executed \(builtInCalls.count) built-in tool(s)")
+            let toolResults = await ToolProcessor.shared.executeBuiltInTools(builtInCalls, accessLevel: accessLevel, agentID: agentID)
+            TorboLog.info("Executed \(builtInCalls.count) built-in tool(s)", subsystem: "Gateway")
 
             // Append assistant message + tool results to conversation
             var messages = currentBody["messages"] as? [[String: Any]] ?? []
@@ -1670,13 +2074,13 @@ actor GatewayServer {
         if model.hasPrefix("claude") || model.hasPrefix("gpt") || model.hasPrefix("gemini") || model.hasPrefix("grok") {
             return await routeToCloud(body: body, model: model, clientIP: clientIP)
         }
-        guard let url = URL(string: "\(ollamaURL)/v1/chat/completions") else {
+        guard let url = URL(string: "\(OllamaManager.baseURL)/v1/chat/completions") else {
             return HTTPResponse.serverError("Bad Ollama URL")
         }
         var urlReq = URLRequest(url: url)
         urlReq.httpMethod = "POST"
         urlReq.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        urlReq.timeoutInterval = 300
+        urlReq.timeoutInterval = 60
         do { urlReq.httpBody = try JSONSerialization.data(withJSONObject: body) }
         catch { return HTTPResponse.badRequest("JSON encode error") }
         return await forwardToOllama(urlReq)
@@ -2023,7 +2427,7 @@ actor GatewayServer {
     // MARK: - Models
 
     private func listModels() async -> HTTPResponse {
-        guard let url = URL(string: "\(ollamaURL)/api/tags") else {
+        guard let url = URL(string: "\(OllamaManager.baseURL)/api/tags") else {
             return HTTPResponse.serverError("Bad Ollama URL")
         }
         do {
@@ -2357,7 +2761,537 @@ actor GatewayServer {
         }
     }
 
-    // MARK: - Memory API Handlers
+    // MARK: - LoA (Library of Alexandria) Shortcuts
+
+    /// User-friendly shortcuts for the memory system.
+    /// All routes under /v1/loa — designed to be discoverable and easy to use.
+    private func handleLoARoute(_ req: HTTPRequest, clientIP: String) async -> HTTPResponse {
+        let query = req.queryParams
+
+        // GET /v1/loa — Discovery endpoint: list all available shortcuts
+        if req.method == "GET" && req.path == "/v1/loa" {
+            return HTTPResponse.json([
+                "name": "Library of Alexandria (LoA)",
+                "description": "Sid's persistent memory system — semantic search, entity tracking, temporal recall",
+                "version": "2.0",
+                "shortcuts": [
+                    ["method": "GET",  "path": "/v1/loa",           "description": "This discovery page"],
+                    ["method": "GET",  "path": "/v1/loa/browse",    "description": "Browse all memories (paginated). Params: page, limit, category"],
+                    ["method": "GET",  "path": "/v1/loa/recall",    "description": "Search memories by meaning. Params: q (required), topK"],
+                    ["method": "POST", "path": "/v1/loa/teach",     "description": "Teach LoA something new. Body: {text, category?, importance?}"],
+                    ["method": "GET",  "path": "/v1/loa/entities",  "description": "List all known entities (people, projects, topics). Params: q (optional filter)"],
+                    ["method": "GET",  "path": "/v1/loa/timeline",  "description": "Memories by time range. Params: from, to (ISO 8601), or: range (today/week/month)"],
+                    ["method": "POST", "path": "/v1/loa/forget",    "description": "Find & delete memories. Body: {query, confirm?}. Preview first, then confirm."],
+                    ["method": "GET",  "path": "/v1/loa/health",    "description": "Memory system health and statistics"],
+                    ["method": "PUT",  "path": "/v1/loa/{id}",      "description": "Edit a memory's importance. Body: {importance}"],
+                    ["method": "DELETE","path": "/v1/loa/{id}",      "description": "Delete a specific memory by ID"]
+                ]
+            ] as [String: Any])
+        }
+
+        // GET /v1/loa/browse — Paginated memory listing
+        if req.method == "GET" && req.path == "/v1/loa/browse" {
+            let page = Int(query["page"] ?? "1") ?? 1
+            let limit = min(Int(query["limit"] ?? "50") ?? 50, 200)
+            let categoryFilter = query["category"]
+            let sortBy = query["sort"] ?? "newest"
+
+            let index = MemoryIndex.shared
+            var allEntries = await index.allEntries
+
+            if let cat = categoryFilter {
+                allEntries = allEntries.filter { $0.category == cat }
+            }
+
+            switch sortBy {
+            case "oldest": allEntries.sort { $0.timestamp < $1.timestamp }
+            case "importance": allEntries.sort { $0.importance > $1.importance }
+            case "accessed": allEntries.sort { $0.accessCount > $1.accessCount }
+            default: allEntries.sort { $0.timestamp > $1.timestamp }
+            }
+
+            let startIdx = (page - 1) * limit
+            let endIdx = min(startIdx + limit, allEntries.count)
+            guard startIdx < allEntries.count else {
+                return HTTPResponse.json(["scrolls": [] as [Any], "total": allEntries.count, "page": page] as [String: Any])
+            }
+
+            let slice = allEntries[startIdx..<endIdx]
+            let fmt = ISO8601DateFormatter()
+            let scrollsJSON: [[String: Any]] = slice.map { entry in
+                [
+                    "id": entry.id,
+                    "text": entry.text,
+                    "category": entry.category,
+                    "source": entry.source,
+                    "importance": entry.importance,
+                    "timestamp": fmt.string(from: entry.timestamp),
+                    "entities": entry.entities,
+                    "access_count": entry.accessCount,
+                    "last_accessed": fmt.string(from: entry.lastAccessedAt)
+                ] as [String: Any]
+            }
+
+            // Available categories for filtering
+            let categories = Dictionary(grouping: await index.allEntries, by: { $0.category }).mapValues { $0.count }
+
+            return HTTPResponse.json([
+                "scrolls": scrollsJSON,
+                "total": allEntries.count,
+                "page": page,
+                "pages": max(1, Int(ceil(Double(allEntries.count) / Double(limit)))),
+                "categories": categories,
+                "sort": sortBy
+            ] as [String: Any])
+        }
+
+        // GET /v1/loa/recall — Semantic search (the fun one)
+        if req.method == "GET" && req.path == "/v1/loa/recall" {
+            guard let q = query["q"], !q.isEmpty else {
+                return HTTPResponse.badRequest("Missing 'q' parameter. What would you like to recall?")
+            }
+            let topK = Int(query["topK"] ?? "10") ?? 10
+            let method = query["method"] ?? "hybrid"
+
+            let results: [MemoryIndex.SearchResult]
+            if method == "bm25" {
+                results = await MemoryIndex.shared.hybridSearch(query: q, topK: topK)
+            } else if method == "vector" {
+                results = await MemoryIndex.shared.search(query: q, topK: topK)
+            } else {
+                results = await MemoryIndex.shared.hybridSearch(query: q, topK: topK)
+            }
+
+            let fmt = ISO8601DateFormatter()
+            let scrolls: [[String: Any]] = results.map { r in
+                [
+                    "id": r.id,
+                    "text": r.text,
+                    "category": r.category,
+                    "score": r.score,
+                    "importance": r.importance,
+                    "timestamp": fmt.string(from: r.timestamp)
+                ] as [String: Any]
+            }
+
+            return HTTPResponse.json([
+                "scrolls": scrolls,
+                "count": results.count,
+                "query": q,
+                "method": method
+            ] as [String: Any])
+        }
+
+        // POST /v1/loa/teach — Teach LoA something new
+        if req.method == "POST" && req.path == "/v1/loa/teach" {
+            guard let body = req.jsonBody,
+                  let text = body["text"] as? String, !text.isEmpty else {
+                return HTTPResponse.badRequest("Missing 'text' in body. What should LoA learn?")
+            }
+            let category = body["category"] as? String ?? "fact"
+            let importance = Float(body["importance"] as? Double ?? 0.7)
+            let entities = body["entities"] as? [String] ?? []
+
+            let index = MemoryIndex.shared
+            let newID = await index.addWithEntities(
+                text: text, category: category, source: "user_taught",
+                importance: importance, entities: entities
+            )
+
+            if newID != nil {
+                return HTTPResponse.json([
+                    "learned": true,
+                    "text": text,
+                    "category": category,
+                    "importance": importance,
+                    "message": "Scroll added to the Library."
+                ] as [String: Any])
+            } else {
+                return HTTPResponse.serverError("Failed to add memory. Is Ollama running with nomic-embed-text?")
+            }
+        }
+
+        // GET /v1/loa/entities — Entity index browser
+        if req.method == "GET" && req.path == "/v1/loa/entities" {
+            let index = MemoryIndex.shared
+            let filter = query["q"]?.lowercased()
+
+            let allEntries = await index.allEntries
+            var entityCounts: [String: Int] = [:]
+            var entityCategories: [String: Set<String>] = [:]
+            for entry in allEntries {
+                for entity in entry.entities {
+                    let key = entity.lowercased()
+                    if let filter = filter, !key.contains(filter) { continue }
+                    entityCounts[entity, default: 0] += 1
+                    entityCategories[entity, default: []].insert(entry.category)
+                }
+            }
+
+            let entities: [[String: Any]] = entityCounts
+                .sorted { $0.value > $1.value }
+                .prefix(100)
+                .map { name, count in
+                    [
+                        "name": name,
+                        "mention_count": count,
+                        "categories": Array(entityCategories[name] ?? [])
+                    ] as [String: Any]
+                }
+
+            return HTTPResponse.json([
+                "entities": entities,
+                "total": entityCounts.count
+            ] as [String: Any])
+        }
+
+        // GET /v1/loa/timeline — Temporal memory browser
+        if req.method == "GET" && req.path == "/v1/loa/timeline" {
+            let index = MemoryIndex.shared
+            let topK = Int(query["topK"] ?? "50") ?? 50
+
+            let from: Date
+            let to: Date
+            let isoFmt = ISO8601DateFormatter()
+
+            if let range = query["range"] {
+                let now = Date()
+                let cal = Calendar.current
+                switch range {
+                case "today":
+                    from = cal.startOfDay(for: now)
+                    to = now
+                case "yesterday":
+                    let yesterday = cal.date(byAdding: .day, value: -1, to: now) ?? now
+                    from = cal.startOfDay(for: yesterday)
+                    to = cal.startOfDay(for: now)
+                case "week":
+                    from = cal.date(byAdding: .day, value: -7, to: now) ?? now
+                    to = now
+                case "month":
+                    from = cal.date(byAdding: .month, value: -1, to: now) ?? now
+                    to = now
+                default:
+                    from = cal.date(byAdding: .day, value: -7, to: now) ?? now
+                    to = now
+                }
+            } else if let fromStr = query["from"], let fromDate = isoFmt.date(from: fromStr) {
+                from = fromDate
+                to = query["to"].flatMap { isoFmt.date(from: $0) } ?? Date()
+            } else {
+                // Default: last 7 days
+                from = Calendar.current.date(byAdding: .day, value: -7, to: Date()) ?? Date()
+                to = Date()
+            }
+
+            let results = await index.temporalSearch(from: from, to: to, topK: topK)
+            let fmt = ISO8601DateFormatter()
+            let scrolls: [[String: Any]] = results.map { r in
+                [
+                    "id": r.id,
+                    "text": r.text,
+                    "category": r.category,
+                    "importance": r.importance,
+                    "score": r.score,
+                    "timestamp": fmt.string(from: r.timestamp)
+                ] as [String: Any]
+            }
+
+            return HTTPResponse.json([
+                "scrolls": scrolls,
+                "count": results.count,
+                "range": ["from": fmt.string(from: from), "to": fmt.string(from: to)]
+            ] as [String: Any])
+        }
+
+        // GET /v1/loa/health — System health
+        if req.method == "GET" && req.path == "/v1/loa/health" {
+            let index = MemoryIndex.shared
+            let count = await index.count
+            let categories = await index.categoryCounts()
+            let allEntries = await index.allEntries
+            let entities = Set(allEntries.flatMap { $0.entities })
+            let armyStats = await MemoryArmy.shared.getStats()
+
+            // Find oldest and newest memories
+            let fmt = ISO8601DateFormatter()
+            let oldest = allEntries.min(by: { $0.timestamp < $1.timestamp })
+            let newest = allEntries.max(by: { $0.timestamp < $1.timestamp })
+            let mostAccessed = allEntries.sorted(by: { $0.accessCount > $1.accessCount }).prefix(5)
+
+            // Easter egg: the Library speaks if you ask for its health
+            let motto: String
+            if count == 0 {
+                motto = "The shelves are empty. Every library begins with a single scroll."
+            } else if count < 100 {
+                motto = "A young library, growing with every conversation."
+            } else if count < 1000 {
+                motto = "The scrolls accumulate. Patterns emerge. The Library begins to know you."
+            } else {
+                motto = "Vast and deep. The Library of Alexandria remembers what you've forgotten."
+            }
+
+            return HTTPResponse.json([
+                "name": "Library of Alexandria",
+                "status": count > 0 ? "operational" : "empty",
+                "motto": motto,
+                "total_scrolls": count,
+                "categories": categories,
+                "entity_count": entities.count,
+                "top_entities": Array(entities.sorted().prefix(20)),
+                "oldest_scroll": oldest.map { fmt.string(from: $0.timestamp) } ?? "none",
+                "newest_scroll": newest.map { fmt.string(from: $0.timestamp) } ?? "none",
+                "most_consulted": mostAccessed.map { ["text": String($0.text.prefix(80)), "access_count": $0.accessCount] as [String: Any] },
+                "army": armyStats
+            ] as [String: Any])
+        }
+
+        // POST /v1/loa/forget — Find and delete (same as /v1/memory/forget)
+        if req.method == "POST" && req.path == "/v1/loa/forget" {
+            guard let body = req.jsonBody,
+                  let queryStr = body["query"] as? String, !queryStr.isEmpty else {
+                return HTTPResponse.badRequest("Missing 'query' in body. What should LoA forget?")
+            }
+
+            let confirm = body["confirm"] as? Bool ?? false
+            let results = await MemoryIndex.shared.hybridSearch(query: queryStr, topK: 10)
+
+            if !confirm {
+                let fmt = ISO8601DateFormatter()
+                let preview: [[String: Any]] = results.map { r in
+                    ["id": r.id, "text": r.text, "category": r.category,
+                     "importance": r.importance, "timestamp": fmt.string(from: r.timestamp)] as [String: Any]
+                }
+                return HTTPResponse.json([
+                    "preview": true,
+                    "scrolls": preview,
+                    "count": results.count,
+                    "message": "These scrolls will be burned from the Library. Send again with \"confirm\": true to proceed."
+                ] as [String: Any])
+            }
+
+            let ids = results.map { $0.id }
+            await MemoryIndex.shared.removeBatch(ids: ids)
+            return HTTPResponse.json([
+                "forgotten": true,
+                "count": ids.count,
+                "ids": ids,
+                "message": "\(ids.count) scrolls removed from the Library."
+            ] as [String: Any])
+        }
+
+        // PUT /v1/loa/{id} — Edit a memory
+        if req.method == "PUT" && req.path.hasPrefix("/v1/loa/") {
+            let idStr = String(req.path.dropFirst("/v1/loa/".count))
+            guard let id = Int64(idStr) else {
+                return HTTPResponse.badRequest("Invalid scroll ID")
+            }
+            guard let body = req.jsonBody else {
+                return HTTPResponse.badRequest("Missing JSON body")
+            }
+
+            if let importance = body["importance"] as? Double {
+                await MemoryIndex.shared.updateImportance(id: id, importance: Float(importance))
+            }
+            return HTTPResponse.json(["updated": true, "id": id] as [String: Any])
+        }
+
+        // DELETE /v1/loa/{id} — Delete a memory
+        if req.method == "DELETE" && req.path.hasPrefix("/v1/loa/") {
+            let idStr = String(req.path.dropFirst("/v1/loa/".count))
+            guard let id = Int64(idStr) else {
+                return HTTPResponse.badRequest("Invalid scroll ID")
+            }
+            await MemoryIndex.shared.remove(id: id)
+            return HTTPResponse.json(["deleted": true, "id": id, "message": "Scroll removed from the Library."] as [String: Any])
+        }
+
+        return HTTPResponse.notFound()
+    }
+
+    // MARK: - Memory Management
+
+    private func handleMemoryRoute(_ req: HTTPRequest, clientIP: String) async -> HTTPResponse {
+        // --- Backward-compatible endpoints ---
+
+        // POST /v1/memory/search (legacy — body-based search)
+        if req.method == "POST" && req.path == "/v1/memory/search" {
+            return await handleMemorySearch(req)
+        }
+
+        // POST /v1/memory/add
+        if req.method == "POST" && req.path == "/v1/memory/add" {
+            return await handleMemoryAdd(req)
+        }
+
+        // DELETE /v1/memory (legacy — body-based remove)
+        if req.method == "DELETE" && req.path == "/v1/memory" {
+            return await handleMemoryRemove(req)
+        }
+
+        // POST /v1/memory/repair
+        if req.method == "POST" && req.path == "/v1/memory/repair" {
+            return await handleMemoryRepair()
+        }
+
+        // --- New Memory Management API ---
+
+        // GET /v1/memory/stats
+        if req.method == "GET" && req.path == "/v1/memory/stats" {
+            let index = MemoryIndex.shared
+            let count = await index.count
+            let categories = await index.categoryCounts()
+            let allEntries = await index.allEntries
+            let entities = Array(Set(allEntries.flatMap { $0.entities })).sorted()
+            let armyStats = await MemoryArmy.shared.getStats()
+
+            return HTTPResponse.json([
+                "total_memories": count,
+                "categories": categories,
+                "known_entities": Array(entities.prefix(100)),
+                "entity_count": entities.count,
+                "army": armyStats
+            ] as [String: Any])
+        }
+
+        // GET /v1/memory/list?page=1&limit=50&category=fact
+        if req.method == "GET" && req.path == "/v1/memory/list" {
+            let query = req.queryParams
+            let page = Int(query["page"] ?? "1") ?? 1
+            let limit = min(Int(query["limit"] ?? "50") ?? 50, 200)
+            let categoryFilter = query["category"]
+
+            let index = MemoryIndex.shared
+            var allEntries = await index.allEntries
+
+            if let cat = categoryFilter {
+                allEntries = allEntries.filter { $0.category == cat }
+            }
+
+            // Sort by timestamp descending (newest first)
+            allEntries.sort { $0.timestamp > $1.timestamp }
+
+            let startIdx = (page - 1) * limit
+            let endIdx = min(startIdx + limit, allEntries.count)
+            guard startIdx < allEntries.count else {
+                return HTTPResponse.json(["memories": [] as [Any], "total": allEntries.count, "page": page] as [String: Any])
+            }
+
+            let slice = allEntries[startIdx..<endIdx]
+            let fmt = ISO8601DateFormatter()
+            let memoriesJSON: [[String: Any]] = slice.map { entry in
+                [
+                    "id": entry.id,
+                    "text": entry.text,
+                    "category": entry.category,
+                    "source": entry.source,
+                    "importance": entry.importance,
+                    "timestamp": fmt.string(from: entry.timestamp),
+                    "entities": entry.entities,
+                    "access_count": entry.accessCount
+                ] as [String: Any]
+            }
+
+            return HTTPResponse.json([
+                "memories": memoriesJSON,
+                "total": allEntries.count,
+                "page": page,
+                "pages": max(1, Int(ceil(Double(allEntries.count) / Double(limit))))
+            ] as [String: Any])
+        }
+
+        // GET /v1/memory/search?q=...&topK=10
+        if req.method == "GET" && req.path == "/v1/memory/search" {
+            let query = req.queryParams
+            guard let q = query["q"], !q.isEmpty else {
+                return HTTPResponse.badRequest("Missing 'q' query parameter")
+            }
+            let topK = Int(query["topK"] ?? "10") ?? 10
+
+            let results = await MemoryIndex.shared.hybridSearch(query: q, topK: topK)
+            let fmt = ISO8601DateFormatter()
+            let resultsJSON: [[String: Any]] = results.map { r in
+                [
+                    "id": r.id,
+                    "text": r.text,
+                    "category": r.category,
+                    "score": r.score,
+                    "importance": r.importance,
+                    "timestamp": fmt.string(from: r.timestamp)
+                ] as [String: Any]
+            }
+
+            return HTTPResponse.json(["results": resultsJSON, "count": results.count] as [String: Any])
+        }
+
+        // PUT /v1/memory/{id} — edit a memory
+        if req.method == "PUT" && req.path.hasPrefix("/v1/memory/") {
+            let idStr = String(req.path.dropFirst("/v1/memory/".count))
+            guard let id = Int64(idStr) else {
+                return HTTPResponse.badRequest("Invalid memory ID")
+            }
+            guard let body = req.jsonBody else {
+                return HTTPResponse.badRequest("Missing JSON body")
+            }
+
+            let index = MemoryIndex.shared
+            if let importance = body["importance"] as? Double {
+                await index.updateImportance(id: id, importance: Float(importance))
+            }
+            // Text editing would require re-embedding — for now only importance is editable
+            return HTTPResponse.json(["updated": true, "id": id] as [String: Any])
+        }
+
+        // DELETE /v1/memory/{id} — delete a specific memory
+        if req.method == "DELETE" && req.path.hasPrefix("/v1/memory/") {
+            let idStr = String(req.path.dropFirst("/v1/memory/".count))
+            guard let id = Int64(idStr) else {
+                return HTTPResponse.badRequest("Invalid memory ID")
+            }
+
+            await MemoryIndex.shared.remove(id: id)
+            return HTTPResponse.json(["deleted": true, "id": id] as [String: Any])
+        }
+
+        // POST /v1/memory/forget — find and delete memories matching a query
+        if req.method == "POST" && req.path == "/v1/memory/forget" {
+            guard let body = req.jsonBody,
+                  let query = body["query"] as? String, !query.isEmpty else {
+                return HTTPResponse.badRequest("Missing 'query' in body")
+            }
+
+            let confirm = body["confirm"] as? Bool ?? false
+            let results = await MemoryIndex.shared.hybridSearch(query: query, topK: 10)
+
+            if !confirm {
+                // Preview mode — show what would be deleted
+                let fmt = ISO8601DateFormatter()
+                let preview: [[String: Any]] = results.map { r in
+                    ["id": r.id, "text": r.text, "category": r.category,
+                     "importance": r.importance, "timestamp": fmt.string(from: r.timestamp)] as [String: Any]
+                }
+                return HTTPResponse.json([
+                    "preview": true,
+                    "matches": preview,
+                    "count": results.count,
+                    "message": "These memories will be deleted. Send again with \"confirm\": true to proceed."
+                ] as [String: Any])
+            }
+
+            // Confirmed — delete all matches
+            let ids = results.map { $0.id }
+            await MemoryIndex.shared.removeBatch(ids: ids)
+            return HTTPResponse.json([
+                "deleted": true,
+                "count": ids.count,
+                "ids": ids
+            ] as [String: Any])
+        }
+
+        return HTTPResponse.notFound()
+    }
+
+    // MARK: - Legacy Memory API Handlers
 
     private func handleMemorySearch(_ req: HTTPRequest) async -> HTTPResponse {
         guard let body = req.jsonBody, let query = body["query"] as? String else {
@@ -2384,11 +3318,6 @@ actor GatewayServer {
         }
         await MemoryRouter.shared.removeMemory(id: id)
         return HTTPResponse.json(["status": "removed"])
-    }
-
-    private func handleMemoryStats() async -> HTTPResponse {
-        let stats = await MemoryRouter.shared.getStats()
-        return HTTPResponse.json(stats)
     }
 
     private func handleMemoryRepair() async -> HTTPResponse {
@@ -2688,7 +3617,7 @@ actor GatewayServer {
         let state = appState
         await MainActor.run { state?.accessLevel = level }
         await audit(clientIP: clientIP, method: "POST", path: "/control/level",
-                   required: .chatOnly, granted: true, detail: "Level → \(level.rawValue) (\(level.name))")
+                   required: .fullAccess, granted: true, detail: "Level → \(level.rawValue) (\(level.name))")
         Task { await TelegramBridge.shared.notify("Access level changed to \(level.rawValue) (\(level.name))") }
         return HTTPResponse.json(["status": "ok", "level": level.rawValue, "name": level.name])
     }
@@ -2737,6 +3666,78 @@ actor GatewayServer {
         }
 
         writer.sendSSEDone()
+    }
+
+    /// Send a single text content chunk via SSE (no finish/done — caller manages stream lifecycle)
+    private func sendSSETextChunk(_ text: String, id: String, model: String, writer: ResponseWriter) {
+        let chunk: [String: Any] = [
+            "id": id,
+            "object": "chat.completion.chunk",
+            "created": Int(Date().timeIntervalSince1970),
+            "model": model,
+            "choices": [["index": 0, "delta": ["content": text], "finish_reason": NSNull()] as [String: Any]]
+        ]
+        if let data = try? JSONSerialization.data(withJSONObject: chunk),
+           let jsonStr = String(data: data, encoding: .utf8) {
+            writer.sendSSEChunk(jsonStr)
+        }
+    }
+
+    /// Send a finish chunk via SSE (no done — caller sends done separately)
+    private func sendSSEFinishChunk(id: String, model: String, writer: ResponseWriter) {
+        let chunk: [String: Any] = [
+            "id": id,
+            "object": "chat.completion.chunk",
+            "created": Int(Date().timeIntervalSince1970),
+            "model": model,
+            "choices": [["index": 0, "delta": [:] as [String: String], "finish_reason": "stop"] as [String: Any]]
+        ]
+        if let data = try? JSONSerialization.data(withJSONObject: chunk),
+           let jsonStr = String(data: data, encoding: .utf8) {
+            writer.sendSSEChunk(jsonStr)
+        }
+    }
+
+    /// Human-readable progress label for a tool being executed
+    private static func toolProgressLabel(_ toolName: String, args: String?) -> String {
+        // Parse args JSON for context
+        let parsed = args.flatMap { try? JSONSerialization.jsonObject(with: Data($0.utf8)) as? [String: Any] }
+
+        switch toolName {
+        case "web_search":
+            let query = parsed?["query"] as? String
+            return query != nil ? "[searching: \(query!)]" : "[searching the web...]"
+        case "web_fetch":
+            let url = parsed?["url"] as? String
+            let host = url.flatMap { URL(string: $0)?.host }
+            return host != nil ? "[fetching: \(host!)]" : "[fetching web page...]"
+        case "read_file":
+            let path = parsed?["path"] as? String
+            let name = path.map { ($0 as NSString).lastPathComponent }
+            return name != nil ? "[reading: \(name!)]" : "[reading file...]"
+        case "write_file":
+            let path = parsed?["path"] as? String
+            let name = path.map { ($0 as NSString).lastPathComponent }
+            return name != nil ? "[writing: \(name!)]" : "[writing file...]"
+        case "list_directory":
+            return "[listing directory...]"
+        case "run_command":
+            let cmd = parsed?["command"] as? String
+            let short = cmd.map { String($0.prefix(40)) }
+            return short != nil ? "[running: \(short!)]" : "[running command...]"
+        case "generate_image":
+            return "[generating image...]"
+        case "search_documents":
+            return "[searching documents...]"
+        case "execute_code":
+            return "[executing code...]"
+        default:
+            if toolName.hasPrefix("mcp_") {
+                let clean = String(toolName.dropFirst(4))
+                return "[using: \(clean)]"
+            }
+            return "[using: \(toolName)]"
+        }
     }
 
     /// Read error body from a failed streaming response and return a descriptive message
@@ -2839,6 +3840,16 @@ struct HTTPRequest {
         return nil
     }
 
+    var queryParams: [String: String] {
+        var params: [String: String] = [:]
+        let pairs = query.components(separatedBy: "&")
+        for pair in pairs {
+            let kv = pair.components(separatedBy: "=")
+            if kv.count == 2 { params[kv[0]] = kv[1].removingPercentEncoding }
+        }
+        return params
+    }
+
     static func parse(_ data: Data) -> HTTPRequest? {
         guard let string = String(data: data, encoding: .utf8) else { return nil }
         let parts = string.components(separatedBy: "\r\n\r\n")
@@ -2910,8 +3921,8 @@ struct HTTPResponse {
     static func cors() -> HTTPResponse {
         HTTPResponse(statusCode: 204, headers: [
             "Access-Control-Allow-Origin": "*",
-            "Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS",
-            "Access-Control-Allow-Headers": "Content-Type, Authorization",
+            "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
+            "Access-Control-Allow-Headers": "Content-Type, Authorization, x-torbo-agent-id, x-torbo-room, x-torbo-platform",
             "Access-Control-Max-Age": "86400"
         ], body: Data())
     }

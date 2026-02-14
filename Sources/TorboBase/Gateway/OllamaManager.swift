@@ -1,9 +1,12 @@
+// Copyright 2026 Perceptual Art LLC. All rights reserved.
+// Licensed under Apache 2.0 — see LICENSE file.
 import Foundation
 
 actor OllamaManager {
     static let shared = OllamaManager()
 
-    private let baseURL = "http://127.0.0.1:11434"
+    /// Central Ollama URL — used by all actors that communicate with the local Ollama instance.
+    nonisolated static let baseURL = "http://127.0.0.1:11434"
     private var process: Process?
 
     var isInstalled: Bool {
@@ -13,7 +16,7 @@ actor OllamaManager {
 
     var isRunning: Bool {
         get async {
-            guard let url = URL(string: "\(baseURL)/api/tags") else { return false }
+            guard let url = URL(string: "\(Self.baseURL)/api/tags") else { return false }
             do {
                 let (_, resp) = try await URLSession.shared.data(from: url)
                 return (resp as? HTTPURLResponse)?.statusCode == 200
@@ -30,8 +33,7 @@ actor OllamaManager {
     func checkAndUpdate() async {
         let installed = isInstalled
         let running = await isRunning
-        var models: [String] = []
-        if running { models = await fetchModelNames() }
+        let models: [String] = running ? await fetchModelNames() : []
         await MainActor.run {
             AppState.shared.ollamaRunning = running
             AppState.shared.ollamaModels = models
@@ -73,21 +75,23 @@ actor OllamaManager {
         do {
             try proc.run()
             self.process = proc
-            print("[Ollama] Started")
+            TorboLog.info("Started", subsystem: "Ollama")
         } catch {
-            print("[Ollama] Failed to start: \(error)")
+            TorboLog.error("Failed to start: \(error)", subsystem: "Ollama")
         }
     }
 
     private func fetchModelNames() async -> [String] {
-        guard let url = URL(string: "\(baseURL)/api/tags") else { return [] }
+        guard let url = URL(string: "\(Self.baseURL)/api/tags") else { return [] }
         do {
             let (data, _) = try await URLSession.shared.data(from: url)
             if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                let models = json["models"] as? [[String: Any]] {
                 return models.compactMap { $0["name"] as? String }
             }
-        } catch {}
+        } catch {
+            TorboLog.error("Failed to fetch models: \(error.localizedDescription)", subsystem: "Ollama")
+        }
         return []
     }
 }

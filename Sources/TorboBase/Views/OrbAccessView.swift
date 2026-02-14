@@ -1,4 +1,6 @@
-// Torbo Base — by Michael David Murphy & Orion (Claude Opus 4.6, Anthropic)
+// Copyright 2026 Perceptual Art LLC. All rights reserved.
+// Licensed under Apache 2.0 — see LICENSE file.
+// Torbo Base — by Michael David Murphy
 // The Torbo replaces the dial — a living, breathing access control interface
 // v2: Giant orb + rainbow slider + network health
 #if canImport(SwiftUI)
@@ -184,24 +186,25 @@ struct RainbowAccessSlider: View {
 
                 // Level tick marks
                 ForEach(0..<6, id: \.self) { i in
-                    let lv = AccessLevel(rawValue: i)!
-                    let x = positionForLevel(lv, width: w)
+                    if let lv = AccessLevel(rawValue: i) {
+                        let x = positionForLevel(lv, width: w)
 
-                    VStack(spacing: 3) {
-                        // Tick
-                        RoundedRectangle(cornerRadius: 1)
-                            .fill(i <= level.rawValue ? lv.color.opacity(0.8) : .white.opacity(0.15))
-                            .frame(width: 2, height: i == level.rawValue ? 14 : 8)
+                        VStack(spacing: 3) {
+                            // Tick
+                            RoundedRectangle(cornerRadius: 1)
+                                .fill(i <= level.rawValue ? lv.color.opacity(0.8) : .white.opacity(0.15))
+                                .frame(width: 2, height: i == level.rawValue ? 14 : 8)
 
-                        // Label
-                        Text(lv.name)
-                            .font(.system(size: 8, weight: i == level.rawValue ? .bold : .medium, design: .monospaced))
-                            .foregroundStyle(i == level.rawValue ? lv.color : .white.opacity(0.25))
-                    }
-                    .position(x: x, y: geo.size.height / 2 + 4)
-                    .contentShape(Rectangle().size(width: w / levelCount, height: geo.size.height))
-                    .onTapGesture {
-                        selectLevel(i)
+                            // Label
+                            Text(lv.name)
+                                .font(.system(size: 8, weight: i == level.rawValue ? .bold : .medium, design: .monospaced))
+                                .foregroundStyle(i == level.rawValue ? lv.color : .white.opacity(0.25))
+                        }
+                        .position(x: x, y: geo.size.height / 2 + 4)
+                        .contentShape(Rectangle().size(width: w / levelCount, height: geo.size.height))
+                        .onTapGesture {
+                            selectLevel(i)
+                        }
                     }
                 }
 
@@ -245,7 +248,7 @@ struct RainbowAccessSlider: View {
         let normalized = (x - 14) / usable
         let index = Int(round(normalized * (levelCount - 1)))
         let clamped = max(0, min(5, index))
-        return AccessLevel(rawValue: clamped)!
+        return AccessLevel(rawValue: clamped) ?? .off
     }
 
     private func selectLevel(_ i: Int) {
@@ -461,7 +464,7 @@ struct NetworkHealthView: View {
             detail: state.serverRunning ? "Listening on port \(state.serverPort)" : "Server not running"
         ))
 
-        let ollamaResult = await pingURL("http://127.0.0.1:11434/api/tags")
+        let ollamaResult = await pingURL(OllamaManager.baseURL + "/api/tags")
         local.append(HealthCheck(
             name: "Ollama",
             icon: "cube.fill",
@@ -615,11 +618,11 @@ struct NetworkHealthView: View {
                             return TailscaleResult(status: .warning, latency: "", detail: "Tailscale state: \(backendState) — run `tailscale up`")
                         }
                     }
-                } catch {}
+                } catch { /* Tailscale probe — expected to fail if not installed */ }
 
                 return TailscaleResult(status: .warning, latency: "", detail: "Tailscale installed but status unknown")
             }
-        } catch {}
+        } catch { /* Tailscale probe — expected to fail if not installed */ }
 
         return TailscaleResult(status: .error, latency: "", detail: "Not installed — optional for remote access")
     }

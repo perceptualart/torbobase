@@ -1,4 +1,6 @@
-// Torbo Base — by Michael David Murphy & Orion (Claude Opus 4.6, Anthropic)
+// Copyright 2026 Perceptual Art LLC. All rights reserved.
+// Licensed under Apache 2.0 — see LICENSE file.
+// Torbo Base — by Michael David Murphy
 
 #if canImport(SwiftUI) && os(macOS)
 import SwiftUI
@@ -81,8 +83,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             await OllamaManager.shared.ensureRunning()
             await OllamaManager.shared.checkAndUpdate()
             await GatewayServer.shared.start(appState: AppState.shared)
-            print("[Torbo Base] Gateway running on port \(AppState.shared.serverPort)")
-            print("[Torbo Base] Access level: \(AppState.shared.accessLevel.rawValue) (\(AppState.shared.accessLevel.name))")
+            TorboLog.info("Gateway running on port \(AppState.shared.serverPort)", subsystem: "App")
+            TorboLog.info("Access level: \(AppState.shared.accessLevel.rawValue) (\(AppState.shared.accessLevel.name))", subsystem: "App")
 
             // Start ProactiveAgent — background task executor
             // ProactiveAgent starts via AppState.proactiveAgentEnabled toggle
@@ -112,7 +114,7 @@ import Foundation
 @main
 struct TorboBaseApp {
     static func main() async {
-        print("[Torbo Base] Starting in headless mode...")
+        TorboLog.info("Starting in headless mode...", subsystem: "App")
 
         // Migrate secrets (Linux uses file-based keychain)
         KeychainManager.migrateFromUserDefaults()
@@ -122,8 +124,8 @@ struct TorboBaseApp {
 
         // Start gateway server
         await GatewayServer.shared.start(appState: AppState.shared)
-        print("[Torbo Base] Gateway running on port \(AppState.shared.serverPort)")
-        print("[Torbo Base] Access level: \(AppState.shared.accessLevel.rawValue) (\(AppState.shared.accessLevel.name))")
+        TorboLog.info("Gateway running on port \(AppState.shared.serverPort)", subsystem: "App")
+        TorboLog.info("Access level: \(AppState.shared.accessLevel.rawValue) (\(AppState.shared.accessLevel.name))", subsystem: "App")
 
         // Start ProactiveAgent if enabled
         let agentEnabled = UserDefaults.standard.bool(forKey: "proactiveAgentEnabled")
@@ -132,11 +134,11 @@ struct TorboBaseApp {
         }
 
         // Keep the process alive — wait for signal
-        print("[Torbo Base] Running... Press Ctrl+C to stop.")
+        TorboLog.info("Running... Press Ctrl+C to stop.", subsystem: "App")
 
         // Set up signal handlers for graceful shutdown
         signal(SIGINT) { _ in
-            print("\n[Torbo Base] Shutting down...")
+            TorboLog.info("Shutting down...", subsystem: "App")
             Task {
                 await GatewayServer.shared.stop()
                 await ConversationStore.shared.flushMessages()

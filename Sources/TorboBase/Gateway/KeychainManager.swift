@@ -1,13 +1,23 @@
-// Torbo Base — by Michael David Murphy & Orion (Claude Opus 4.6, Anthropic)
+// Copyright 2026 Perceptual Art LLC. All rights reserved.
+// Licensed under Apache 2.0 — see LICENSE file.
+// Torbo Base — by Michael David Murphy
 // Secure file-based storage for API keys and tokens
+// Data is encrypted at rest using a machine-derived key
 import Foundation
 #if canImport(Security)
 import Security
 #endif
+#if canImport(CommonCrypto)
+import CommonCrypto
+#endif
+#if canImport(IOKit)
+import IOKit
+#endif
 
 /// Secure key-value storage for sensitive data.
-/// Uses file-based storage (~/.config/torbobase/keychain.json) on all platforms.
+/// Uses encrypted file-based storage (~/.config/torbobase/keychain.enc) on all platforms.
 /// File permissions are set to owner-only (600) for security.
+/// Data is encrypted at rest using AES-256-CBC with a machine-derived key.
 enum KeychainManager {
 
     private static let service = "ai.torbo.base"
@@ -19,17 +29,137 @@ enum KeychainManager {
         return home + "/.config/torbobase"
     }
 
+    /// Encrypted storage path
     private static var storagePath: String {
+        storageDir + "/keychain.enc"
+    }
+
+    /// Legacy unencrypted path — used for migration
+    private static var legacyStoragePath: String {
         storageDir + "/keychain.json"
     }
 
-    private static func loadStore() -> [String: String] {
-        let url = URL(fileURLWithPath: storagePath)
-        guard let data = try? Data(contentsOf: url),
-              let dict = try? JSONDecoder().decode([String: String].self, from: data) else {
-            return [:]
+    // MARK: - Encryption
+
+    /// Derive a 256-bit encryption key from machine-specific data.
+    /// Uses SHA-256 hash of (hardware UUID + salt + username) so the encrypted
+    /// file is tied to this machine and user.
+    private static var encryptionKey: Data {
+        var seed = "torbo-base-keychain-v1"
+        // Add machine-specific entropy
+        if let hwUUID = getMachineUUID() { seed += hwUUID }
+        seed += NSUserName()
+        seed += NSHomeDirectory()
+        // SHA-256 to get a 32-byte key
+        let seedData = Data(seed.utf8)
+        var hash = [UInt8](repeating: 0, count: Int(CC_SHA256_DIGEST_LENGTH))
+        seedData.withUnsafeBytes { ptr in
+            _ = CC_SHA256(ptr.baseAddress, CC_LONG(seedData.count), &hash)
         }
-        return dict
+        return Data(hash)
+    }
+
+    /// Get the machine's hardware UUID (macOS) using IOKit directly.
+    /// Previous implementation used Process() + ioreg which crashed when called
+    /// from the main thread (waitUntilExit triggers CFRunLoop with null observers).
+    private static func getMachineUUID() -> String? {
+        #if os(macOS) && canImport(IOKit)
+        let service = IOServiceGetMatchingService(kIOMasterPortDefault,
+                                                   IOServiceMatching("IOPlatformExpertDevice"))
+        guard service != 0 else { return nil }
+        defer { IOObjectRelease(service) }
+        if let uuidCF = IORegistryEntryCreateCFProperty(service,
+                                                         "IOPlatformUUID" as CFString,
+                                                         kCFAllocatorDefault, 0)?.takeRetainedValue() {
+            return uuidCF as? String
+        }
+        return nil
+        #else
+        return ProcessInfo.processInfo.hostName
+        #endif
+    }
+
+    /// Encrypt data using AES-256-CBC
+    private static func encrypt(_ plaintext: Data) -> Data? {
+        let key = encryptionKey
+        // Generate random IV
+        var iv = [UInt8](repeating: 0, count: kCCBlockSizeAES128)
+        guard SecRandomCopyBytes(kSecRandomDefault, iv.count, &iv) == errSecSuccess else { return nil }
+
+        let bufferSize = plaintext.count + kCCBlockSizeAES128
+        var buffer = [UInt8](repeating: 0, count: bufferSize)
+        var numBytesEncrypted = 0
+
+        let status = key.withUnsafeBytes { keyPtr in
+            plaintext.withUnsafeBytes { dataPtr in
+                CCCrypt(CCOperation(kCCEncrypt),
+                       CCAlgorithm(kCCAlgorithmAES),
+                       CCOptions(kCCOptionPKCS7Padding),
+                       keyPtr.baseAddress, kCCKeySizeAES256,
+                       iv,
+                       dataPtr.baseAddress, plaintext.count,
+                       &buffer, bufferSize,
+                       &numBytesEncrypted)
+            }
+        }
+
+        guard status == kCCSuccess else { return nil }
+        // Prepend IV to ciphertext
+        return Data(iv) + Data(buffer.prefix(numBytesEncrypted))
+    }
+
+    /// Decrypt data using AES-256-CBC
+    private static func decrypt(_ ciphertext: Data) -> Data? {
+        let key = encryptionKey
+        guard ciphertext.count > kCCBlockSizeAES128 else { return nil }
+
+        let iv = ciphertext.prefix(kCCBlockSizeAES128)
+        let encrypted = ciphertext.dropFirst(kCCBlockSizeAES128)
+
+        let bufferSize = encrypted.count + kCCBlockSizeAES128
+        var buffer = [UInt8](repeating: 0, count: bufferSize)
+        var numBytesDecrypted = 0
+
+        let status = key.withUnsafeBytes { keyPtr in
+            iv.withUnsafeBytes { ivPtr in
+                encrypted.withUnsafeBytes { dataPtr in
+                    CCCrypt(CCOperation(kCCDecrypt),
+                           CCAlgorithm(kCCAlgorithmAES),
+                           CCOptions(kCCOptionPKCS7Padding),
+                           keyPtr.baseAddress, kCCKeySizeAES256,
+                           ivPtr.baseAddress,
+                           dataPtr.baseAddress, encrypted.count,
+                           &buffer, bufferSize,
+                           &numBytesDecrypted)
+                }
+            }
+        }
+
+        guard status == kCCSuccess else { return nil }
+        return Data(buffer.prefix(numBytesDecrypted))
+    }
+
+    // MARK: - Storage
+
+    private static func loadStore() -> [String: String] {
+        // Try encrypted file first
+        let encURL = URL(fileURLWithPath: storagePath)
+        if let encData = try? Data(contentsOf: encURL),
+           let decrypted = decrypt(encData),
+           let dict = try? JSONDecoder().decode([String: String].self, from: decrypted) {
+            return dict
+        }
+        // Fall back to legacy unencrypted file (auto-migrates on next save)
+        let legacyURL = URL(fileURLWithPath: legacyStoragePath)
+        if let data = try? Data(contentsOf: legacyURL),
+           let dict = try? JSONDecoder().decode([String: String].self, from: data) {
+            // Auto-migrate: save encrypted, delete plaintext
+            saveStore(dict)
+            try? FileManager.default.removeItem(at: legacyURL)
+            TorboLog.info("Migrated plaintext keychain.json → encrypted keychain.enc", subsystem: "Keychain")
+            return dict
+        }
+        return [:]
     }
 
     private static func saveStore(_ store: [String: String]) {
@@ -38,8 +168,9 @@ enum KeychainManager {
         // Secure the directory (700 = owner rwx only)
         chmod(storageDir, 0o700)
         let url = URL(fileURLWithPath: storagePath)
-        if let data = try? JSONEncoder().encode(store) {
-            try? data.write(to: url, options: .atomic)
+        if let jsonData = try? JSONEncoder().encode(store),
+           let encrypted = encrypt(jsonData) {
+            try? encrypted.write(to: url, options: .atomic)
             // Secure the file (600 = owner rw only)
             chmod(storagePath, 0o600)
         }
@@ -146,6 +277,48 @@ enum KeychainManager {
         set { set(newValue, for: telegramTokenKey) }
     }
 
+    // MARK: - Convenience: Paired Devices
+
+    private static let pairedDevicesKey = "paired.devices"
+
+    /// Store paired devices securely (encrypted at rest)
+    static func savePairedDevices(_ devices: [PairedDevice]) {
+        if let data = try? JSONEncoder().encode(devices) {
+            set(data.base64EncodedString(), for: pairedDevicesKey)
+        }
+    }
+
+    /// Load paired devices from encrypted store
+    static func loadPairedDevices() -> [PairedDevice] {
+        guard let b64 = get(pairedDevicesKey),
+              let data = Data(base64Encoded: b64),
+              let devices = try? JSONDecoder().decode([PairedDevice].self, from: data) else {
+            return []
+        }
+        return devices
+    }
+
+    /// Check if a bearer token belongs to a paired device (non-MainActor safe)
+    static func isPairedDeviceToken(_ token: String) -> Bool {
+        loadPairedDevices().contains(where: { $0.token == token })
+    }
+
+    /// Migrate paired devices from UserDefaults to encrypted store
+    static func migratePairedDevicesFromUserDefaults() {
+        let defaults = UserDefaults.standard
+        let devicesKey = "torbo_paired_devices"
+        guard let data = defaults.data(forKey: devicesKey),
+              let devices = try? JSONDecoder().decode([PairedDevice].self, from: data),
+              !devices.isEmpty else { return }
+        // Only migrate if not already in encrypted store
+        if loadPairedDevices().isEmpty {
+            savePairedDevices(devices)
+            TorboLog.info("Migrated \(devices.count) paired device(s) to encrypted store", subsystem: "Keychain")
+        }
+        // Remove from UserDefaults
+        defaults.removeObject(forKey: devicesKey)
+    }
+
     // MARK: - One-time migration from macOS Keychain to file store
 
     /// Reads any remaining items from macOS Keychain, writes them to the file store,
@@ -180,7 +353,7 @@ enum KeychainManager {
             // If user denied, abort — don't keep prompting. Try again next launch.
             if status == errSecUserCanceled || status == errSecAuthFailed
                 || status == errSecInteractionNotAllowed {
-                print("[Keychain→File] User denied access, aborting migration")
+                TorboLog.warn("User denied access, aborting migration", subsystem: "Keychain")
                 return
             }
 
@@ -207,7 +380,7 @@ enum KeychainManager {
         }
 
         if migrated > 0 {
-            print("[Keychain→File] Migrated \(migrated) item(s) to file-based storage")
+            TorboLog.info("Migrated \(migrated) item(s) to file-based storage", subsystem: "Keychain")
         }
 
         defaults.set(true, forKey: "torbo_migrated_to_filestore")
@@ -258,7 +431,7 @@ enum KeychainManager {
         }
 
         if migrated {
-            print("[KeychainManager] Migrated secrets from UserDefaults to file store")
+            TorboLog.info("Migrated secrets from UserDefaults to file store", subsystem: "Keychain")
         }
     }
 }

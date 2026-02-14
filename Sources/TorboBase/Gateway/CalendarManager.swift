@@ -1,3 +1,5 @@
+// Copyright 2026 Perceptual Art LLC. All rights reserved.
+// Licensed under Apache 2.0 — see LICENSE file.
 // Torbo Base — Calendar Integration
 // CalendarManager.swift — Access macOS calendar events via EventKit
 // Enables agents to: list events, create events, check availability
@@ -58,13 +60,13 @@ actor CalendarManager {
             let granted = try await eventStore.requestFullAccessToEvents()
             hasAccess = granted
             if granted {
-                print("[Calendar] Access granted")
+                TorboLog.info("Access granted", subsystem: "Calendar")
             } else {
-                print("[Calendar] Access denied — user must grant in System Preferences")
+                TorboLog.warn("Access denied — user must grant in System Preferences", subsystem: "Calendar")
             }
             return granted
         } catch {
-            print("[Calendar] Access error: \(error)")
+            TorboLog.error("Access error: \(error)", subsystem: "Calendar")
             return false
         }
     }
@@ -192,10 +194,10 @@ actor CalendarManager {
 
         do {
             try eventStore.save(event, span: .thisEvent)
-            print("[Calendar] Created event: '\(title)' at \(startDate)")
+            TorboLog.info("Created event: '\(title)' at \(startDate)", subsystem: "Calendar")
             return (true, event.eventIdentifier, nil)
         } catch {
-            print("[Calendar] Failed to create event: \(error)")
+            TorboLog.error("Failed to create event: \(error)", subsystem: "Calendar")
             return (false, nil, error.localizedDescription)
         }
     }
@@ -208,10 +210,10 @@ actor CalendarManager {
 
         do {
             try eventStore.remove(event, span: .thisEvent)
-            print("[Calendar] Deleted event: '\(event.title ?? "?")'")
+            TorboLog.info("Deleted event: '\(event.title ?? "?")'", subsystem: "Calendar")
             return true
         } catch {
-            print("[Calendar] Failed to delete event: \(error)")
+            TorboLog.error("Failed to delete event: \(error)", subsystem: "Calendar")
             return false
         }
     }
@@ -280,73 +282,59 @@ actor CalendarManager {
     private static let unavailableMsg = "[CalendarManager] Calendar not available on this platform"
 
     func requestAccess() async -> Bool {
-        print(Self.unavailableMsg)
+        TorboLog.info(Self.unavailableMsg, subsystem: "Calendar")
         return false
     }
 
     func listEvents(from startDate: Date, to endDate: Date, calendarName: String? = nil) async -> [CalendarEvent] {
-        print(Self.unavailableMsg)
+        TorboLog.info(Self.unavailableMsg, subsystem: "Calendar")
         return []
     }
 
     func todayEvents() async -> [CalendarEvent] {
-        print(Self.unavailableMsg)
+        TorboLog.info(Self.unavailableMsg, subsystem: "Calendar")
         return []
     }
 
     func upcomingEvents(days: Int = 7) async -> [CalendarEvent] {
-        print(Self.unavailableMsg)
+        TorboLog.info(Self.unavailableMsg, subsystem: "Calendar")
         return []
     }
 
     func isAvailable(from startDate: Date, to endDate: Date) async -> Bool {
-        print(Self.unavailableMsg)
+        TorboLog.info(Self.unavailableMsg, subsystem: "Calendar")
         return true  // Assume available when calendar is unavailable
     }
 
     func findFreeSlots(from startDate: Date, to endDate: Date, minDuration: TimeInterval = 1800) async -> [[String: Any]] {
-        print(Self.unavailableMsg)
+        TorboLog.info(Self.unavailableMsg, subsystem: "Calendar")
         return []
     }
 
     func createEvent(title: String, startDate: Date, endDate: Date,
                       location: String? = nil, notes: String? = nil,
                       calendarName: String? = nil, isAllDay: Bool = false) async -> (success: Bool, id: String?, error: String?) {
-        print(Self.unavailableMsg)
+        TorboLog.info(Self.unavailableMsg, subsystem: "Calendar")
         return (false, nil, "Calendar not available on this platform")
     }
 
     func deleteEvent(id: String) async -> Bool {
-        print(Self.unavailableMsg)
+        TorboLog.info(Self.unavailableMsg, subsystem: "Calendar")
         return false
     }
 
     func listCalendars() async -> [[String: Any]] {
-        print(Self.unavailableMsg)
+        TorboLog.info(Self.unavailableMsg, subsystem: "Calendar")
         return []
     }
 
     func formatEvents(_ events: [CalendarEvent]) -> String {
-        if events.isEmpty { return "No events found." }
-
-        let df = DateFormatter()
-        df.dateFormat = "E MMM d, h:mm a"
-        let timeOnly = DateFormatter()
-        timeOnly.dateFormat = "h:mm a"
-
-        return events.enumerated().map { i, event in
-            let start = df.string(from: event.startDate)
-            let end = timeOnly.string(from: event.endDate)
-            var line = "[\(i+1)] \(event.title) — \(start) to \(end)"
-            if event.isAllDay { line = "[\(i+1)] \(event.title) — All Day" }
-            if let loc = event.location { line += " (\(loc))" }
-            line += " [\(event.calendarName)]"
-            return line
-        }.joined(separator: "\n")
+        // Linux stub — no events to format
+        return "Calendar not available on Linux"
     }
 
     func stats() async -> [String: Any] {
-        print(Self.unavailableMsg)
+        TorboLog.info(Self.unavailableMsg, subsystem: "Calendar")
         return [
             "has_access": false,
             "calendars": 0,

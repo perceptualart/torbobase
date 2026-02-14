@@ -1,3 +1,5 @@
+// Copyright 2026 Perceptual Art LLC. All rights reserved.
+// Licensed under Apache 2.0 — see LICENSE file.
 import Foundation
 
 // MARK: - TaskQueue API Routes
@@ -33,13 +35,13 @@ extension GatewayServer {
             return HTTPResponse(statusCode: 201, headers: ["Content-Type": "application/json"], body: data ?? Data())
         }
 
-        // GET /v1/tasks — list all tasks (optional ?crew=sid&status=pending)
+        // GET /v1/tasks — list all tasks (optional ?agent=sid&status=pending)
         if method == "GET" && path == "/v1/tasks" {
-            let crew = req.queryParam("crew")
+            let agent = req.queryParam("agent")
             let statusFilter = req.queryParam("status")
 
             var result = await TaskQueue.shared.allTasks()
-            if let c = crew { result = result.filter { $0.assignedTo == c } }
+            if let a = agent { result = result.filter { $0.assignedTo == a } }
             if let s = statusFilter, let status = TaskQueue.TaskStatus(rawValue: s) {
                 result = result.filter { $0.status == status }
             }
@@ -57,13 +59,13 @@ extension GatewayServer {
             return HTTPResponse(statusCode: 200, headers: ["Content-Type": "application/json"], body: data ?? Data())
         }
 
-        // POST /v1/tasks/claim — crew member claims next pending task
+        // POST /v1/tasks/claim — agent claims next pending task
         if method == "POST" && path == "/v1/tasks/claim" {
             guard let body = req.jsonBody,
-                  let crewID = body["crew_id"] as? String else {
-                return HTTPResponse(statusCode: 400, headers: ["Content-Type": "application/json"], body: Data("{\"error\":\"Missing crew_id\"}".utf8))
+                  let agentID = body["agent_id"] as? String ?? body["crew_id"] as? String else {
+                return HTTPResponse(statusCode: 400, headers: ["Content-Type": "application/json"], body: Data("{\"error\":\"Missing agent_id\"}".utf8))
             }
-            if let task = await TaskQueue.shared.claimTask(crewID: crewID) {
+            if let task = await TaskQueue.shared.claimTask(agentID: agentID) {
                 let json: [String: Any] = [
                     "id": task.id, "title": task.title, "description": task.description,
                     "status": task.status.rawValue
@@ -71,7 +73,7 @@ extension GatewayServer {
                 let data = try? JSONSerialization.data(withJSONObject: json)
                 return HTTPResponse(statusCode: 200, headers: ["Content-Type": "application/json"], body: data ?? Data())
             }
-            return HTTPResponse(statusCode: 204, headers: ["Content-Type": "application/json"], body: Data("{\"message\":\"No pending tasks for \(crewID)\"}".utf8))
+            return HTTPResponse(statusCode: 204, headers: ["Content-Type": "application/json"], body: Data("{\"message\":\"No pending tasks for \(agentID)\"}".utf8))
         }
 
         // POST /v1/tasks/:id/complete — mark task done
@@ -107,7 +109,7 @@ extension GatewayServer {
             return HTTPResponse(statusCode: 200, headers: ["Content-Type": "application/json"], body: data)
         }
 
-        // POST /v1/tasks/delegate — one crew delegates to another
+        // POST /v1/tasks/delegate — delegate task to agent
         if method == "POST" && path == "/v1/tasks/delegate" {
             guard let body = req.jsonBody,
                   let from = body["from"] as? String,

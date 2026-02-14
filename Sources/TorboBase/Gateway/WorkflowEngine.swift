@@ -1,3 +1,5 @@
+// Copyright 2026 Perceptual Art LLC. All rights reserved.
+// Licensed under Apache 2.0 — see LICENSE file.
 // Torbo Base — Workflow Engine
 // WorkflowEngine.swift — Decomposes natural language into multi-step agent pipelines
 // Builds on TaskQueue + ProactiveAgent for execution
@@ -34,17 +36,8 @@ struct WorkflowStep: Codable {
     let index: Int                  // Step order (0-based)
     let title: String               // Step title
     let description: String         // What this step should accomplish
-    let assignedTo: String          // Crew member ID
+    let assignedTo: String          // Agent ID
     let dependsOnSteps: [Int]       // Step indices this depends on (usually [index-1])
-}
-
-// MARK: - Crew Member Registry
-
-/// Known crew members and their specialties for auto-assignment
-struct CrewMember {
-    let id: String
-    let name: String
-    let specialties: [String]       // Keywords for task matching
 }
 
 // MARK: - Workflow Engine
@@ -55,24 +48,19 @@ actor WorkflowEngine {
     private var workflows: [String: Workflow] = [:]
     private let storePath = NSHomeDirectory() + "/Library/Application Support/TorboBase/workflows.json"
 
-    /// Known crew members — loaded from AppState or defaults
-    private let defaultCrew: [CrewMember] = [
-        CrewMember(id: "sid", name: "SiD", specialties: ["research", "search", "analyze", "investigate", "find", "debug", "code", "build", "fix", "implement", "develop", "architecture"]),
-        CrewMember(id: "mira", name: "Mira", specialties: ["write", "report", "draft", "compose", "summarize", "document", "edit", "article", "blog", "email", "creative"]),
-        CrewMember(id: "ada", name: "aDa", specialties: ["data", "analyze", "calculate", "statistics", "chart", "math", "metrics", "compare", "evaluate", "measure"]),
-        CrewMember(id: "orion", name: "Orion", specialties: ["review", "critique", "verify", "test", "quality", "check", "audit", "validate", "proofread", "assess"])
-    ]
+    /// Default agent for workflow steps when none specified
+    private let defaultAgentID = "sid"
 
-    init() {
-        loadWorkflows()
-    }
+    init() {}
 
     // MARK: - Create Workflow
 
     /// Create a workflow from a natural language description
     /// Uses a lightweight LLM call to decompose the intent into steps
-    func createWorkflow(description: String, createdBy: String = "user", priority: TaskQueue.TaskPriority = .normal) async -> Workflow {
-        let steps = await decomposeIntoSteps(description)
+    /// If agentID is provided, all steps are assigned to that agent; otherwise defaults to SiD
+    func createWorkflow(description: String, createdBy: String = "user", priority: TaskQueue.TaskPriority = .normal, agentID: String? = nil) async -> Workflow {
+        let assignee = agentID ?? defaultAgentID
+        let steps = await decomposeIntoSteps(description, agentID: assignee)
 
         let workflowID = UUID().uuidString
         var workflow = Workflow(
@@ -115,9 +103,9 @@ actor WorkflowEngine {
         workflows[workflowID] = workflow
         saveWorkflows()
 
-        print("[Workflow] Created '\(workflow.name)' with \(steps.count) step(s) — ID: \(workflowID.prefix(8))")
+        TorboLog.info("Created '\(workflow.name)' with \(steps.count) step(s) — ID: \(workflowID.prefix(8))", subsystem: "Workflow")
         for step in steps {
-            print("[Workflow]   Step \(step.index + 1): \(step.title) → \(step.assignedTo)")
+            TorboLog.info("  Step \(step.index + 1): \(step.title) → \(step.assignedTo)", subsystem: "Workflow")
         }
 
         return workflow
@@ -165,7 +153,7 @@ actor WorkflowEngine {
         workflows[workflowID] = workflow
         saveWorkflows()
 
-        print("[Workflow] Created '\(workflow.name)' with \(steps.count) step(s) — ID: \(workflowID.prefix(8))")
+        TorboLog.info("Created '\(workflow.name)' with \(steps.count) step(s) — ID: \(workflowID.prefix(8))", subsystem: "Workflow")
         return workflow
     }
 
@@ -176,8 +164,8 @@ actor WorkflowEngine {
         guard var workflow = workflows[workflowID] else { return }
 
         let progress = await TaskQueue.shared.workflowProgress(workflowID)
-        print("[Workflow] '\(workflow.name)' progress: \(progress.completed)/\(progress.total) complete" +
-              (progress.active > 0 ? ", \(progress.active) active" : ""))
+        TorboLog.info("'\(workflow.name)' progress: \(progress.completed)/\(progress.total) complete" +
+              (progress.active > 0 ? ", \(progress.active) active" : ""), subsystem: "Workflow")
 
         // Check if all tasks are done
         if progress.completed == progress.total {
@@ -193,7 +181,7 @@ actor WorkflowEngine {
             saveWorkflows()
 
             let elapsed = workflow.startedAt.map { Int(Date().timeIntervalSince($0)) } ?? 0
-            print("[Workflow] ✅ '\(workflow.name)' completed in \(elapsed)s")
+            TorboLog.info("'\(workflow.name)' completed in \(elapsed)s", subsystem: "Workflow")
         }
     }
 
@@ -202,7 +190,7 @@ actor WorkflowEngine {
         guard var workflow = workflows[workflowID] else { return }
 
         let progress = await TaskQueue.shared.workflowProgress(workflowID)
-        print("[Workflow] '\(workflow.name)' — step failed. \(progress.failed) failed, \(progress.completed) completed of \(progress.total)")
+        TorboLog.error("'\(workflow.name)' — step failed. \(progress.failed) failed, \(progress.completed) completed of \(progress.total)", subsystem: "Workflow")
 
         // If any step fails, mark workflow as failed (downstream deps will auto-cancel)
         if progress.failed > 0 && progress.active == 0 {
@@ -214,7 +202,7 @@ actor WorkflowEngine {
 
             workflows[workflowID] = workflow
             saveWorkflows()
-            print("[Workflow] ❌ '\(workflow.name)' failed")
+            TorboLog.error("'\(workflow.name)' failed", subsystem: "Workflow")
         }
     }
 
@@ -283,49 +271,46 @@ actor WorkflowEngine {
         workflow.completedAt = Date()
         workflows[id] = workflow
         saveWorkflows()
-        print("[Workflow] Cancelled '\(workflow.name)'")
+        TorboLog.info("Cancelled '\(workflow.name)'", subsystem: "Workflow")
     }
 
     // MARK: - Step Decomposition
 
     /// Decompose a natural language description into workflow steps
     /// Uses pattern matching + heuristics (fast, no LLM needed for common patterns)
-    private func decomposeIntoSteps(_ description: String) async -> [WorkflowStep] {
-        let text = description.lowercased()
-
+    private func decomposeIntoSteps(_ description: String, agentID: String) async -> [WorkflowStep] {
         // Try to decompose using explicit step markers
-        let explicitSteps = parseExplicitSteps(description)
+        let explicitSteps = parseExplicitSteps(description, agentID: agentID)
         if !explicitSteps.isEmpty {
             return explicitSteps
         }
 
         // Try comma/and separated tasks: "research X, write Y, and review Z"
-        let commaSplit = parseCommaSeparated(description)
+        let commaSplit = parseCommaSeparated(description, agentID: agentID)
         if commaSplit.count >= 2 {
             return commaSplit
         }
 
         // Try "then" chain: "do X then do Y then do Z"
-        let thenChain = parseThenChain(description)
+        let thenChain = parseThenChain(description, agentID: agentID)
         if thenChain.count >= 2 {
             return thenChain
         }
 
         // Try LLM decomposition for complex requests
-        if let llmSteps = await llmDecompose(description), llmSteps.count >= 2 {
+        if let llmSteps = await llmDecompose(description, agentID: agentID), llmSteps.count >= 2 {
             return llmSteps
         }
 
-        // Single step fallback — assign to best-fit crew member
-        let assignee = bestCrewMember(for: text)
+        // Single step fallback
         return [WorkflowStep(index: 0, title: generateStepTitle(description), description: description,
-                              assignedTo: assignee, dependsOnSteps: [])]
+                              assignedTo: agentID, dependsOnSteps: [])]
     }
 
     // MARK: - Pattern Parsing
 
     /// Parse numbered steps: "1. Do X  2. Do Y  3. Do Z"
-    private func parseExplicitSteps(_ text: String) -> [WorkflowStep] {
+    private func parseExplicitSteps(_ text: String, agentID: String) -> [WorkflowStep] {
         // Match patterns like "1. ", "1) ", "Step 1: "
         let patterns = [
             try? NSRegularExpression(pattern: #"(?:^|\n)\s*(\d+)[\.\)]\s*(.+?)(?=\n\s*\d+[\.\)]|\n*$)"#, options: [.dotMatchesLineSeparators]),
@@ -338,12 +323,11 @@ actor WorkflowEngine {
 
             return matches.enumerated().map { idx, match in
                 let desc = String(text[Range(match.range(at: 2), in: text)!]).trimmingCharacters(in: .whitespacesAndNewlines)
-                let assignee = bestCrewMember(for: desc.lowercased())
                 return WorkflowStep(
                     index: idx,
                     title: generateStepTitle(desc),
                     description: desc,
-                    assignedTo: assignee,
+                    assignedTo: agentID,
                     dependsOnSteps: idx > 0 ? [idx - 1] : []
                 )
             }
@@ -353,7 +337,7 @@ actor WorkflowEngine {
     }
 
     /// Parse comma/and separated: "research AI, write a report, review it"
-    private func parseCommaSeparated(_ text: String) -> [WorkflowStep] {
+    private func parseCommaSeparated(_ text: String, agentID: String) -> [WorkflowStep] {
         // Split on ", " and " and " but not inside quotes
         var parts: [String] = []
         let cleaned = text.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -375,19 +359,18 @@ actor WorkflowEngine {
         }
 
         return parts.enumerated().map { idx, desc in
-            let assignee = bestCrewMember(for: desc.lowercased())
             return WorkflowStep(
                 index: idx,
                 title: generateStepTitle(desc),
                 description: desc,
-                assignedTo: assignee,
+                assignedTo: agentID,
                 dependsOnSteps: idx > 0 ? [idx - 1] : []
             )
         }
     }
 
     /// Parse "then" chains: "do X then do Y then do Z"
-    private func parseThenChain(_ text: String) -> [WorkflowStep] {
+    private func parseThenChain(_ text: String, agentID: String) -> [WorkflowStep] {
         let parts = text.components(separatedBy: " then ")
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty && $0.count > 5 }
@@ -395,38 +378,32 @@ actor WorkflowEngine {
         guard parts.count >= 2 else { return [] }
 
         return parts.enumerated().map { idx, desc in
-            let assignee = bestCrewMember(for: desc.lowercased())
             return WorkflowStep(
                 index: idx,
                 title: generateStepTitle(desc),
                 description: desc,
-                assignedTo: assignee,
+                assignedTo: agentID,
                 dependsOnSteps: idx > 0 ? [idx - 1] : []
             )
         }
     }
 
     /// Use a lightweight LLM call to decompose complex descriptions
-    private func llmDecompose(_ description: String) async -> [WorkflowStep]? {
-        let crewList = defaultCrew.map { "\($0.id) (\($0.name)): \($0.specialties.joined(separator: ", "))" }.joined(separator: "\n")
-
+    private func llmDecompose(_ description: String, agentID: String) async -> [WorkflowStep]? {
         let systemPrompt = """
         You are a workflow planner. Decompose the user's request into sequential steps.
-        Each step should be assigned to the most appropriate crew member.
-
-        Available crew members:
-        \(crewList)
+        All steps are assigned to "\(agentID)" (the executing agent).
 
         Respond ONLY with a JSON array. Each element has:
         - "title": short step title (5-10 words)
         - "description": what this step should accomplish
-        - "assigned_to": crew member id (sid, mira, ada, orion)
+        - "assigned_to": always "\(agentID)"
         - "depends_on": array of step indices (0-based) this depends on
 
         Example:
         [
-          {"title": "Research AI trends", "description": "Search the web for latest AI trends in 2025", "assigned_to": "sid", "depends_on": []},
-          {"title": "Write summary report", "description": "Write a comprehensive report based on the research", "assigned_to": "mira", "depends_on": [0]}
+          {"title": "Research AI trends", "description": "Search the web for latest AI trends", "assigned_to": "\(agentID)", "depends_on": []},
+          {"title": "Write summary report", "description": "Write a comprehensive report based on the research", "assigned_to": "\(agentID)", "depends_on": [0]}
         ]
         """
 
@@ -453,7 +430,7 @@ actor WorkflowEngine {
 
         guard let (data, response) = try? await URLSession.shared.data(for: request),
               let httpResp = response as? HTTPURLResponse, httpResp.statusCode == 200 else {
-            print("[Workflow] LLM decomposition failed — using heuristic fallback")
+            TorboLog.warn("LLM decomposition failed — using heuristic fallback", subsystem: "Workflow")
             return nil
         }
 
@@ -470,14 +447,14 @@ actor WorkflowEngine {
         let jsonStr = extractJSON(from: content)
         guard let stepsData = jsonStr.data(using: .utf8),
               let stepsArray = try? JSONSerialization.jsonObject(with: stepsData) as? [[String: Any]] else {
-            print("[Workflow] Failed to parse LLM step decomposition")
+            TorboLog.error("Failed to parse LLM step decomposition", subsystem: "Workflow")
             return nil
         }
 
         return stepsArray.enumerated().map { idx, step in
             let title = step["title"] as? String ?? "Step \(idx + 1)"
             let desc = step["description"] as? String ?? ""
-            let assignee = step["assigned_to"] as? String ?? bestCrewMember(for: desc.lowercased())
+            let assignee = step["assigned_to"] as? String ?? agentID
             let deps = step["depends_on"] as? [Int] ?? (idx > 0 ? [idx - 1] : [])
 
             return WorkflowStep(
@@ -492,16 +469,7 @@ actor WorkflowEngine {
 
     // MARK: - Helpers
 
-    private func bestCrewMember(for text: String) -> String {
-        var scores: [String: Int] = [:]
-        for member in defaultCrew {
-            scores[member.id] = member.specialties.reduce(0) { count, keyword in
-                count + (text.contains(keyword) ? 1 : 0)
-            }
-        }
-        // Return highest scorer, default to "sid" (most versatile)
-        return scores.max(by: { $0.value < $1.value })?.key ?? "sid"
-    }
+    // Agent selection is handled by the caller or defaults to SiD
 
     private func generateStepTitle(_ description: String) -> String {
         let words = description.split(separator: " ").prefix(8).map(String.init)
@@ -539,21 +507,14 @@ actor WorkflowEngine {
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
         guard let data = try? encoder.encode(Array(workflows.values)) else { return }
-        try? data.write(to: URL(fileURLWithPath: storePath))
+        do {
+            try data.write(to: URL(fileURLWithPath: storePath))
+        } catch {
+            TorboLog.error("Failed to write workflows.json: \(error)", subsystem: "Workflows")
+        }
     }
 
-    private nonisolated func loadWorkflows() {
-        let url = URL(fileURLWithPath: storePath)
-        guard let data = try? Data(contentsOf: url) else { return }
-        let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
-        guard let loaded = try? decoder.decode([Workflow].self, from: data) else { return }
-        // Note: this is called from init — workflows dict is empty, safe to assign
-        // We'll handle this through a post-init load call instead
-        print("[Workflow] Found \(loaded.count) saved workflow(s)")
-    }
-
-    /// Call after init to load persisted workflows
+    /// Load persisted workflows from disk
     func loadFromDisk() {
         let url = URL(fileURLWithPath: storePath)
         guard let data = try? Data(contentsOf: url) else { return }
@@ -561,6 +522,6 @@ actor WorkflowEngine {
         decoder.dateDecodingStrategy = .iso8601
         guard let loaded = try? decoder.decode([Workflow].self, from: data) else { return }
         for wf in loaded { workflows[wf.id] = wf }
-        print("[Workflow] Loaded \(workflows.count) workflow(s) from disk")
+        TorboLog.info("Loaded \(workflows.count) workflow(s) from disk", subsystem: "Workflow")
     }
 }

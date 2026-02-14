@@ -1,3 +1,5 @@
+// Copyright 2026 Perceptual Art LLC. All rights reserved.
+// Licensed under Apache 2.0 — see LICENSE file.
 // Torbo Base — SwiftNIO TCP Server (Linux)
 // Replaces NWListener on platforms where Network.framework isn't available.
 
@@ -10,6 +12,9 @@ import NIOHTTP1
 // MARK: - NIO Response Writer
 
 /// Implements ResponseWriter for SwiftNIO channels
+/// @unchecked Sendable: SwiftNIO's Channel is internally thread-safe but does not
+/// formally conform to Sendable. This wrapper only stores a reference and the allocator
+/// derived from it — no mutable shared state. Safe for concurrent access.
 final class NIOResponseWriter: ResponseWriter, @unchecked Sendable {
     private let channel: Channel
     private let allocator: ByteBufferAllocator
@@ -70,10 +75,18 @@ final class HTTPHandler: ChannelInboundHandler, RemovableChannelHandler {
     typealias OutboundOut = ByteBuffer
 
     private var accumulated = Data()
+    private let maxRequestSize = 10 * 1024 * 1024 // 10MB — prevent unbounded buffer growth
 
     func channelRead(context: ChannelHandlerContext, data: NIOAny) {
         var buffer = unwrapInboundIn(data)
         if let bytes = buffer.readBytes(length: buffer.readableBytes) {
+            // Reject oversized requests to prevent memory exhaustion
+            if accumulated.count + bytes.count > maxRequestSize {
+                TorboLog.warn("Request too large (\(accumulated.count + bytes.count) bytes) — closing connection", subsystem: "NIO")
+                accumulated = Data()
+                context.close(promise: nil)
+                return
+            }
             accumulated.append(contentsOf: bytes)
         }
 
@@ -96,7 +109,7 @@ final class HTTPHandler: ChannelInboundHandler, RemovableChannelHandler {
     }
 
     func errorCaught(context: ChannelHandlerContext, error: Error) {
-        print("[NIOServer] Error: \(error)")
+        TorboLog.error("Error: \(error)", subsystem: "NIO")
         context.close(promise: nil)
     }
 }
@@ -121,9 +134,10 @@ actor NIOServer {
             .childChannelOption(ChannelOptions.socketOption(.so_reuseaddr), value: 1)
             .childChannelOption(ChannelOptions.maxMessagesPerRead, value: 16)
 
+        // Bind to all interfaces to allow LAN device connections (phone pairing)
         let channel = try await bootstrap.bind(host: "0.0.0.0", port: Int(port)).get()
         self.channel = channel
-        print("[NIOServer] Listening on port \(port)")
+        TorboLog.info("Listening on port \(port)", subsystem: "NIO")
     }
 
     func stop() async {
@@ -131,11 +145,11 @@ actor NIOServer {
             try await channel?.close()
             try await group?.shutdownGracefully()
         } catch {
-            print("[NIOServer] Shutdown error: \(error)")
+            TorboLog.error("Shutdown error: \(error)", subsystem: "NIO")
         }
         channel = nil
         group = nil
-        print("[NIOServer] Stopped")
+        TorboLog.info("Stopped", subsystem: "NIO")
     }
 }
 #endif

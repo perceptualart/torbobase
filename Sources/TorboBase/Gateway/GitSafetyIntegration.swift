@@ -1,3 +1,5 @@
+// Copyright 2026 Perceptual Art LLC. All rights reserved.
+// Licensed under Apache 2.0 — see LICENSE file.
 // Torbo Base — Git Safety Tool Integration
 // Extension to wire GitSafety tools into ToolProcessor
 import Foundation

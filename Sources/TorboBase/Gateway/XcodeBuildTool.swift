@@ -1,3 +1,5 @@
+// Copyright 2026 Perceptual Art LLC. All rights reserved.
+// Licensed under Apache 2.0 — see LICENSE file.
 // Torbo Base — Xcode Build Tool
 import Foundation
 
@@ -22,8 +24,9 @@ actor XcodeBuildTool {
     
     /// Build and deploy the Torbo iOS app
     func buildAndDeploy() async -> String {
-        let projectPath = NSString(string: "~/Documents/torbo master/torbo app/Torbo.xcodeproj").expandingTildeInPath
-        let deviceID = "00008120-00103414227BC01E"
+        let projectPath = ProcessInfo.processInfo.environment["TORBO_APP_PROJECT"]
+            ?? NSString(string: "~/Documents/Torbo App/Torbo.xcodeproj").expandingTildeInPath
+        let deviceID = ProcessInfo.processInfo.environment["TORBO_DEVICE_ID"] ?? "generic/platform=iOS"
         
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/xcodebuild")

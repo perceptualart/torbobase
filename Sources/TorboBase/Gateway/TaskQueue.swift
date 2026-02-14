@@ -1,6 +1,8 @@
+// Copyright 2026 Perceptual Art LLC. All rights reserved.
+// Licensed under Apache 2.0 — see LICENSE file.
 import Foundation
 
-// MARK: - Task Queue — Inter-Crew Delegation & Parallel Execution
+// MARK: - Task Queue — Task Delegation & Parallel Execution
 
 actor TaskQueue {
     static let shared = TaskQueue()
@@ -24,11 +26,11 @@ actor TaskQueue {
         }
     }
 
-    struct CrewTask: Codable, Identifiable {
+    struct AgentTask: Codable, Identifiable {
         let id: String
         let title: String
         let description: String
-        let assignedTo: String      // crew member ID
+        let assignedTo: String      // agent ID
         let assignedBy: String      // who created it
         let priority: TaskPriority
         var status: TaskStatus
@@ -71,31 +73,56 @@ actor TaskQueue {
 
     // MARK: - Storage
 
-    private var tasks: [String: CrewTask] = [:]
-    private var taskOrder: [String] = []  // ordered by priority then creation time
-    private let storePath = NSHomeDirectory() + "/Library/Application Support/TorboBase/task_queue.json"
+    private var tasks: [String: AgentTask]
+    private var taskOrder: [String]
+    private let storePath: String
 
     init() {
-        loadTasks()
+        let path = NSHomeDirectory() + "/Library/Application Support/TorboBase/task_queue.json"
+        storePath = path
+        // Bootstrap from disk using nonisolated static helper
+        let (loadedTasks, loadedOrder) = Self.bootstrapTasks(from: path)
+        tasks = loadedTasks
+        taskOrder = loadedOrder
+        if !loadedTasks.isEmpty {
+            TorboLog.info("Loaded \(loadedTasks.count) tasks from disk", subsystem: "Tasks")
+        }
+    }
+
+    /// Load and order tasks from disk (nonisolated for safe actor init)
+    private nonisolated static func bootstrapTasks(from path: String) -> ([String: AgentTask], [String]) {
+        let url = URL(fileURLWithPath: path)
+        guard let data = try? Data(contentsOf: url) else { return ([:], []) }
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        guard let loaded = try? decoder.decode([AgentTask].self, from: data) else { return ([:], []) }
+        var taskMap: [String: AgentTask] = [:]
+        for task in loaded { taskMap[task.id] = task }
+        // Sort by priority (higher first) then creation time (older first)
+        let ordered = loaded.sorted { a, b in
+            if a.priority != b.priority { return a.priority > b.priority }
+            return a.createdAt < b.createdAt
+        }.map(\.id)
+        return (taskMap, ordered)
     }
 
     // MARK: - Task Management
 
-    func createTask(title: String, description: String, assignedTo: String, assignedBy: String, priority: TaskPriority = .normal) -> CrewTask {
-        let task = CrewTask(title: title, description: description, assignedTo: assignedTo, assignedBy: assignedBy, priority: priority)
+    func createTask(title: String, description: String, assignedTo: String, assignedBy: String, priority: TaskPriority = .normal) -> AgentTask {
+        let task = AgentTask(title: title, description: description, assignedTo: assignedTo, assignedBy: assignedBy, priority: priority)
         tasks[task.id] = task
         insertOrdered(task.id)
         saveTasks()
-        print("[TaskQueue] Created: '\(title)' -> \(assignedTo) (priority: \(priority))")
+        TorboLog.info("Created: '\(title)' -> \(assignedTo) (priority: \(priority))", subsystem: "Tasks")
         return task
     }
 
-    func claimTask(crewID: String) -> CrewTask? {
-        // Find highest priority pending task for this crew member
+    func claimTask(agentID: String) -> AgentTask? {
+        // Find highest priority pending task for this agent
         // Respects dependency ordering — tasks with unmet deps are skipped
         for taskID in taskOrder {
             guard var task = tasks[taskID],
-                  task.assignedTo == crewID,
+                  task.assignedTo == agentID,
                   task.status == .pending else { continue }
 
             // Check dependencies — all must be completed
@@ -115,7 +142,7 @@ actor TaskQueue {
                         task.completedAt = Date()
                         tasks[taskID] = task
                         saveTasks()
-                        print("[TaskQueue] Auto-cancelled '\(task.title)' — dependency failed")
+                        TorboLog.warn("Auto-cancelled '\(task.title)' — dependency failed", subsystem: "Tasks")
 
                         // Check if this was part of a workflow
                         if let wfID = task.workflowID {
@@ -140,7 +167,7 @@ actor TaskQueue {
             task.startedAt = Date()
             tasks[taskID] = task
             saveTasks()
-            print("[TaskQueue] \(crewID) claimed: '\(task.title)'" + (task.workflowID != nil ? " (workflow step \((task.stepIndex ?? 0) + 1))" : ""))
+            TorboLog.info("\(agentID) claimed: '\(task.title)'" + (task.workflowID != nil ? " (workflow step \((task.stepIndex ?? 0) + 1))" : ""), subsystem: "Tasks")
             return task
         }
         return nil
@@ -154,7 +181,7 @@ actor TaskQueue {
         tasks[id] = task
         saveTasks()
         let elapsed = task.startedAt.map { Int(Date().timeIntervalSince($0)) } ?? 0
-        print("[TaskQueue] Completed: '\(task.title)' in \(elapsed)s")
+        TorboLog.info("Completed: '\(task.title)' in \(elapsed)s", subsystem: "Tasks")
 
         // Notify workflow engine if part of a workflow
         if let wfID = task.workflowID {
@@ -169,7 +196,7 @@ actor TaskQueue {
         task.completedAt = Date()
         tasks[id] = task
         saveTasks()
-        print("[TaskQueue] Failed: '\(task.title)' — \(error)")
+        TorboLog.error("Failed: '\(task.title)' — \(error)", subsystem: "Tasks")
 
         // Notify workflow engine if part of a workflow
         if let wfID = task.workflowID {
@@ -183,37 +210,37 @@ actor TaskQueue {
         task.completedAt = Date()
         tasks[id] = task
         saveTasks()
-        print("[TaskQueue] Cancelled: '\(task.title)'")
+        TorboLog.info("Cancelled: '\(task.title)'", subsystem: "Tasks")
     }
 
     // MARK: - Queries
 
-    func tasksForCrew(_ crewID: String) -> [CrewTask] {
-        taskOrder.compactMap { tasks[$0] }.filter { $0.assignedTo == crewID }
+    func tasksForAgent(_ agentID: String) -> [AgentTask] {
+        taskOrder.compactMap { tasks[$0] }.filter { $0.assignedTo == agentID }
     }
 
-    func pendingTasks(for crewID: String? = nil) -> [CrewTask] {
+    func pendingTasks(for agentID: String? = nil) -> [AgentTask] {
         let all = taskOrder.compactMap { tasks[$0] }.filter { $0.status == .pending }
-        if let crew = crewID { return all.filter { $0.assignedTo == crew } }
+        if let agent = agentID { return all.filter { $0.assignedTo == agent } }
         return all
     }
 
-    func activeTasks() -> [CrewTask] {
+    func activeTasks() -> [AgentTask] {
         taskOrder.compactMap { tasks[$0] }.filter { $0.status == .inProgress }
     }
 
-    func recentCompleted(limit: Int = 10) -> [CrewTask] {
+    func recentCompleted(limit: Int = 10) -> [AgentTask] {
         Array(tasks.values
             .filter { $0.status == .completed }
             .sorted { ($0.completedAt ?? .distantPast) > ($1.completedAt ?? .distantPast) }
             .prefix(limit))
     }
 
-    func allTasks() -> [CrewTask] {
+    func allTasks() -> [AgentTask] {
         taskOrder.compactMap { tasks[$0] }
     }
 
-    func taskByID(_ id: String) -> CrewTask? {
+    func taskByID(_ id: String) -> AgentTask? {
         tasks[id]
     }
 
@@ -221,19 +248,19 @@ actor TaskQueue {
 
     func createWorkflowTask(title: String, description: String, assignedTo: String, assignedBy: String,
                              priority: TaskPriority = .normal, workflowID: String, dependsOn: [String] = [],
-                             stepIndex: Int) -> CrewTask {
-        let task = CrewTask(title: title, description: description, assignedTo: assignedTo, assignedBy: assignedBy,
+                             stepIndex: Int) -> AgentTask {
+        let task = AgentTask(title: title, description: description, assignedTo: assignedTo, assignedBy: assignedBy,
                             priority: priority, workflowID: workflowID, dependsOn: dependsOn, stepIndex: stepIndex)
         tasks[task.id] = task
         insertOrdered(task.id)
         saveTasks()
-        print("[TaskQueue] Created workflow step \(stepIndex + 1): '\(title)' -> \(assignedTo) (workflow: \(workflowID.prefix(8)))")
+        TorboLog.info("Created workflow step \(stepIndex + 1): '\(title)' -> \(assignedTo) (workflow: \(workflowID.prefix(8)))", subsystem: "Tasks")
         return task
     }
 
     // MARK: - Workflow Queries
 
-    func tasksForWorkflow(_ workflowID: String) -> [CrewTask] {
+    func tasksForWorkflow(_ workflowID: String) -> [AgentTask] {
         tasks.values
             .filter { $0.workflowID == workflowID }
             .sorted { ($0.stepIndex ?? 0) < ($1.stepIndex ?? 0) }
@@ -250,9 +277,9 @@ actor TaskQueue {
 
     // MARK: - Delegation
 
-    func delegate(from: String, to: String, title: String, description: String, priority: TaskPriority = .normal) -> CrewTask {
+    func delegate(from: String, to: String, title: String, description: String, priority: TaskPriority = .normal) -> AgentTask {
         let task = createTask(title: title, description: description, assignedTo: to, assignedBy: from, priority: priority)
-        print("[TaskQueue] \(from) delegated '\(title)' to \(to)")
+        TorboLog.info("\(from) delegated '\(title)' to \(to)", subsystem: "Tasks")
         return task
     }
 
@@ -272,7 +299,11 @@ actor TaskQueue {
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
         guard let data = try? encoder.encode(Array(tasks.values)) else { return }
-        try? data.write(to: URL(fileURLWithPath: storePath))
+        do {
+            try data.write(to: URL(fileURLWithPath: storePath))
+        } catch {
+            TorboLog.error("Failed to write tasks.json: \(error)", subsystem: "Tasks")
+        }
     }
 
     private func loadTasks() {
@@ -280,12 +311,12 @@ actor TaskQueue {
         guard let data = try? Data(contentsOf: url) else { return }
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
-        guard let loaded = try? decoder.decode([CrewTask].self, from: data) else { return }
+        guard let loaded = try? decoder.decode([AgentTask].self, from: data) else { return }
         for task in loaded {
             tasks[task.id] = task
             insertOrdered(task.id)
         }
-        print("[TaskQueue] Loaded \(tasks.count) tasks from disk")
+        TorboLog.info("Loaded \(tasks.count) tasks from disk", subsystem: "Tasks")
     }
 
     private func insertOrdered(_ id: String) {

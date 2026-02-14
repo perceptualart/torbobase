@@ -1,4 +1,6 @@
-// Torbo Base — by Michael David Murphy & Orion (Claude Opus 4.6, Anthropic)
+// Copyright 2026 Perceptual Art LLC. All rights reserved.
+// Licensed under Apache 2.0 — see LICENSE file.
+// Torbo Base — by Michael David Murphy
 #if canImport(SwiftUI)
 import SwiftUI
 
@@ -82,7 +84,7 @@ struct MenuBarView: View {
                 if state.serverRunning {
                     MenuBarAction(title: "Open Web Chat", icon: "globe", tint: .cyan) {
                         let url = "http://\(state.localIP):\(state.serverPort)/chat?token=\(state.serverToken)"
-                        NSWorkspace.shared.open(URL(string: url)!)
+                        if let parsed = URL(string: url) { NSWorkspace.shared.open(parsed) }
                     }
                 }
                 if state.accessLevel != .off {

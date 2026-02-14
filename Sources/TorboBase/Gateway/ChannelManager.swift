@@ -1,3 +1,5 @@
+// Copyright 2026 Perceptual Art LLC. All rights reserved.
+// Licensed under Apache 2.0 — see LICENSE file.
 // Torbo Base — Channel Manager
 // ChannelManager.swift — Orchestrates all messaging bridges
 // Unified interface for multi-channel messaging (Telegram, Discord, Slack, WhatsApp, Signal)
@@ -53,7 +55,7 @@ actor ChannelManager {
 
     func initialize() async {
         let config = loadConfig()
-        print("[Channels] Initializing messaging bridges...")
+        TorboLog.info("Initializing messaging bridges...", subsystem: "Channels")
 
         // Telegram (already handled by TelegramBridge in startup)
         // Just track its status
@@ -71,7 +73,7 @@ actor ChannelManager {
             }
             Task { await DiscordBridge.shared.startPolling() }
             activeChannels.insert(.discord)
-            print("[Channels] Discord bridge started")
+            TorboLog.info("Discord bridge started", subsystem: "Channels")
         }
 
         // Slack
@@ -84,7 +86,7 @@ actor ChannelManager {
             }
             Task { await SlackBridge.shared.startPolling() }
             activeChannels.insert(.slack)
-            print("[Channels] Slack bridge started")
+            TorboLog.info("Slack bridge started", subsystem: "Channels")
         }
 
         // WhatsApp (webhook-based — needs external webhook forwarding)
@@ -96,7 +98,7 @@ actor ChannelManager {
                 AppState.shared.whatsappVerifyToken = config.whatsappVerifyToken
             }
             activeChannels.insert(.whatsapp)
-            print("[Channels] WhatsApp bridge ready (webhook-based)")
+            TorboLog.info("WhatsApp bridge ready (webhook-based)", subsystem: "Channels")
         }
 
         // Signal (via signal-cli REST)
@@ -108,10 +110,10 @@ actor ChannelManager {
             }
             Task { await SignalBridge.shared.startPolling() }
             activeChannels.insert(.signal)
-            print("[Channels] Signal bridge started")
+            TorboLog.info("Signal bridge started", subsystem: "Channels")
         }
 
-        print("[Channels] Active: \(activeChannels.map { $0.rawValue }.sorted().joined(separator: ", ")) (\(activeChannels.count) channel(s))")
+        TorboLog.info("Active: \(activeChannels.map { $0.rawValue }.sorted().joined(separator: ", ")) (\(activeChannels.count) channel(s))", subsystem: "Channels")
     }
 
     // MARK: - Broadcast
@@ -192,14 +194,22 @@ actor ChannelManager {
         )
 
         if let data = try? JSONEncoder().encode(template) {
-            try? data.write(to: URL(fileURLWithPath: configPath))
-            print("[Channels] Created template config at \(configPath)")
+            do {
+                try data.write(to: URL(fileURLWithPath: configPath))
+                TorboLog.info("Created template config at \(configPath)", subsystem: "Channels")
+            } catch {
+                TorboLog.error("Failed to write channel config: \(error)", subsystem: "Channels")
+            }
         }
     }
 
     func saveConfig(_ config: ChannelConfig) {
         if let data = try? JSONEncoder().encode(config) {
-            try? data.write(to: URL(fileURLWithPath: configPath))
+            do {
+                try data.write(to: URL(fileURLWithPath: configPath))
+            } catch {
+                TorboLog.error("Failed to write channel config: \(error)", subsystem: "Channels")
+            }
         }
     }
 }

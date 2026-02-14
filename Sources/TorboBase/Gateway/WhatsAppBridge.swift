@@ -1,3 +1,5 @@
+// Copyright 2026 Perceptual Art LLC. All rights reserved.
+// Licensed under Apache 2.0 — see LICENSE file.
 // Torbo Base — WhatsApp Bridge
 // WhatsAppBridge.swift — WhatsApp Business Cloud API integration
 // Uses webhook-based inbound + REST outbound messaging
@@ -42,28 +44,37 @@ actor WhatsAppBridge {
         let token = await accessToken
         let phoneID = await phoneNumberID
 
-        let url = URL(string: "https://graph.facebook.com/\(apiVersion)/\(phoneID)/messages")!
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        guard let url = URL(string: "https://graph.facebook.com/\(apiVersion)/\(phoneID)/messages") else {
+            TorboLog.error("Invalid API URL for phone ID: \(phoneID)", subsystem: "WhatsApp")
+            return
+        }
+        // Format for WhatsApp and split into platform-safe chunks
+        let formatted = BridgeFormatter.format(text, for: .whatsapp)
+        let chunks = BridgeFormatter.truncate(formatted, for: .whatsapp)
 
-        let body: [String: Any] = [
-            "messaging_product": "whatsapp",
-            "to": recipientPhone,
-            "type": "text",
-            "text": ["body": String(text.prefix(4096))]  // WhatsApp 4096 char limit
-        ]
-        request.httpBody = try? JSONSerialization.data(withJSONObject: body)
+        for chunk in chunks {
+            var request = URLRequest(url: url)
+            request.httpMethod = "POST"
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
 
-        do {
-            let (data, response) = try await session.data(for: request)
-            if let http = response as? HTTPURLResponse, http.statusCode != 200 {
-                let errBody = String(data: data, encoding: .utf8) ?? ""
-                print("[WhatsApp] Send failed (\(http.statusCode)): \(errBody.prefix(200))")
+            let body: [String: Any] = [
+                "messaging_product": "whatsapp",
+                "to": recipientPhone,
+                "type": "text",
+                "text": ["body": chunk]
+            ]
+            request.httpBody = try? JSONSerialization.data(withJSONObject: body)
+
+            do {
+                let (data, response) = try await session.data(for: request)
+                if let http = response as? HTTPURLResponse, http.statusCode != 200 {
+                    let errBody = String(data: data, encoding: .utf8) ?? ""
+                    TorboLog.error("Send failed (\(http.statusCode)): \(errBody.prefix(200))", subsystem: "WhatsApp")
+                }
+            } catch {
+                TorboLog.error("Send error: \(error.localizedDescription)", subsystem: "WhatsApp")
             }
-        } catch {
-            print("[WhatsApp] Send error: \(error.localizedDescription)")
         }
     }
 
@@ -74,14 +85,13 @@ actor WhatsAppBridge {
     // MARK: - Webhook Verification (GET)
 
     /// Handle WhatsApp webhook verification challenge
-    func handleVerification(mode: String?, token: String?, challenge: String?) -> (valid: Bool, challenge: String?) {
+    func handleVerification(mode: String?, token: String?, challenge: String?, storedVerifyToken: String) -> (valid: Bool, challenge: String?) {
         guard mode == "subscribe",
               let token = token,
-              let challenge = challenge else {
+              let challenge = challenge,
+              token == storedVerifyToken else {
             return (false, nil)
         }
-        // Verify against our stored verify token (synchronous check)
-        // Caller should compare with configured verifyToken
         return (true, challenge)
     }
 
@@ -103,7 +113,7 @@ actor WhatsAppBridge {
                           let text = (message["text"] as? [String: Any])?["body"] as? String,
                           let from = message["from"] as? String else { continue }
 
-                    print("[WhatsApp] Received from +\(from): \(text.prefix(100))")
+                    TorboLog.info("Received from +\(from): \(text.prefix(100))", subsystem: "WhatsApp")
                     await handleIncomingMessage(text, from: from)
                 }
             }
@@ -113,7 +123,18 @@ actor WhatsAppBridge {
     // MARK: - Incoming Handler
 
     private func handleIncomingMessage(_ text: String, from phone: String) async {
-        let userMsg = ConversationMessage(role: "user", content: text, model: "whatsapp", clientIP: "whatsapp/\(phone)")
+        let channelKey = "whatsapp:\(phone)"
+
+        // Group filter — WhatsApp DMs are direct context
+        let filterResult = BridgeGroupFilter.filter(text: text, platform: .whatsapp, isDirectMessage: true, botIdentifier: "")
+        guard filterResult.shouldProcess else { return }
+        let filteredText = filterResult.cleanedText
+
+        // Add user message to conversation context
+        await BridgeConversationContext.shared.addMessage(channelKey: channelKey, role: "user", content: filteredText)
+        let history = await BridgeConversationContext.shared.getHistory(channelKey: channelKey)
+
+        let userMsg = ConversationMessage(role: "user", content: filteredText, model: "whatsapp", clientIP: "whatsapp/\(phone)")
         await MainActor.run { AppState.shared.addMessage(userMsg) }
 
         let token = await MainActor.run { AppState.shared.serverToken }
@@ -122,7 +143,7 @@ actor WhatsAppBridge {
 
         let body: [String: Any] = [
             "model": model,
-            "messages": [["role": "user", "content": text]],
+            "messages": history,
             "stream": false
         ]
 
@@ -131,6 +152,7 @@ actor WhatsAppBridge {
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue("whatsapp", forHTTPHeaderField: "x-torbo-platform")
         request.timeoutInterval = 120
         request.httpBody = try? JSONSerialization.data(withJSONObject: body)
 
@@ -144,6 +166,9 @@ actor WhatsAppBridge {
                 await send("Failed to process your message.", to: phone)
                 return
             }
+
+            // Add assistant response to conversation context
+            await BridgeConversationContext.shared.addMessage(channelKey: channelKey, role: "assistant", content: content)
 
             let assistantMsg = ConversationMessage(role: "assistant", content: content, model: model, clientIP: "whatsapp/\(phone)")
             await MainActor.run { AppState.shared.addMessage(assistantMsg) }

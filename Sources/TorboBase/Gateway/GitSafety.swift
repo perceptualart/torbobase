@@ -1,3 +1,5 @@
+// Copyright 2026 Perceptual Art LLC. All rights reserved.
+// Licensed under Apache 2.0 — see LICENSE file.
 // Torbo Base — Git Safety Tool
 import Foundation
 
@@ -58,7 +60,21 @@ actor GitSafety {
         ] as [String: Any]
     ]
     
-    private let projectPath = NSString(string: "~/Documents/torbo master/torbo base").expandingTildeInPath
+    private let projectPath: String = {
+        // Resolve project root from the running binary location
+        let binary = ProcessInfo.processInfo.arguments[0]
+        // If running from .app bundle: .../Torbo Base.app/Contents/MacOS/TorboBase
+        // Walk up to find the project root (directory containing Package.swift)
+        var dir = URL(fileURLWithPath: binary).deletingLastPathComponent()
+        for _ in 0..<6 {
+            if FileManager.default.fileExists(atPath: dir.appendingPathComponent("Package.swift").path) {
+                return dir.path
+            }
+            dir = dir.deletingLastPathComponent()
+        }
+        // Fallback: current working directory
+        return FileManager.default.currentDirectoryPath
+    }()
     
     /// Create a new git branch and check it out
     func createBranch(name: String) async -> String {
@@ -273,7 +289,7 @@ actor GitSafety {
             
             changesInfo = "Files to be reverted:\n\(statusOutput)\n"
         } catch {
-            // Continue anyway
+            TorboLog.debug("Git status check failed: \(error)", subsystem: "Git")
         }
         
         // Reset all changes

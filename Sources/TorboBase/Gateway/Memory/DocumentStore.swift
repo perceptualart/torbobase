@@ -1,3 +1,5 @@
+// Copyright 2026 Perceptual Art LLC. All rights reserved.
+// Licensed under Apache 2.0 — see LICENSE file.
 // Torbo Base — Document Store (RAG)
 // DocumentStore.swift — Ingests, chunks, embeds, and retrieves documents
 // Uses the same embedding model as MemoryIndex (nomic-embed-text via Ollama)
@@ -15,7 +17,6 @@ actor DocumentStore {
 
     private var db: OpaquePointer?
     private let dbPath: String
-    private let ollamaURL = "http://127.0.0.1:11434"
     private let embeddingModel = "nomic-embed-text"
     private let embeddingDim = 768
 
@@ -50,7 +51,7 @@ actor DocumentStore {
     }
 
     init() {
-        let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+        let appSupport = PlatformPaths.appSupportDir
         let dir = appSupport.appendingPathComponent("TorboBase/memory", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         dbPath = dir.appendingPathComponent("documents.db").path
@@ -62,7 +63,7 @@ actor DocumentStore {
         guard !isReady else { return }
 
         if sqlite3_open(dbPath, &db) != SQLITE_OK {
-            print("[DocStore] Failed to open database: \(dbPath)")
+            TorboLog.error("Failed to open database: \(dbPath)", subsystem: "DocStore")
             return
         }
 
@@ -96,7 +97,7 @@ actor DocumentStore {
         // Load into memory
         await loadIntoMemory()
         isReady = true
-        print("[DocStore] Ready: \(documents.count) document(s), \(chunks.count) chunk(s)")
+        TorboLog.info("Ready: \(documents.count) document(s), \(chunks.count) chunk(s)", subsystem: "DocStore")
     }
 
     // MARK: - Ingestion
@@ -163,7 +164,7 @@ actor DocumentStore {
         }
 
         await loadIntoMemory()
-        print("[DocStore] Ingested '\(name)': \(textChunks.count) chunks, \(embedded) embedded")
+        TorboLog.info("Ingested '\(name)': \(textChunks.count) chunks, \(embedded) embedded", subsystem: "DocStore")
         return "Ingested '\(name)': \(textChunks.count) chunks"
     }
 
@@ -255,7 +256,7 @@ actor DocumentStore {
         sqlite3_exec(db, "DELETE FROM document_chunks WHERE doc_id = \(doc.id)", nil, nil, nil)
         sqlite3_exec(db, "DELETE FROM documents WHERE id = \(doc.id)", nil, nil, nil)
         await loadIntoMemory()
-        print("[DocStore] Removed document: \(doc.name)")
+        TorboLog.info("Removed document: \(doc.name)", subsystem: "DocStore")
     }
 
     func removeDocument(id: Int64) async {
@@ -366,8 +367,13 @@ actor DocumentStore {
             stringsProc.arguments = [path]
             let stringsPipe = Pipe()
             stringsProc.standardOutput = stringsPipe
-            try? stringsProc.run()
-            stringsProc.waitUntilExit()
+            do {
+                try stringsProc.run()
+                stringsProc.waitUntilExit()
+            } catch {
+                TorboLog.debug("Process failed to start: \(error)", subsystem: "Documents")
+                return nil
+            }
             let data = stringsPipe.fileHandleForReading.readDataToEndOfFile()
             return String(data: data, encoding: .utf8)
         }
@@ -376,7 +382,7 @@ actor DocumentStore {
     // MARK: - Embeddings
 
     private func embed(_ text: String) async -> [Float]? {
-        guard let url = URL(string: "\(ollamaURL)/api/embed") else { return nil }
+        guard let url = URL(string: "\(OllamaManager.baseURL)/api/embed") else { return nil }
 
         var req = URLRequest(url: url)
         req.httpMethod = "POST"

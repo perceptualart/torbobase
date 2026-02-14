@@ -1,3 +1,5 @@
+// Copyright 2026 Perceptual Art LLC. All rights reserved.
+// Licensed under Apache 2.0 — see LICENSE file.
 // Torbo Base — Slack Bridge
 // SlackBridge.swift — Bidirectional messaging with Slack via Bot API
 // Uses conversations.history polling + chat.postMessage for responses
@@ -44,34 +46,40 @@ actor SlackBridge {
         let token = await botToken
         let channel = await channelID
 
-        let url = URL(string: "\(baseURL)/chat.postMessage")!
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        request.setValue("application/json; charset=utf-8", forHTTPHeaderField: "Content-Type")
-
-        var body: [String: Any] = [
-            "channel": channel,
-            "text": text,
-            "unfurl_links": false
-        ]
-        if let ts = threadTS { body["thread_ts"] = ts }
-        // Slack has 4000 char limit for text; blocks can do more
-        if text.count > 3900 {
-            body["text"] = String(text.prefix(3900)) + "\n...[truncated]"
+        guard let url = URL(string: "\(baseURL)/chat.postMessage") else {
+            TorboLog.error("Invalid API URL", subsystem: "Slack")
+            return
         }
 
-        request.httpBody = try? JSONSerialization.data(withJSONObject: body)
+        // Format for Slack and split into platform-safe chunks
+        let formatted = BridgeFormatter.format(text, for: .slack)
+        let chunks = BridgeFormatter.truncate(formatted, for: .slack)
 
-        do {
-            let (data, _) = try await session.data(for: request)
-            if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-               let ok = json["ok"] as? Bool, !ok {
-                let error = json["error"] as? String ?? "Unknown"
-                print("[Slack] Send failed: \(error)")
+        for chunk in chunks {
+            var request = URLRequest(url: url)
+            request.httpMethod = "POST"
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+            request.setValue("application/json; charset=utf-8", forHTTPHeaderField: "Content-Type")
+
+            var body: [String: Any] = [
+                "channel": channel,
+                "text": chunk,
+                "unfurl_links": false
+            ]
+            if let ts = threadTS { body["thread_ts"] = ts }
+
+            request.httpBody = try? JSONSerialization.data(withJSONObject: body)
+
+            do {
+                let (data, _) = try await session.data(for: request)
+                if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                   let ok = json["ok"] as? Bool, !ok {
+                    let error = json["error"] as? String ?? "Unknown"
+                    TorboLog.error("Send failed: \(error)", subsystem: "Slack")
+                }
+            } catch {
+                TorboLog.error("Send error: \(error.localizedDescription)", subsystem: "Slack")
             }
-        } catch {
-            print("[Slack] Send error: \(error.localizedDescription)")
         }
     }
 
@@ -88,12 +96,13 @@ actor SlackBridge {
 
     func startPolling() async {
         guard await isEnabled else {
-            print("[Slack] Disabled — no bot token or channel ID configured")
+            TorboLog.warn("Disabled — no bot token or channel ID configured", subsystem: "Slack")
             return
         }
         guard !isPolling else { return }
         isPolling = true
-        print("[Slack] Starting message polling on channel \(await channelID)")
+        let channel = await channelID
+        TorboLog.info("Starting message polling on channel \(channel)", subsystem: "Slack")
 
         // Set initial timestamp to now to avoid processing old messages
         lastTimestamp = String(Date().timeIntervalSince1970)
@@ -102,7 +111,7 @@ actor SlackBridge {
             do {
                 try await pollMessages()
             } catch {
-                print("[Slack] Poll error: \(error.localizedDescription)")
+                TorboLog.error("Poll error: \(error.localizedDescription)", subsystem: "Slack")
                 try? await Task.sleep(nanoseconds: 5_000_000_000)
             }
             try? await Task.sleep(nanoseconds: 3_000_000_000) // Poll every 3s (Slack rate limits)
@@ -111,7 +120,7 @@ actor SlackBridge {
 
     func stopPolling() {
         isPolling = false
-        print("[Slack] Stopped polling")
+        TorboLog.info("Stopped polling", subsystem: "Slack")
     }
 
     private func pollMessages() async throws {
@@ -147,7 +156,7 @@ actor SlackBridge {
             if user == botID || subtype == "bot_message" { continue }
 
             lastTimestamp = ts
-            print("[Slack] Received from \(user): \(text.prefix(100))")
+            TorboLog.info("Received from \(user): \(text.prefix(100))", subsystem: "Slack")
             await handleIncomingMessage(text, threadTS: ts)
         }
     }
@@ -155,7 +164,21 @@ actor SlackBridge {
     // MARK: - Incoming Message Handler
 
     private func handleIncomingMessage(_ text: String, threadTS: String? = nil) async {
-        let userMsg = ConversationMessage(role: "user", content: text, model: "slack", clientIP: "slack")
+        let channel = await channelID
+        // Use thread TS as channel key for threaded conversations, fall back to channel ID
+        let channelKey = "slack:\(threadTS ?? channel)"
+
+        // Group filter — Slack channels are group contexts
+        let botID = await botUserID
+        let filterResult = BridgeGroupFilter.filter(text: text, platform: .slack, isDirectMessage: false, botIdentifier: botID)
+        guard filterResult.shouldProcess else { return }
+        let filteredText = filterResult.cleanedText
+
+        // Add user message to conversation context
+        await BridgeConversationContext.shared.addMessage(channelKey: channelKey, role: "user", content: filteredText)
+        let history = await BridgeConversationContext.shared.getHistory(channelKey: channelKey)
+
+        let userMsg = ConversationMessage(role: "user", content: filteredText, model: "slack", clientIP: "slack")
         await MainActor.run { AppState.shared.addMessage(userMsg) }
 
         let token = await MainActor.run { AppState.shared.serverToken }
@@ -164,7 +187,7 @@ actor SlackBridge {
 
         let body: [String: Any] = [
             "model": model,
-            "messages": [["role": "user", "content": text]],
+            "messages": history,
             "stream": false
         ]
 
@@ -173,6 +196,7 @@ actor SlackBridge {
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue("slack", forHTTPHeaderField: "x-torbo-platform")
         request.timeoutInterval = 120
         request.httpBody = try? JSONSerialization.data(withJSONObject: body)
 
@@ -186,6 +210,9 @@ actor SlackBridge {
                 await send("⚠️ Failed to get response", threadTS: threadTS)
                 return
             }
+
+            // Add assistant response to conversation context
+            await BridgeConversationContext.shared.addMessage(channelKey: channelKey, role: "assistant", content: content)
 
             let assistantMsg = ConversationMessage(role: "assistant", content: content, model: model, clientIP: "slack")
             await MainActor.run { AppState.shared.addMessage(assistantMsg) }

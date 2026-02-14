@@ -1,3 +1,5 @@
+// Copyright 2026 Perceptual Art LLC. All rights reserved.
+// Licensed under Apache 2.0 — see LICENSE file.
 // Torbo Base — MCP Client Runtime
 // MCPManager.swift — Spawns MCP servers, discovers tools, routes tool calls
 // Model Context Protocol (stdio transport): https://modelcontextprotocol.io
@@ -41,8 +43,14 @@ actor MCPServerConnection {
         proc.executableURL = URL(fileURLWithPath: config.resolvedCommand)
         proc.arguments = config.args ?? []
 
-        // Merge environment
-        var env = ProcessInfo.processInfo.environment
+        // Sanitized environment — only pass safe base vars + explicitly declared config vars
+        // Prevents leaking OPENAI_API_KEY, AWS_SECRET_KEY, etc. to MCP servers
+        let parentEnv = ProcessInfo.processInfo.environment
+        var env: [String: String] = [:]
+        let safeKeys: Set<String> = ["PATH", "HOME", "TERM", "LANG", "USER", "SHELL", "TMPDIR", "LC_ALL", "LC_CTYPE"]
+        for key in safeKeys {
+            if let val = parentEnv[key] { env[key] = val }
+        }
         if let extra = config.env {
             for (k, v) in extra { env[k] = v }
         }
@@ -66,15 +74,15 @@ actor MCPServerConnection {
         stderr.fileHandleForReading.readabilityHandler = { handle in
             let data = handle.availableData
             if !data.isEmpty, let str = String(data: data, encoding: .utf8) {
-                print("[MCP/\(self.name)/stderr] \(str.trimmingCharacters(in: .whitespacesAndNewlines))")
+                TorboLog.info("\(str.trimmingCharacters(in: .whitespacesAndNewlines))", subsystem: "MCP/\(self.name)/stderr")
             }
         }
 
         do {
             try proc.run()
-            print("[MCP] Started '\(name)' (pid: \(proc.processIdentifier), cmd: \(config.resolvedCommand))")
+            TorboLog.info("Started '\(name)' (pid: \(proc.processIdentifier), cmd: \(config.resolvedCommand))", subsystem: "MCP")
         } catch {
-            print("[MCP] Failed to start '\(name)': \(error) (cmd: \(config.resolvedCommand), exists: \(FileManager.default.fileExists(atPath: config.resolvedCommand)))")
+            TorboLog.error("Failed to start '\(name)': \(error) (cmd: \(config.resolvedCommand), exists: \(FileManager.default.fileExists(atPath: config.resolvedCommand)))", subsystem: "MCP")
             throw error
         }
 
@@ -92,7 +100,7 @@ actor MCPServerConnection {
         ] as [String: Any])
 
         if let serverInfo = initResult["serverInfo"] as? [String: Any] {
-            print("[MCP] Server '\(name)' initialized: \(serverInfo["name"] ?? "?") v\(serverInfo["version"] ?? "?")")
+            TorboLog.info("Server '\(name)' initialized: \(serverInfo["name"] ?? "?") v\(serverInfo["version"] ?? "?")", subsystem: "MCP")
         }
 
         // Send initialized notification
@@ -107,7 +115,7 @@ actor MCPServerConnection {
     private func discoverTools() async throws {
         let result = try await sendRequest(method: "tools/list", params: nil)
         guard let toolsArray = result["tools"] as? [[String: Any]] else {
-            print("[MCP] Server '\(name)' returned no tools")
+            TorboLog.info("Server '\(name)' returned no tools", subsystem: "MCP")
             return
         }
 
@@ -118,7 +126,7 @@ actor MCPServerConnection {
             return MCPTool(serverName: name, name: toolName, description: desc, inputSchema: schema)
         }
 
-        print("[MCP] Server '\(name)' provides \(tools.count) tool(s): \(tools.map { $0.name }.joined(separator: ", "))")
+        TorboLog.info("Server '\(name)' provides \(tools.count) tool(s): \(tools.map { $0.name }.joined(separator: ", "))", subsystem: "MCP")
     }
 
     /// Call a tool on this server
@@ -158,14 +166,16 @@ actor MCPServerConnection {
 
         if let proc = process, proc.isRunning {
             proc.terminate()
-            // Give it 3s to exit
-            DispatchQueue.global().asyncAfter(deadline: .now() + 3) {
+            // Give it 3s to exit gracefully, then force-kill
+            let pid = proc.processIdentifier
+            Task.detached {
+                try? await Task.sleep(nanoseconds: 3_000_000_000)
                 if proc.isRunning {
-                    kill(proc.processIdentifier, SIGKILL)
+                    kill(pid, SIGKILL)
                 }
             }
         }
-        print("[MCP] Stopped server '\(name)'")
+        TorboLog.info("Stopped server '\(name)'", subsystem: "MCP")
     }
 
     // MARK: - JSON-RPC Communication
@@ -226,21 +236,26 @@ actor MCPServerConnection {
 
     /// Start reading stdout using readabilityHandler (non-blocking, runs on a background queue)
     /// This avoids blocking the actor with synchronous availableData calls
+    /// Mutable buffer holder for readabilityHandler closure (Sendable-safe)
+    private final class ReadBuffer: @unchecked Sendable {
+        var data = Data()
+    }
+
     private func startReading() {
         guard let pipe = stdoutPipe else { return }
-        var buffer = Data()
+        let buffer = ReadBuffer()
 
         pipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
             guard let self else { return }
             let chunk = handle.availableData
             guard !chunk.isEmpty else { return } // EOF
 
-            buffer.append(chunk)
+            buffer.data.append(chunk)
 
             // Process complete JSON-RPC lines
-            while let newlineIndex = buffer.firstIndex(of: UInt8(ascii: "\n")) {
-                let lineData = buffer[buffer.startIndex..<newlineIndex]
-                buffer = Data(buffer[buffer.index(after: newlineIndex)...])
+            while let newlineIndex = buffer.data.firstIndex(of: UInt8(ascii: "\n")) {
+                let lineData = buffer.data[buffer.data.startIndex..<newlineIndex]
+                buffer.data = Data(buffer.data[buffer.data.index(after: newlineIndex)...])
 
                 guard let json = try? JSONSerialization.jsonObject(with: lineData) as? [String: Any] else {
                     continue
@@ -273,7 +288,7 @@ actor MCPServerConnection {
         // Notifications (no id) — handle list_changed
         else if let method = json["method"] as? String {
             if method == "notifications/tools/list_changed" {
-                print("[MCP] Server '\(name)' tools changed — re-discovering")
+                TorboLog.info("Server '\(name)' tools changed — re-discovering", subsystem: "MCP")
                 Task { try? await discoverTools() }
             }
         }
@@ -295,15 +310,24 @@ actor MCPManager {
         let configs = MCPConfigLoader.load()
 
         guard !configs.isEmpty else {
-            print("[MCP] No servers configured")
+            TorboLog.info("No servers configured", subsystem: "MCP")
             return
         }
 
         let activeConfigs = configs.filter { !$0.key.hasPrefix("_") }
-        print("[MCP] Starting \(activeConfigs.count) server(s) (skipping \(configs.count - activeConfigs.count) disabled)...")
+        TorboLog.info("Starting \(activeConfigs.count) server(s) (skipping \(configs.count - activeConfigs.count) disabled)...", subsystem: "MCP")
 
         for (name, config) in activeConfigs {
-            print("[MCP] → Initializing '\(name)' (cmd: \(config.resolvedCommand))...")
+            // Validate command against allowlist
+            let commandBasename = URL(fileURLWithPath: config.resolvedCommand).lastPathComponent
+            let userAllowed = Set(MCPConfigLoader.loadAllowedCommands())
+            let fullAllowlist = MCPDefaults.allowedCommands.union(userAllowed)
+            if !fullAllowlist.contains(commandBasename) && !fullAllowlist.contains(config.command) {
+                TorboLog.warn("Command '\(config.command)' (\(commandBasename)) not in allowlist — skipping '\(name)'. Add it to allowedCommands in mcp_servers.json to permit.", subsystem: "MCP")
+                continue
+            }
+
+            TorboLog.info("Initializing '\(name)' (cmd: \(config.resolvedCommand))...", subsystem: "MCP")
 
             let conn = MCPServerConnection(name: name, config: config)
             servers[name] = conn
@@ -312,15 +336,15 @@ actor MCPManager {
                 try await conn.start()
                 let tools = await conn.getTools()
                 allTools.append(contentsOf: tools)
-                print("[MCP] ✅ '\(name)' ready with \(tools.count) tool(s)")
+                TorboLog.info("'\(name)' ready with \(tools.count) tool(s)", subsystem: "MCP")
             } catch {
-                print("[MCP] ❌ '\(name)' failed: \(error)")
+                TorboLog.error("'\(name)' failed: \(error)", subsystem: "MCP")
                 await conn.stop()
                 servers.removeValue(forKey: name)
             }
         }
 
-        print("[MCP] Ready: \(servers.count) server(s), \(allTools.count) total tool(s)")
+        TorboLog.info("Ready: \(servers.count) server(s), \(allTools.count) total tool(s)", subsystem: "MCP")
     }
 
     /// Refresh — reload config and restart servers
@@ -380,10 +404,10 @@ actor MCPManager {
 
         do {
             let result = try await server.callTool(name: toolName, arguments: arguments)
-            print("[MCP] \(serverName)/\(toolName) executed successfully (\(result.count) chars)")
+            TorboLog.info("\(serverName)/\(toolName) executed successfully (\(result.count) chars)", subsystem: "MCP")
             return result
         } catch {
-            print("[MCP] \(serverName)/\(toolName) failed: \(error)")
+            TorboLog.error("\(serverName)/\(toolName) failed: \(error)", subsystem: "MCP")
             return "[MCP Error] \(error.localizedDescription)"
         }
     }

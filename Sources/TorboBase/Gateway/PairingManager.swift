@@ -1,3 +1,5 @@
+// Copyright 2026 Perceptual Art LLC. All rights reserved.
+// Licensed under Apache 2.0 — see LICENSE file.
 import Foundation
 #if canImport(Combine)
 import Combine
@@ -11,16 +13,10 @@ import Security
 
 // MARK: - Thread-Safe Token Store
 // GatewayServer is an actor and can't call @MainActor PairingManager synchronously.
-// This reads paired device tokens directly from UserDefaults (thread-safe for reads).
+// This reads paired device tokens from encrypted KeychainManager store.
 enum PairedDeviceStore {
-    private static let devicesKey = "torbo_paired_devices"
-
     static func isAuthorized(token: String) -> Bool {
-        guard let data = UserDefaults.standard.data(forKey: devicesKey),
-              let devices = try? JSONDecoder().decode([PairedDevice].self, from: data) else {
-            return false
-        }
-        return devices.contains(where: { $0.token == token })
+        KeychainManager.isPairedDeviceToken(token)
     }
 }
 
@@ -28,7 +24,7 @@ enum PairedDeviceStore {
 
 struct PairedDevice: Codable, Identifiable {
     let id: String          // UUID for this device
-    let name: String        // e.g. "Michael's iPhone"
+    let name: String        // e.g. "User's iPhone"
     let token: String       // Bearer token issued to this device
     let pairedAt: Date
     var lastSeen: Date?
@@ -72,25 +68,35 @@ final class PairingManager: _PairingManagerBase {
     private var codeTimer: Timer?
     private static let codeLifetime: TimeInterval = 300 // 5 minutes
 
-    // Persistence
-    private static let devicesKey = "torbo_paired_devices"
+    // Persistence — uses encrypted KeychainManager store
 
     private init() {
         migrateFromORBIfNeeded()
+        migrateFromUserDefaults()
         loadDevices()
     }
 
     /// One-time migration: copy paired devices from old "orb_paired_devices" key.
     /// Bundle ID changed (ai.orb.base → ai.torbo.base) so old data is in a different domain.
     private func migrateFromORBIfNeeded() {
-        let defaults = UserDefaults.standard
-        guard defaults.data(forKey: Self.devicesKey) == nil else { return }
-
+        // Check if old ORB data exists in legacy suites
         let oldData = UserDefaults(suiteName: "ai.orb.base")?.data(forKey: "orb_paired_devices")
                    ?? UserDefaults(suiteName: "ORBBase")?.data(forKey: "orb_paired_devices")
         guard let oldData else { return }
-        defaults.set(oldData, forKey: Self.devicesKey)
-        print("[Pairing] Migrated paired devices from ORB → Torbo (\(oldData.count) bytes)")
+        // If no devices in encrypted store yet, migrate from old ORB data
+        if KeychainManager.loadPairedDevices().isEmpty,
+           let devices = try? JSONDecoder().decode([PairedDevice].self, from: oldData) {
+            KeychainManager.savePairedDevices(devices)
+            TorboLog.info("Migrated \(devices.count) paired devices from ORB → encrypted store", subsystem: "Pairing")
+        }
+        // Clean up old suites
+        UserDefaults(suiteName: "ai.orb.base")?.removeObject(forKey: "orb_paired_devices")
+        UserDefaults(suiteName: "ORBBase")?.removeObject(forKey: "orb_paired_devices")
+    }
+
+    /// Migrate devices from plaintext UserDefaults to encrypted KeychainManager
+    private func migrateFromUserDefaults() {
+        KeychainManager.migratePairedDevicesFromUserDefaults()
     }
 
     // MARK: - Bonjour Publishing
@@ -114,13 +120,13 @@ final class PairingManager: _PairingManagerBase {
         ]
         netService?.setTXTRecord(NetService.data(fromTXTRecord: txt))
         netService?.publish()
-        print("[Pairing] Bonjour: advertising \(serviceName) on port \(port)")
+        TorboLog.info("Bonjour: advertising \(serviceName) on port \(port)", subsystem: "Pairing")
     }
 
     func stopAdvertising() {
         netService?.stop()
         netService = nil
-        print("[Pairing] Bonjour: stopped advertising")
+        TorboLog.info("Bonjour: stopped advertising", subsystem: "Pairing")
     }
 
     // MARK: - Code Generation
@@ -135,7 +141,7 @@ final class PairingManager: _PairingManagerBase {
         // QR payload: torbo://pair?host=X&port=X&code=X
         qrString = "torbo://pair?host=\(host)&port=\(port)&code=\(pairingCode)"
 
-        print("[Pairing] Code generated: \(pairingCode) — expires in \(Self.codeLifetime)s")
+        TorboLog.info("Code generated: \(pairingCode) — expires in \(Self.codeLifetime)s", subsystem: "Pairing")
 
         // Auto-expire
         codeTimer?.invalidate()
@@ -153,7 +159,7 @@ final class PairingManager: _PairingManagerBase {
         qrString = ""
         codeTimer?.invalidate()
         codeTimer = nil
-        print("[Pairing] Code expired")
+        TorboLog.info("Code expired", subsystem: "Pairing")
     }
 
     // MARK: - Pairing
@@ -163,7 +169,7 @@ final class PairingManager: _PairingManagerBase {
         guard pairingActive,
               !pairingCode.isEmpty,
               code.uppercased() == pairingCode else {
-            print("[Pairing] Code mismatch or expired")
+            TorboLog.warn("Code mismatch or expired", subsystem: "Pairing")
             return nil
         }
 
@@ -185,7 +191,28 @@ final class PairingManager: _PairingManagerBase {
         // Expire the code (single-use)
         expireCode()
 
-        print("[Pairing] ✅ Paired '\(deviceName)' → \(deviceId)")
+        TorboLog.info("Paired '\(deviceName)' → \(deviceId)", subsystem: "Pairing")
+        return (token, deviceId)
+    }
+
+    /// Auto-pair a device without a code (for trusted networks like Tailscale).
+    /// Creates a new paired device and returns its token + deviceId.
+    func autoPair(deviceName: String) -> (token: String, deviceId: String) {
+        let token = generateToken()
+        let deviceId = UUID().uuidString
+
+        let device = PairedDevice(
+            id: deviceId,
+            name: deviceName,
+            token: token,
+            pairedAt: Date(),
+            lastSeen: Date()
+        )
+
+        pairedDevices.append(device)
+        saveDevices()
+
+        TorboLog.info("Auto-paired '\(deviceName)' → \(deviceId)", subsystem: "Pairing")
         return (token, deviceId)
     }
 
@@ -208,7 +235,7 @@ final class PairingManager: _PairingManagerBase {
     func unpair(deviceId: String) {
         pairedDevices.removeAll(where: { $0.id == deviceId })
         saveDevices()
-        print("[Pairing] Removed device \(deviceId)")
+        TorboLog.info("Removed device \(deviceId)", subsystem: "Pairing")
     }
 
     // MARK: - Token Generation
@@ -231,18 +258,16 @@ final class PairingManager: _PairingManagerBase {
             .replacingOccurrences(of: "=", with: "")
     }
 
-    // MARK: - Persistence
+    // MARK: - Persistence (encrypted via KeychainManager)
 
     private func loadDevices() {
-        guard let data = UserDefaults.standard.data(forKey: Self.devicesKey),
-              let devices = try? JSONDecoder().decode([PairedDevice].self, from: data) else { return }
+        let devices = KeychainManager.loadPairedDevices()
+        guard !devices.isEmpty else { return }
         pairedDevices = devices
-        print("[Pairing] Loaded \(devices.count) paired device(s)")
+        TorboLog.info("Loaded \(devices.count) paired device(s) from encrypted store", subsystem: "Pairing")
     }
 
     private func saveDevices() {
-        if let data = try? JSONEncoder().encode(pairedDevices) {
-            UserDefaults.standard.set(data, forKey: Self.devicesKey)
-        }
+        KeychainManager.savePairedDevices(pairedDevices)
     }
 }

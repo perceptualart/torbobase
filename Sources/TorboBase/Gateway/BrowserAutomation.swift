@@ -1,3 +1,5 @@
+// Copyright 2026 Perceptual Art LLC. All rights reserved.
+// Licensed under Apache 2.0 — see LICENSE file.
 // Torbo Base — Browser Automation Engine
 // BrowserAutomation.swift — Headless browser control via Playwright CLI
 // Gives agents the ability to navigate, interact with, and extract data from web pages
@@ -39,10 +41,10 @@ actor BrowserAutomation {
         config.timeoutIntervalForRequest = 60
         self.session = URLSession(configuration: config)
 
-        let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+        let appSupport = PlatformPaths.appSupportDir
         baseDir = appSupport.appendingPathComponent("TorboBase/browser").path
         try? FileManager.default.createDirectory(atPath: baseDir, withIntermediateDirectories: true)
-        print("[Browser] Initialized at \(baseDir)")
+        TorboLog.info("Initialized at \(baseDir)", subsystem: "Browser")
     }
 
     // MARK: - Execute Browser Actions
@@ -70,7 +72,7 @@ actor BrowserAutomation {
         // Collect any generated files (screenshots, PDFs)
         let generatedFiles = collectFiles(in: workDir, excluding: ["script.js"])
 
-        print("[Browser] \(action.rawValue) completed in \(String(format: "%.1f", executionTime))s — exit: \(result.exitCode)")
+        TorboLog.info("\(action.rawValue) completed in \(String(format: "%.1f", executionTime))s — exit: \(result.exitCode)", subsystem: "Browser")
 
         // Schedule cleanup (keep files for 30 minutes)
         Task {
@@ -303,8 +305,12 @@ actor BrowserAutomation {
             which.arguments = ["npx"]
             let pipe = Pipe()
             which.standardOutput = pipe
-            try? which.run()
-            which.waitUntilExit()
+            do {
+                try which.run()
+                which.waitUntilExit()
+            } catch {
+                TorboLog.debug("Process failed to start: \(error)", subsystem: "Browser")
+            }
             let data = pipe.fileHandleForReading.readDataToEndOfFile()
             let path = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines)
             if let p = path, !p.isEmpty { npxPath = p }
@@ -333,8 +339,12 @@ actor BrowserAutomation {
             which.arguments = ["node"]
             let pipe = Pipe()
             which.standardOutput = pipe
-            try? which.run()
-            which.waitUntilExit()
+            do {
+                try which.run()
+                which.waitUntilExit()
+            } catch {
+                TorboLog.debug("Process failed to start: \(error)", subsystem: "Browser")
+            }
             let data = pipe.fileHandleForReading.readDataToEndOfFile()
             let p = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines)
             if let p, !p.isEmpty { nodePath = p }

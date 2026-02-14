@@ -1,3 +1,5 @@
+// Copyright 2026 Perceptual Art LLC. All rights reserved.
+// Licensed under Apache 2.0 — see LICENSE file.
 import Foundation
 
 // MARK: - Proactive Agent — Background Task Executor
@@ -7,20 +9,26 @@ actor ProactiveAgent {
 
     private var isRunning = false
     private var checkInterval: TimeInterval = 30  // Check for tasks every 30s
-    private var activeCrewTasks: [String: String] = [:]  // crewID -> taskID currently executing
 
     // MARK: - Lifecycle
 
     func start() {
         guard !isRunning else { return }
         isRunning = true
-        print("[ProactiveAgent] Started — checking for tasks every \(Int(checkInterval))s")
+
+        // Sync maxConcurrentTasks from AppState on startup
+        Task {
+            let maxTasks = AppState.shared.maxConcurrentTasks
+            await ParallelExecutor.shared.updateMaxSlots(maxTasks)
+        }
+
+        TorboLog.info("Started — checking for tasks every \(Int(checkInterval))s", subsystem: "Agent")
         Task { await runLoop() }
     }
 
     func stop() {
         isRunning = false
-        print("[ProactiveAgent] Stopped")
+        TorboLog.info("Stopped", subsystem: "Agent")
     }
 
     // MARK: - Main Loop
@@ -33,47 +41,53 @@ actor ProactiveAgent {
     }
 
     private func checkAndExecuteTasks() async {
-        let pending = await TaskQueue.shared.pendingTasks()
-        guard !pending.isEmpty else { return }
+        let executor = ParallelExecutor.shared
 
-        // Get unique crew members with pending tasks
-        let crewIDs = Set(pending.map { $0.assignedTo })
+        // Claim tasks while we have open slots
+        while await executor.canAcceptTask {
+            var claimed = false
 
-        for crewID in crewIDs {
-            // Skip if this crew is already executing a task
-            if activeCrewTasks[crewID] != nil { continue }
+            // Try to claim tasks for any registered agent, starting with SiD
+            let agentIDs = await AgentConfigManager.shared.agentIDs
+            for agentID in agentIDs {
+                if let task = await TaskQueue.shared.claimTask(agentID: agentID) {
+                    // Skip if this task is already executing
+                    if await executor.isExecuting(taskID: task.id) { continue }
 
-            // Claim next task for this crew
-            guard let task = await TaskQueue.shared.claimTask(crewID: crewID) else { continue }
-            activeCrewTasks[crewID] = task.id
+                    let agentName = await AgentConfigManager.shared.agent(agentID)?.name ?? agentID
+                    TorboLog.info("\(agentName) starting task: '\(task.title)'", subsystem: "Agent")
 
-            print("[ProactiveAgent] \(crewID) starting task: '\(task.title)'")
-
-            // Execute in background
-            Task {
-                await self.executeTask(task, crewID: crewID)
+                    // Dispatch to executor — runs in its own Swift Task
+                    await executor.execute(taskID: task.id) { [self] in
+                        await self.executeTask(task, agentID: agentID)
+                    }
+                    claimed = true
+                    break // Re-check canAcceptTask before claiming another
+                }
             }
+
+            if !claimed { break } // No tasks available to claim
         }
     }
 
     // MARK: - Task Execution
 
-    private func executeTask(_ task: TaskQueue.CrewTask, crewID: String) async {
+    private func executeTask(_ task: TaskQueue.AgentTask, agentID: String) async {
         let startTime = Date()
 
-        // Build the prompt for the crew member
+        // Build the prompt for the agent
         let prompt = buildTaskPrompt(task)
 
-        // Get the model and API config for this crew member
-        let tier = classifyTaskTier(task.title, task.description ?? "")
-        let modelConfig = crewModelConfig(crewID, tier: tier)
-        print("[ProactiveAgent] \(crewID) task tier: \(tier) -> model: \(modelConfig.model)")
+        // Get the model and API config for this agent
+        let tier = classifyTaskTier(task.title, task.description)
+        let modelConfig = agentModelConfig(agentID, tier: tier)
+        TorboLog.info("\(agentID) task tier: \(tier) -> model: \(modelConfig.model)", subsystem: "Agent")
 
         // Execute through the LLM with tool access
         do {
             let result = try await executeWithTools(
                 prompt: prompt,
-                crewID: crewID,
+                agentID: agentID,
                 model: modelConfig.model,
                 provider: modelConfig.provider,
                 maxRounds: 30
@@ -81,18 +95,16 @@ actor ProactiveAgent {
 
             let elapsed = Int(Date().timeIntervalSince(startTime))
             await TaskQueue.shared.completeTask(id: task.id, result: result)
-            print("[ProactiveAgent] \(crewID) completed '\(task.title)' in \(elapsed)s")
+            TorboLog.info("\(agentID) completed '\(task.title)' in \(elapsed)s", subsystem: "Agent")
 
         } catch {
             await TaskQueue.shared.failTask(id: task.id, error: error.localizedDescription)
-            print("[ProactiveAgent] \(crewID) failed '\(task.title)': \(error.localizedDescription)")
+            TorboLog.error("\(agentID) failed '\(task.title)': \(error.localizedDescription)", subsystem: "Agent")
         }
-
-        // Free up the crew member
-        activeCrewTasks[crewID] = nil
+        // Slot is auto-freed by ParallelExecutor when this closure returns
     }
 
-    private func buildTaskPrompt(_ task: TaskQueue.CrewTask) -> String {
+    private func buildTaskPrompt(_ task: TaskQueue.AgentTask) -> String {
         var prompt = """
         You have been assigned a task by \(task.assignedBy).
 
@@ -144,7 +156,7 @@ actor ProactiveAgent {
         return .medium
     }
 
-    private func crewModelConfig(_ crewID: String, tier: TaskTier = .complex) -> ModelConfig {
+    private func agentModelConfig(_ agentID: String, tier: TaskTier = .complex) -> ModelConfig {
         // Local-first: use Ollama when possible to save money and reduce latency
         // Fall back to cloud for complex reasoning and tool-heavy tasks
         switch tier {
@@ -156,22 +168,17 @@ actor ProactiveAgent {
             return ModelConfig(model: "qwen2.5:14b", provider: "ollama", apiKeyName: "")
         case .complex:
             // Cloud model — best reasoning, costs money
-            switch crewID {
-            case "mira":
-                return ModelConfig(model: "gpt-4o", provider: "openai", apiKeyName: "openai_api_key")
-            default:
-                return ModelConfig(model: "claude-sonnet-4-5-20250929", provider: "anthropic", apiKeyName: "anthropic_api_key")
-            }
+            return ModelConfig(model: "claude-sonnet-4-5-20250929", provider: "anthropic", apiKeyName: "anthropic_api_key")
         }
     }
 
     // MARK: - Tool Execution Loop
 
-    private func executeWithTools(prompt: String, crewID: String, model: String, provider: String, maxRounds: Int) async throws -> String {
+    private func executeWithTools(prompt: String, agentID: String, model: String, provider: String, maxRounds: Int) async throws -> String {
         // Route through Base itself — uses the same multi-provider gateway
         // This means ANY model works: Anthropic, OpenAI, Google, local Ollama
         let accessLevel = await MainActor.run {
-            AppState.shared.accessLevel(for: crewID)
+            AppState.shared.accessLevel(for: agentID)
         }
 
         // Get auth token
@@ -179,13 +186,13 @@ actor ProactiveAgent {
 
         // Build messages
         var messages: [[String: Any]] = [
-            ["role": "system", "content": "You are a skilled AI assistant working on the Torbo Base project. Execute tasks autonomously using your available tools.\n\nCRITICAL RULES:\n1. NEVER modify existing core files (GatewayServer.swift, Capabilities.swift, AppState.swift, TorboBaseApp.swift, KeychainManager.swift, PairingManager.swift, ConversationStore.swift, TaskQueue.swift, ProactiveAgent.swift). The write_file tool will block you.\n2. ALWAYS create NEW files for new features. Name them clearly (e.g. PrivacyFilter.swift, ScreenCapture.swift).\n3. After writing any file, run swift build to verify it compiles. If it fails, fix your file — do NOT touch other files.\n4. Read existing code to understand patterns, but implement in NEW files using extensions.\n5. The project is at ~/Documents/torbo master/torbo base/. The app is at ~/Documents/torbo master/torbo app/.\n6. Use tools — don't describe what you would do."],
+            ["role": "system", "content": "You are a skilled AI assistant working on the Torbo Base project. Execute tasks autonomously using your available tools.\n\nCRITICAL RULES:\n1. NEVER modify existing core files (GatewayServer.swift, Capabilities.swift, AppState.swift, TorboBaseApp.swift, KeychainManager.swift, PairingManager.swift, ConversationStore.swift, TaskQueue.swift, ProactiveAgent.swift). The write_file tool will block you.\n2. ALWAYS create NEW files for new features. Name them clearly (e.g. PrivacyFilter.swift, ScreenCapture.swift).\n3. After writing any file, run swift build to verify it compiles. If it fails, fix your file — do NOT touch other files.\n4. Read existing code to understand patterns, but implement in NEW files using extensions.\n5. Use the working directory or locate the project root by finding Package.swift.\n6. Use tools — don't describe what you would do."],
             ["role": "user", "content": prompt]
         ]
 
         // Non-streaming tool loop through Base gateway
         for round in 0..<maxRounds {
-            // Get tool definitions for this crew's access level
+            // Get tool definitions for this agent's access level
             let tools = ToolProcessor.toolDefinitions(for: accessLevel)
 
             var body: [String: Any] = [
@@ -198,12 +205,16 @@ actor ProactiveAgent {
                 body["tool_choice"] = "auto"
             }
 
-            let url = URL(string: "http://127.0.0.1:\(await MainActor.run { AppState.shared.serverPort })/v1/chat/completions")!
+            let port = await MainActor.run { AppState.shared.serverPort }
+            guard let url = URL(string: "http://127.0.0.1:\(port)/v1/chat/completions") else {
+                TorboLog.error("Invalid gateway URL", subsystem: "Agent")
+                return "Error: Invalid gateway URL"
+            }
             var request = URLRequest(url: url)
             request.httpMethod = "POST"
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
             request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-            request.setValue(crewID, forHTTPHeaderField: "x-torbo-agent-id")
+            request.setValue(agentID, forHTTPHeaderField: "x-torbo-agent-id")
             request.timeoutInterval = 600
             request.httpBody = try JSONSerialization.data(withJSONObject: body)
 
@@ -211,7 +222,7 @@ actor ProactiveAgent {
 
             if let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode != 200 {
                 let errorBody = String(data: responseData, encoding: .utf8) ?? "Unknown"
-                print("[ProactiveAgent] Gateway error (\(httpResponse.statusCode)): \(errorBody.prefix(200))")
+                TorboLog.error("Gateway error (\(httpResponse.statusCode)): \(errorBody.prefix(200))", subsystem: "Agent")
                 throw NSError(domain: "ProactiveAgent", code: httpResponse.statusCode, userInfo: [NSLocalizedDescriptionKey: "Gateway error \(httpResponse.statusCode)"])
             }
 
@@ -236,8 +247,8 @@ actor ProactiveAgent {
 
             // Check for tool calls (OpenAI format — Base handles conversion)
             if let toolCalls = message["tool_calls"] as? [[String: Any]], !toolCalls.isEmpty {
-                print("[ProactiveAgent] \(crewID) round \(round + 1): executing \(toolCalls.count) tool(s)")
-                let toolResults = await ToolProcessor.shared.executeBuiltInTools(toolCalls, accessLevel: accessLevel)
+                TorboLog.info("\(agentID) round \(round + 1): executing \(toolCalls.count) tool(s)", subsystem: "Agent")
+                let toolResults = await ToolProcessor.shared.executeBuiltInTools(toolCalls, accessLevel: accessLevel, agentID: agentID)
                 messages.append(message)
                 for result in toolResults { messages.append(result) }
                 continue
