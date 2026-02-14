@@ -1245,6 +1245,9 @@ enum WebChatHTML {
     async function sendMessage() {
         const text = inputEl.value.trim();
         if (!text && pendingAttachments.length === 0) return;
+        // Abort any in-flight streams from previous message
+        activeAbortControllers.forEach(c => c.abort());
+        activeAbortControllers.clear();
         inputEl.value = '';
         inputEl.style.height = 'auto';
 
@@ -1339,11 +1342,18 @@ enum WebChatHTML {
         saveConversation();
     }
 
+    // Track active fetch controllers so we can abort on new send or page unload
+    let activeAbortControllers = new Set();
+
     async function streamToAgent(agentID, messages, bubble) {
         let fullContent = '';
+        const controller = new AbortController();
+        activeAbortControllers.add(controller);
+        let reader = null;
         try {
             const res = await fetch(BASE + '/v1/chat/completions', {
                 method: 'POST',
+                signal: controller.signal,
                 headers: {
                     'Content-Type': 'application/json',
                     'Authorization': 'Bearer ' + TOKEN,
@@ -1357,12 +1367,13 @@ enum WebChatHTML {
                 const errMsg = typeof err.error === 'object' ? (err.error.message || JSON.stringify(err.error)) : (err.error || 'Error');
                 bubble.innerHTML = '\\u26a0\\ufe0f ' + escapeHtml(String(errMsg));
                 bubble.classList.remove('streaming');
+                activeAbortControllers.delete(controller);
                 return '';
             }
 
             const contentType = res.headers.get('content-type') || '';
             if (contentType.includes('text/event-stream')) {
-                const reader = res.body.getReader();
+                reader = res.body.getReader();
                 const decoder = new TextDecoder();
                 let buffer = '';
                 while (true) {
@@ -1400,11 +1411,25 @@ enum WebChatHTML {
             bubble.innerHTML = renderMarkdown(fullContent);
             bubble.classList.remove('streaming');
         } catch(e) {
-            bubble.innerHTML = '\\u26a0\\ufe0f Connection error';
+            if (e.name === 'AbortError') {
+                bubble.innerHTML = '\\u26a0\\ufe0f Cancelled';
+            } else {
+                bubble.innerHTML = '\\u26a0\\ufe0f Connection error';
+            }
             bubble.classList.remove('streaming');
+            // Cancel the reader if it's still open
+            if (reader) try { reader.cancel(); } catch(_) {}
+        } finally {
+            activeAbortControllers.delete(controller);
         }
         return fullContent;
     }
+
+    // Clean up on page unload — cancel all in-flight streams
+    window.addEventListener('beforeunload', () => {
+        activeAbortControllers.forEach(c => c.abort());
+        activeAbortControllers.clear();
+    });
 
     function escapeHtml(s) {
         return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
