@@ -20,18 +20,26 @@ echo "  ║   © 2026 Perceptual Art LLC           ║"
 echo "  ╚═══════════════════════════════════════╝"
 echo ""
 
-# ─── Step 1: Compile ─────────────────────────────────────
-echo "▸ [1/6] Compiling..."
+# ─── Step 1: Compile (Universal Binary) ────────────────────
+echo "▸ [1/6] Compiling universal binary (arm64 + x86_64)..."
 cd "${SCRIPT_DIR}"
-swift build -c release 2>&1 | tail -5
-echo "  ✓ Build complete"
+swift build -c release --arch arm64 --arch x86_64 2>&1 | tail -5
+echo "  ✓ Universal build complete"
 
-# ─── Step 2: Locate binary ──────────────────────────────
-BINARY=$(find "${BUILD_DIR}" -name "${BUNDLE_NAME}" -type f -perm +111 2>/dev/null | head -1)
-if [[ -z "${BINARY}" ]]; then
+# ─── Step 2: Locate universal binary ─────────────────────
+# The universal binary is at .build/apple/Products/Release/ — NOT in the
+# architecture-specific intermediate dirs. Use the Products path first.
+BINARY="${BUILD_DIR}/apple/Products/Release/${BUNDLE_NAME}"
+if [[ ! -f "${BINARY}" ]]; then
+    # Fallback: search for any executable
+    BINARY=$(find "${BUILD_DIR}" -name "${BUNDLE_NAME}" -path "*/Products/*" -type f -perm +111 2>/dev/null | head -1)
+fi
+if [[ -z "${BINARY}" || ! -f "${BINARY}" ]]; then
     echo "  ✗ Binary not found"; exit 1
 fi
-echo "  ✓ Binary: $(basename "${BINARY}")"
+# Verify it's universal
+ARCHES=$(file "${BINARY}" | grep -o 'arm64\|x86_64' | tr '\n' '+' | sed 's/+$//')
+echo "  ✓ Binary: $(basename "${BINARY}") [${ARCHES}] ($(du -h "${BINARY}" | awk '{print $1}'))"
 
 # ─── Step 3: App bundle ─────────────────────────────────
 echo ""
@@ -48,86 +56,114 @@ echo "  ✓ ${APP_NAME}.app created"
 echo ""
 echo "▸ [3/6] Generating app icon..."
 
-ICON_SCRIPT="${SCRIPT_DIR}/scripts/generate_icon.py"
+ICON_SOURCE="${SCRIPT_DIR}/Resources/AppIcon-source.png"
 ICONSET="${DIST_DIR}/TorboBase.iconset"
 ICNS="${APP_BUNDLE}/Contents/Resources/AppIcon.icns"
 
-if [[ -f "${ICON_SCRIPT}" ]]; then
-    python3 "${ICON_SCRIPT}" "${DIST_DIR}" 2>&1 | sed 's/^/  /'
-    if [[ -d "${ICONSET}" ]] && command -v iconutil &>/dev/null; then
-        iconutil -c icns "${ICONSET}" -o "${ICNS}" 2>/dev/null && \
-            echo "  ✓ AppIcon.icns generated" || \
-            echo "  ⚠ iconutil failed — using fallback"
-    fi
+if [[ -f "${ICON_SOURCE}" ]]; then
+    # Use the real orb image — resize with sips to all required sizes
     rm -rf "${ICONSET}"
-else
-    # Fallback: inline minimal icon generator
-    echo "  ⚠ Icon script missing, using inline generator"
     mkdir -p "${ICONSET}"
     for size in 16 32 64 128 256 512 1024; do
-        python3 -c "
-import struct, zlib, math
-def gen(s):
-    px=[]; cx=s/2.0; r=s*0.38
-    for y in range(s):
-        for x in range(s):
-            dx,dy=x-cx,y-cx; d=math.sqrt(dx*dx+dy*dy)
-            if d>r*1.3: px.append((0,0,0,0)); continue
-            if d>r: t=1-(d-r)/(r*0.3); px.append((0,int(180*t),int(220*t),int(80*t))); continue
-            t=d/r; R=int(t*168); G=int(t*85+(1-t)*229); B=int(t*247+(1-t)*255)
-            hd=math.sqrt((x-cx+r*0.25)**2+(y-cx+r*0.25)**2)/(r*0.6); hl=max(0,1-hd)
-            px.append((min(255,R+int(hl*80)),min(255,G+int(hl*80)),min(255,B+int(hl*80)),255))
-    return px
-def png(w,h,px):
-    raw=b''
-    for y in range(h):
-        raw+=b'\\x00'
-        for x in range(w): raw+=struct.pack('BBBB',*px[y*w+x])
-    def c(t,d): z=t+d; return struct.pack('>I',len(d))+z+struct.pack('>I',zlib.crc32(z)&0xffffffff)
-    return b'\\x89PNG\\r\\n\\x1a\\n'+c(b'IHDR',struct.pack('>IIBBBBB',w,h,8,6,0,0,0))+c(b'IDAT',zlib.compress(raw,9))+c(b'IEND',b'')
-with open('${ICONSET}/icon_${size}x${size}.png','wb') as f: f.write(png(${size},${size},gen(${size})))
-" 2>/dev/null || true
+        sips -z ${size} ${size} "${ICON_SOURCE}" --out "${ICONSET}/icon_${size}x${size}.png" >/dev/null 2>&1
+        echo "  ${size}x${size} ✓"
     done
+    # Create @2x retina variants (just copies of the 2x resolution)
     for size in 16 32 128 256 512; do
         d=$((size*2))
         [[ -f "${ICONSET}/icon_${d}x${d}.png" ]] && cp "${ICONSET}/icon_${d}x${d}.png" "${ICONSET}/icon_${size}x${size}@2x.png"
     done
+    # Compile iconset to icns
     if command -v iconutil &>/dev/null; then
-        iconutil -c icns "${ICONSET}" -o "${ICNS}" 2>/dev/null || true
+        iconutil -c icns "${ICONSET}" -o "${ICNS}" 2>/dev/null && \
+            echo "  ✓ AppIcon.icns compiled from orb image" || \
+            echo "  ⚠ iconutil failed"
     fi
+    # Also copy to dist for reuse
+    [[ -f "${ICNS}" ]] && cp "${ICNS}" "${DIST_DIR}/AppIcon.icns"
     rm -rf "${ICONSET}"
+else
+    # Fallback: use procedural generator
+    echo "  ⚠ AppIcon-source.png missing, falling back to procedural icon"
+    ICON_SCRIPT="${SCRIPT_DIR}/scripts/generate_icon.py"
+    if [[ -f "${ICON_SCRIPT}" ]]; then
+        python3 "${ICON_SCRIPT}" "${DIST_DIR}" 2>&1 | sed 's/^/  /'
+        ICONSET="${DIST_DIR}/TorboBase.iconset"
+        if [[ -d "${ICONSET}" ]] && command -v iconutil &>/dev/null; then
+            iconutil -c icns "${ICONSET}" -o "${ICNS}" 2>/dev/null || true
+        fi
+        rm -rf "${ICONSET}"
+    fi
 fi
 
-[[ -f "${ICNS}" ]] && echo "  ✓ App icon ready" || echo "  ⚠ No icon (cosmetic only)"
+if [[ -f "${ICNS}" ]]; then
+    echo "  ✓ App icon ready"
+else
+    echo "  ⚠ No icon generated — removing CFBundleIconFile from Info.plist to prevent signature issues"
+    # Remove icon references so codesign doesn't expect a missing resource
+    /usr/bin/plutil -remove CFBundleIconFile "${APP_BUNDLE}/Contents/Info.plist" 2>/dev/null || true
+    /usr/bin/plutil -remove CFBundleIconName "${APP_BUNDLE}/Contents/Info.plist" 2>/dev/null || true
+fi
 
 # ─── Step 5: Code sign ──────────────────────────────────
 echo ""
 echo "▸ [4/6] Code signing..."
 
-# Try to find a Developer ID first, fall back to ad-hoc
-IDENTITY=$(security find-identity -v -p codesigning 2>/dev/null | grep "Developer ID" | head -1 | sed 's/.*"\(.*\)"/\1/' || true)
+# Try to find a Developer ID Application identity
+IDENTITY=$(security find-identity -v -p codesigning 2>/dev/null \
+    | grep "Developer ID Application" \
+    | head -1 \
+    | sed 's/.*"\(.*\)"/\1/' || true)
+
+SIGN_OK=false
 
 if [[ -n "${IDENTITY}" ]]; then
     echo "  Found: ${IDENTITY}"
-    codesign --force --deep --options runtime \
-        --entitlements "${ENTITLEMENTS}" \
-        --sign "${IDENTITY}" "${APP_BUNDLE}" 2>/dev/null && \
-        echo "  ✓ Signed with Developer ID" || {
-            echo "  ⚠ Developer ID signing failed, using ad-hoc"
-            codesign --force --deep --sign - "${APP_BUNDLE}" 2>/dev/null || true
-            echo "  ✓ Ad-hoc signed"
-        }
-else
+
+    # Sign the binary FIRST (inside-out signing for hardened runtime)
+    echo "  Signing binary..."
+    if [[ -f "${ENTITLEMENTS}" ]]; then
+        codesign --force --options runtime \
+            --entitlements "${ENTITLEMENTS}" \
+            --sign "${IDENTITY}" \
+            "${APP_BUNDLE}/Contents/MacOS/${BUNDLE_NAME}" 2>&1 | sed 's/^/  /' && SIGN_OK=true || true
+    fi
+
+    # Then sign the bundle (seals all resources)
+    if ${SIGN_OK}; then
+        echo "  Signing app bundle..."
+        codesign --force --options runtime \
+            --entitlements "${ENTITLEMENTS}" \
+            --sign "${IDENTITY}" \
+            "${APP_BUNDLE}" 2>&1 | sed 's/^/  /' && \
+            echo "  ✓ Signed with Developer ID (hardened runtime)" || {
+                echo "  ⚠ Bundle signing failed"
+                SIGN_OK=false
+            }
+    fi
+
+    if ! ${SIGN_OK}; then
+        echo "  ⚠ Developer ID signing failed, falling back to ad-hoc"
+    fi
+fi
+
+# Ad-hoc fallback
+if ! ${SIGN_OK}; then
+    echo "  Using ad-hoc signing (Gatekeeper will warn users)..."
     if [[ -f "${ENTITLEMENTS}" ]]; then
         codesign --force --deep --entitlements "${ENTITLEMENTS}" --sign - "${APP_BUNDLE}" 2>/dev/null || true
     else
         codesign --force --deep --sign - "${APP_BUNDLE}" 2>/dev/null || true
     fi
-    echo "  ✓ Ad-hoc signed (no Developer ID found)"
+    echo "  ✓ Ad-hoc signed (users will need to right-click → Open on first launch)"
 fi
 
-# Verify
-codesign --verify --verbose "${APP_BUNDLE}" 2>&1 | tail -1 | sed 's/^/  /' || true
+# Verify signature
+echo "  Verifying..."
+codesign --verify --verbose=2 "${APP_BUNDLE}" 2>&1 | sed 's/^/  /'
+if [[ $? -ne 0 ]]; then
+    echo "  ⚠ Signature verification reported issues (may still work)"
+fi
 
 # ─── Step 6: DMG ────────────────────────────────────────
 echo ""

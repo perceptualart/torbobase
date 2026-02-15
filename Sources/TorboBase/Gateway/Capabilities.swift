@@ -1372,8 +1372,8 @@ extension ToolProcessor {
                 continue
             }
 
-            // Handle core built-in tools
-            if Self.coreToolNames.contains(name) {
+            // Handle core built-in tools (excluding system tools which are handled below)
+            if Self.coreToolNames.contains(name) && !systemToolNames.contains(name) {
                 var content = ""
                 switch name {
                 case "web_search":
@@ -1806,22 +1806,22 @@ extension ToolProcessor {
                     let path = args["path"] as? String ?? ""
                     let maxChars = args["max_chars"] as? Int ?? 50000
                     fileWarning = SafetyWarnings.checkFileOperation(path: path, operation: "read", scopes: scopes)
-                    content = await SystemAccessEngine.shared.readFile(path: path, maxChars: maxChars, scopes: scopes)
+                    content = await SystemAccessEngine.shared.readFile(path: path, maxChars: maxChars, scopes: scopes, accessLevel: accessLevel)
                 case "write_file":
                     let path = args["path"] as? String ?? ""
                     let fileContent = args["content"] as? String ?? ""
                     let append = args["append"] as? Bool ?? false
                     fileWarning = SafetyWarnings.checkFileOperation(path: path, operation: "write", scopes: scopes)
-                    content = await SystemAccessEngine.shared.writeFile(path: path, content: fileContent, append: append, scopes: scopes)
+                    content = await SystemAccessEngine.shared.writeFile(path: path, content: fileContent, append: append, scopes: scopes, accessLevel: accessLevel)
                 case "list_directory":
                     let path = args["path"] as? String ?? ""
                     let recursive = args["recursive"] as? Bool ?? false
-                    content = await SystemAccessEngine.shared.listDirectory(path: path, recursive: recursive, scopes: scopes)
+                    content = await SystemAccessEngine.shared.listDirectory(path: path, recursive: recursive, scopes: scopes, accessLevel: accessLevel)
                 case "run_command":
                     let command = args["command"] as? String ?? ""
                     let workDir = args["working_directory"] as? String
                     let timeout = args["timeout"] as? Int ?? 30
-                    content = await SystemAccessEngine.shared.runCommand(command: command, workingDirectory: workDir, timeout: timeout)
+                    content = await SystemAccessEngine.shared.runCommand(command: command, workingDirectory: workDir, timeout: timeout, accessLevel: accessLevel)
                 default:
                     content = "Unknown tool: \(name)"
                 }
@@ -1986,11 +1986,17 @@ actor SystemAccessEngine {
         "curl ", "wget ",   // Data exfiltration risk
     ]
 
-    static func classifyCommand(_ command: String) -> CommandThreat {
+    static func classifyCommand(_ command: String, accessLevel: AccessLevel = .chatOnly) -> CommandThreat {
+        // VIP (fullAccess) agents bypass all command restrictions except fork bombs
+        let vip = accessLevel == .fullAccess
+
         let cmd = command.trimmingCharacters(in: .whitespaces).lowercased()
 
-        // Block fork bombs, root deletion, etc.
+        // Block fork bombs, root deletion, etc. — even for VIP
         if cmd.contains("sudo rm -rf /") || cmd.contains(":(){ :|:& };:") || cmd == "rm -rf /" { return .blocked }
+
+        // VIP agents get unrestricted shell access
+        if vip { return .safe }
 
         // Block shell injection / chaining attempts
         for pattern in shellInjectionPatterns {
@@ -2073,18 +2079,22 @@ actor SystemAccessEngine {
 
     // MARK: - Execution
 
-    func readFile(path: String, maxChars: Int = 50000, scopes: [String] = []) -> String {
+    func readFile(path: String, maxChars: Int = 50000, scopes: [String] = [], accessLevel: AccessLevel = .chatOnly) -> String {
         let p = NSString(string: path).expandingTildeInPath
-        // Block sensitive paths (SSH keys, API keys, credentials)
-        if Self.isSensitiveReadPath(p) {
-            TorboLog.warn("BLOCKED read of sensitive path: \(path)", subsystem: "Tools")
-            return "BLOCKED: Access to sensitive system files is not permitted."
-        }
-        // Block protected system paths
-        if Self.isProtectedPath(p) { return "BLOCKED: protected system path" }
-        // Enforce agent directory scopes
-        if !Self.isPathAllowed(p, scopes: scopes) {
-            return "BLOCKED: Path '\(path)' is outside this agent's allowed directories."
+        let vip = accessLevel == .fullAccess
+        // VIP (level 5) bypasses all path restrictions
+        if !vip {
+            // Block sensitive paths (SSH keys, API keys, credentials)
+            if Self.isSensitiveReadPath(p) {
+                TorboLog.warn("BLOCKED read of sensitive path: \(path)", subsystem: "Tools")
+                return "BLOCKED: Access to sensitive system files is not permitted."
+            }
+            // Block protected system paths
+            if Self.isProtectedPath(p) { return "BLOCKED: protected system path" }
+            // Enforce agent directory scopes
+            if !Self.isPathAllowed(p, scopes: scopes) {
+                return "BLOCKED: Path '\(path)' is outside this agent's allowed directories."
+            }
         }
         guard FileManager.default.fileExists(atPath: p) else { return "Error: File not found at '\(path)'" }
         do {
@@ -2093,21 +2103,24 @@ actor SystemAccessEngine {
         } catch { return "Error: \(error.localizedDescription)" }
     }
 
-    func writeFile(path: String, content: String, append: Bool = false, scopes: [String] = []) -> String {
+    func writeFile(path: String, content: String, append: Bool = false, scopes: [String] = [], accessLevel: AccessLevel = .chatOnly) -> String {
         let p = NSString(string: path).expandingTildeInPath
-        if Self.isProtectedPath(p) { return "BLOCKED: protected system path" }
-        if Self.isCoreFile(p) {
-            TorboLog.warn("BLOCKED write to core file: \(path)", subsystem: "Tools")
-            return "BLOCKED: \(URL(fileURLWithPath: p).lastPathComponent) is a core infrastructure file. Create a NEW file instead, or ask MM to modify it manually."
-        }
-        // Block writes to sensitive paths
-        if Self.isSensitiveReadPath(p) {
-            TorboLog.warn("BLOCKED write to sensitive path: \(path)", subsystem: "Tools")
-            return "BLOCKED: Cannot write to sensitive system files."
-        }
-        // Enforce agent directory scopes
-        if !Self.isPathAllowed(p, scopes: scopes) {
-            return "BLOCKED: Path '\(path)' is outside this agent's allowed directories."
+        let vip = accessLevel == .fullAccess
+        if !vip {
+            if Self.isProtectedPath(p) { return "BLOCKED: protected system path" }
+            if Self.isCoreFile(p) {
+                TorboLog.warn("BLOCKED write to core file: \(path)", subsystem: "Tools")
+                return "BLOCKED: \(URL(fileURLWithPath: p).lastPathComponent) is a core infrastructure file. Create a NEW file instead, or ask MM to modify it manually."
+            }
+            // Block writes to sensitive paths
+            if Self.isSensitiveReadPath(p) {
+                TorboLog.warn("BLOCKED write to sensitive path: \(path)", subsystem: "Tools")
+                return "BLOCKED: Cannot write to sensitive system files."
+            }
+            // Enforce agent directory scopes
+            if !Self.isPathAllowed(p, scopes: scopes) {
+                return "BLOCKED: Path '\(path)' is outside this agent's allowed directories."
+            }
         }
         if FileManager.default.fileExists(atPath: p) { _ = backupFile(at: p) }
         let url = URL(fileURLWithPath: p)
@@ -2129,15 +2142,18 @@ actor SystemAccessEngine {
         } catch { return "Error: \(error.localizedDescription)" }
     }
 
-    func listDirectory(path: String, recursive: Bool = false, scopes: [String] = []) -> String {
+    func listDirectory(path: String, recursive: Bool = false, scopes: [String] = [], accessLevel: AccessLevel = .chatOnly) -> String {
         let p = NSString(string: path).expandingTildeInPath
-        // Block protected system paths
-        if Self.isProtectedPath(p) { return "BLOCKED: protected system path" }
-        // Block sensitive paths
-        if Self.isSensitiveReadPath(p) { return "BLOCKED: Access to sensitive system files is not permitted." }
-        // Enforce agent directory scopes
-        if !Self.isPathAllowed(p, scopes: scopes) {
-            return "BLOCKED: Path '\(path)' is outside this agent's allowed directories."
+        let vip = accessLevel == .fullAccess
+        if !vip {
+            // Block protected system paths
+            if Self.isProtectedPath(p) { return "BLOCKED: protected system path" }
+            // Block sensitive paths
+            if Self.isSensitiveReadPath(p) { return "BLOCKED: Access to sensitive system files is not permitted." }
+            // Enforce agent directory scopes
+            if !Self.isPathAllowed(p, scopes: scopes) {
+                return "BLOCKED: Path '\(path)' is outside this agent's allowed directories."
+            }
         }
         guard FileManager.default.fileExists(atPath: p) else { return "Error: not found" }
         do {
@@ -2152,8 +2168,8 @@ actor SystemAccessEngine {
         } catch { return "Error: \(error.localizedDescription)" }
     }
 
-    func runCommand(command: String, workingDirectory: String? = nil, timeout: Int = 30) async -> String {
-        let threat = Self.classifyCommand(command)
+    func runCommand(command: String, workingDirectory: String? = nil, timeout: Int = 30, accessLevel: AccessLevel = .chatOnly) async -> String {
+        let threat = Self.classifyCommand(command, accessLevel: accessLevel)
         switch threat {
         case .blocked: return "BLOCKED: Too dangerous."
         case .destructive: return "CONFIRMATION REQUIRED: \(command)"

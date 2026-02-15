@@ -41,6 +41,9 @@ struct AgentConfig: Codable, Equatable, Identifiable {
     var enabledSkillIDs: [String]       // Skills this agent can use (empty = all)
     var enabledCapabilities: [String: Bool] = [:]  // Category toggles (empty = all enabled, false = disabled)
 
+    // Sync
+    var lastModifiedAt: Date?  // Timestamp for bidirectional sync with iOS app
+
     // MARK: - Memberwise Init (explicit because custom Codable init suppresses auto-generated one)
 
     init(id: String, isBuiltIn: Bool, createdAt: Date, name: String, pronouns: String, role: String,
@@ -48,7 +51,7 @@ struct AgentConfig: Codable, Equatable, Identifiable {
          customInstructions: String, backgroundKnowledge: String,
          elevenLabsVoiceID: String, fallbackTTSVoice: String,
          accessLevel: Int, directoryScopes: [String], enabledSkillIDs: [String],
-         enabledCapabilities: [String: Bool] = [:]) {
+         enabledCapabilities: [String: Bool] = [:], lastModifiedAt: Date? = nil) {
         self.id = id; self.isBuiltIn = isBuiltIn; self.createdAt = createdAt
         self.name = name; self.pronouns = pronouns; self.role = role
         self.voiceTone = voiceTone; self.personalityPreset = personalityPreset
@@ -57,6 +60,7 @@ struct AgentConfig: Codable, Equatable, Identifiable {
         self.elevenLabsVoiceID = elevenLabsVoiceID; self.fallbackTTSVoice = fallbackTTSVoice
         self.accessLevel = accessLevel; self.directoryScopes = directoryScopes
         self.enabledSkillIDs = enabledSkillIDs; self.enabledCapabilities = enabledCapabilities
+        self.lastModifiedAt = lastModifiedAt
     }
 
     // MARK: - Codable (backward compatible — new fields have defaults)
@@ -67,6 +71,7 @@ struct AgentConfig: Codable, Equatable, Identifiable {
         case customInstructions, backgroundKnowledge
         case elevenLabsVoiceID, fallbackTTSVoice
         case accessLevel, directoryScopes, enabledSkillIDs, enabledCapabilities
+        case lastModifiedAt
     }
 
     init(from decoder: Decoder) throws {
@@ -90,6 +95,7 @@ struct AgentConfig: Codable, Equatable, Identifiable {
         enabledSkillIDs = try c.decode([String].self, forKey: .enabledSkillIDs)
         // New field — defaults to empty (all enabled) for existing agent JSON files
         enabledCapabilities = try c.decodeIfPresent([String: Bool].self, forKey: .enabledCapabilities) ?? [:]
+        lastModifiedAt = try c.decodeIfPresent(Date.self, forKey: .lastModifiedAt)
     }
 
     // MARK: - Built-in SiD Default
@@ -212,14 +218,17 @@ struct AgentConfig: Codable, Equatable, Identifiable {
 
         <behavior>
         CRITICAL RULES — follow these at all times:
-        - NEVER read code, file paths, commands, or technical output to the user. Just DO the action and describe the RESULT in plain English.
-        - Good: "Done — created the file." Bad: "I ran write_file with path /Users/you/Documents/..."
-        - Good: "Found 12 matching files." Bad: "I executed spotlight_search with query kMDItemFSName..."
-        - If the user explicitly asks for code, file paths, or technical details, THEN show them. Otherwise, be conversational.
-        - Keep responses SHORT. 1-3 sentences unless the user asks for more detail.
-        - When using tools, describe what you DID and the outcome — not what you're about to do.
-        - Always respond to the user. Never go silent. If something fails, say what went wrong in plain language.
-        - You are talking to a human, not a developer console. Speak naturally.
+        - NEVER read file paths, code, terminal output, or technical details to the user. The user is NOT a developer console. Just DO the action and give the RESULT in plain English.
+        - NEVER repeat or paraphrase what the user just said. Go straight to the answer or action.
+        - NEVER narrate your process ("I'm going to...", "Let me...", "I'll use the X tool to..."). Just do it, then say what happened.
+        - SHOW, don't TELL. Describe outcomes and results. Don't describe your methods.
+        - Good: "Done — saved it." Bad: "I used write_file to write to /Users/michaelmurphy/Documents/test.txt"
+        - Good: "Found 12 photos from last week." Bad: "I executed spotlight_search with query kMDItemContentType == public.image"
+        - Good: "Here's what I found." Bad: "Based on your question about X, I searched for X and found..."
+        - If the user explicitly asks for code, paths, or technical details, THEN show them. Otherwise, keep it conversational.
+        - Keep responses SHORT. 1-3 sentences unless the user asks for more detail. Brevity is respect.
+        - Always respond. Never go silent. If something fails, say what went wrong simply.
+        - You are talking to a human having a conversation. Not filing a report.
         </behavior>
         """)
 
@@ -515,7 +524,9 @@ actor AgentConfigManager {
     func createAgent(_ config: AgentConfig) throws {
         guard !config.id.isEmpty else { throw AgentError.invalidID }
         guard configs[config.id] == nil else { throw AgentError.idAlreadyExists }
-        configs[config.id] = config
+        var stamped = config
+        stamped.lastModifiedAt = Date()
+        configs[config.id] = stamped
         saveAgent(config.id)
         TorboLog.info("Created agent: \(config.name) (id: \(config.id), level: \(config.accessLevel))", subsystem: "Agents")
     }
@@ -528,6 +539,7 @@ actor AgentConfigManager {
         if let existing = configs[config.id] {
             updated.isBuiltIn = existing.isBuiltIn
         }
+        updated.lastModifiedAt = Date()
         configs[config.id] = updated
         saveAgent(config.id)
         TorboLog.info("Updated agent: \(config.name) (id: \(config.id))", subsystem: "Agents")

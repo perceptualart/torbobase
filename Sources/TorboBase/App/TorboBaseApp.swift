@@ -5,9 +5,18 @@
 #if canImport(SwiftUI) && os(macOS)
 import SwiftUI
 
+/// Holds the SwiftUI OpenWindowAction so AppDelegate can trigger it.
+/// SwiftUI creates MenuBarExtra immediately on launch — its label view's
+/// .onAppear captures the action. AppDelegate.applicationDidFinishLaunching
+/// then uses it to open the dashboard window.
+enum WindowOpener {
+    static var openWindow: OpenWindowAction?
+}
+
 @main
 struct TorboBaseApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
+    @Environment(\.openWindow) private var openWindow
     @State private var appState = AppState.shared
     @State private var eulaAccepted = Legal.eulaAccepted
     @State private var setupCompleted = AppConfig.setupCompleted
@@ -18,7 +27,16 @@ struct TorboBaseApp: App {
             MenuBarView()
                 .environment(appState)
         } label: {
+            // The label is rendered IMMEDIATELY on launch (unlike the content
+            // popup, which only appears when the user clicks the menu bar icon).
+            // We use .onAppear on a background EmptyView inside an overlay
+            // to capture the openWindow action as early as possible.
             Label("Torbo Base", systemImage: appState.menuBarIcon)
+                .background {
+                    // This fires during initial layout — guaranteed before
+                    // applicationDidFinishLaunching completes its async work.
+                    WindowOpenerView()
+                }
         }
         .menuBarExtraStyle(.window)
 
@@ -41,6 +59,12 @@ struct TorboBaseApp: App {
             }
             .frame(minWidth: 720, minHeight: 560)
             .preferredColorScheme(.dark)
+            .onAppear {
+                // Belt-and-suspenders: style the window once SwiftUI renders content
+                DispatchQueue.main.async {
+                    AppDelegate.styleAndShowWindow()
+                }
+            }
         }
         .windowStyle(.hiddenTitleBar)
         .windowResizability(.contentMinSize)
@@ -49,7 +73,43 @@ struct TorboBaseApp: App {
     }
 }
 
+/// Invisible view attached to the MenuBarExtra label.
+/// Its sole purpose is to capture the OpenWindowAction early in launch.
+private struct WindowOpenerView: View {
+    @Environment(\.openWindow) private var openWindow
+
+    var body: some View {
+        Color.clear
+            .frame(width: 0, height: 0)
+            .onAppear {
+                WindowOpener.openWindow = openWindow
+            }
+    }
+}
+
 final class AppDelegate: NSObject, NSApplicationDelegate {
+
+    /// Style and bring the dashboard window to front.
+    /// Called from both AppDelegate retries AND the SwiftUI .onAppear callback
+    /// to guarantee the window is visible regardless of creation timing.
+    static func styleAndShowWindow() {
+        guard let window = NSApp.windows.first(where: {
+            $0.title == "Torbo Base"
+            || $0.identifier?.rawValue.contains("dashboard") == true
+            // Also match untitled SwiftUI windows that are the right size
+            || ($0.title.isEmpty && $0.frame.width >= 700 && $0.contentView != nil
+                && String(describing: type(of: $0.contentView!)).contains("NSHostingView"))
+        }) else { return }
+
+        window.makeKeyAndOrderFront(nil)
+        window.orderFrontRegardless()
+        // Dark title bar
+        window.backgroundColor = NSColor(red: 0.06, green: 0.06, blue: 0.08, alpha: 1)
+        window.titlebarAppearsTransparent = true
+        window.titleVisibility = .hidden
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Migrate any secrets from UserDefaults → Keychain (one-time)
         KeychainManager.migrateFromUserDefaults()
@@ -57,27 +117,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Load persisted conversations
         AppState.shared.loadPersistedData()
 
-        // Show as regular app (not just menu bar) so the window is visible
+        // Show as regular app (not just menu bar) so the window is visible.
+        // This must be set BEFORE trying to show any windows.
         NSApp.setActivationPolicy(.regular)
         NSApp.activate(ignoringOtherApps: true)
 
-        // Open the dashboard window — retry to handle SwiftUI window creation race
-        func activateMainWindow() {
-            if let window = NSApp.windows.first(where: { $0.title == "Torbo Base" || $0.identifier?.rawValue == "dashboard" }) {
-                window.makeKeyAndOrderFront(nil)
-                window.orderFrontRegardless()
-                // Dark title bar
-                window.backgroundColor = NSColor(red: 0.06, green: 0.06, blue: 0.08, alpha: 1)
-                window.titlebarAppearsTransparent = true
-                window.titleVisibility = .hidden
-                NSApp.activate(ignoringOtherApps: true)
-            }
+        // Open the dashboard window using the SwiftUI OpenWindowAction.
+        // The MenuBarExtra label's WindowOpenerView captures openWindow during
+        // initial layout (before this method runs). We call it here + with retries
+        // to handle any timing edge cases. Once the Window scene creates its
+        // NSWindow, styleAndShowWindow() makes it key and brings it to front.
+        DispatchQueue.main.async {
+            WindowOpener.openWindow?(id: "dashboard")
+            Self.styleAndShowWindow()
         }
-
-        DispatchQueue.main.async { activateMainWindow() }
-        // Retry in case SwiftUI hasn't created the window yet
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { activateMainWindow() }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { activateMainWindow() }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+            WindowOpener.openWindow?(id: "dashboard")
+            Self.styleAndShowWindow()
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
+            WindowOpener.openWindow?(id: "dashboard")
+            Self.styleAndShowWindow()
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { Self.styleAndShowWindow() }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) { Self.styleAndShowWindow() }
 
         Task {
             await OllamaManager.shared.ensureRunning()

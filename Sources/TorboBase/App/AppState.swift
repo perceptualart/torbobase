@@ -32,12 +32,12 @@ enum AccessLevel: Int, CaseIterable, Codable {
 
     var description: String {
         switch self {
-        case .off: return "Kill switch — nothing gets through"
-        case .chatOnly: return "Chat only — no system access"
-        case .readFiles: return "Can read files in approved paths"
-        case .writeFiles: return "Can read + write in sandbox"
-        case .execute: return "Can run approved commands"
-        case .fullAccess: return "Unrestricted — use with extreme caution"
+        case .off: return "Agent Privileges: None — kill switch active"
+        case .chatOnly: return "Agent Privileges: Chat only"
+        case .readFiles: return "Agent Privileges: Read files"
+        case .writeFiles: return "Agent Privileges: Read + Write files"
+        case .execute: return "Agent Privileges: Read, Write + Execute"
+        case .fullAccess: return "Agent Privileges: Unrestricted"
         }
     }
 

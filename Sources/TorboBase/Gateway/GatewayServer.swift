@@ -233,6 +233,15 @@ actor GatewayServer {
                 await TelegramBridge.shared.notify("Gateway started on port \(port)")
             }
 
+            // Periodic maintenance — ChatRoomStore cleanup every 30 minutes
+            Task { [weak self] in
+                while await self != nil {
+                    try? await Task.sleep(nanoseconds: 1_800_000_000_000) // 30 min
+                    await ChatRoomStore.shared.cleanup(olderThan: 86400)  // 24h
+                    TorboLog.debug("ChatRoomStore cleanup complete", subsystem: "Gateway")
+                }
+            }
+
             TorboLog.info("Started on port \(port)", subsystem: "Gateway")
         } catch {
             await MainActor.run {
@@ -437,6 +446,9 @@ actor GatewayServer {
 
     private func processRequest(_ data: Data, clientIP: String, writer: ResponseWriter) async {
         guard let request = HTTPRequest.parse(data) else {
+            // Log diagnostic info to help debug intermittent parse failures
+            let preview = String(data: data.prefix(200), encoding: .utf8) ?? "<non-UTF8, \(data.count) bytes>"
+            TorboLog.warn("Malformed request from \(clientIP): \(data.count) bytes, preview: \(preview.prefix(120))", subsystem: "Gateway")
             writer.sendResponse(HTTPResponse.badRequest("Malformed request"))
             return
         }
@@ -1295,7 +1307,7 @@ actor GatewayServer {
 
     // MARK: - Rate Limiting
 
-    private var rateLimitCheckCount = 0
+    private var lastRateLimitPrune: Date = Date()
 
     private func isRateLimited(clientIP: String) -> Bool {
         let now = Date()
@@ -1304,18 +1316,11 @@ actor GatewayServer {
         var timestamps = requestLog[clientIP] ?? []
         timestamps = timestamps.filter { now.timeIntervalSince($0) < window }
         timestamps.append(now)
+        requestLog[clientIP] = timestamps
 
-        // Clean up: remove IP key if only the current timestamp remains (effectively empty history)
-        if timestamps.count <= 1 && timestamps.count <= limit {
-            // Keep it for this request but mark for future cleanup
-            requestLog[clientIP] = timestamps
-        } else {
-            requestLog[clientIP] = timestamps
-        }
-
-        // Periodic full sweep every 1000 checks to prevent unbounded dict growth
-        rateLimitCheckCount += 1
-        if rateLimitCheckCount % 1000 == 0 {
+        // Time-based pruning every 5 minutes (prevents unbounded dict growth during low-traffic periods)
+        if now.timeIntervalSince(lastRateLimitPrune) > 300 {
+            lastRateLimitPrune = now
             let cutoff = now.addingTimeInterval(-window)
             requestLog = requestLog.filter { _, dates in
                 dates.contains { $0 > cutoff }
@@ -2141,31 +2146,130 @@ actor GatewayServer {
 
     // MARK: - Cloud Model Routing
 
+    /// Determine the provider for a model prefix
+    private func providerForModel(_ model: String) -> String? {
+        if model.hasPrefix("claude") { return "ANTHROPIC" }
+        if model.hasPrefix("gpt") || model.hasPrefix("o1") || model.hasPrefix("o3") || model.hasPrefix("o4") { return "OPENAI" }
+        if model.hasPrefix("gemini") { return "GOOGLE" }
+        if model.hasPrefix("grok") { return "XAI" }
+        return nil
+    }
+
+    /// Route a single request to a specific provider. Returns (response, isRetryable).
+    private func routeToProvider(_ provider: String, body: [String: Any], model: String, apiKey: String, clientIP: String) async -> (HTTPResponse, Bool) {
+        switch provider {
+        case "ANTHROPIC": return (await routeToAnthropic(body: body, apiKey: apiKey, model: model, clientIP: clientIP), true)
+        case "OPENAI": return (await routeToOpenAI(body: body, apiKey: apiKey, clientIP: clientIP), true)
+        case "GOOGLE": return (await routeToGemini(body: body, apiKey: apiKey, model: model, clientIP: clientIP), true)
+        case "XAI": return (await routeToXAI(body: body, apiKey: apiKey, clientIP: clientIP), true)
+        default: return (HTTPResponse.badRequest("Unknown provider: \(provider)"), false)
+        }
+    }
+
+    /// Provider fallback order for when primary provider fails
+    private let fallbackOrder: [String: [String]] = [
+        "ANTHROPIC": ["OPENAI", "XAI"],
+        "OPENAI": ["ANTHROPIC", "XAI"],
+        "GOOGLE": ["ANTHROPIC", "OPENAI"],
+        "XAI": ["OPENAI", "ANTHROPIC"]
+    ]
+
+    /// API key names per provider
+    private let providerKeyNames: [String: String] = [
+        "ANTHROPIC": "ANTHROPIC_API_KEY",
+        "OPENAI": "OPENAI_API_KEY",
+        "GOOGLE": "GOOGLE_API_KEY",
+        "XAI": "XAI_API_KEY"
+    ]
+
+    /// Default fallback models per provider
+    private let fallbackModels: [String: String] = [
+        "ANTHROPIC": "claude-sonnet-4-20250514",
+        "OPENAI": "gpt-4o",
+        "GOOGLE": "gemini-2.0-flash",
+        "XAI": "grok-3"
+    ]
+
     private func routeToCloud(body: [String: Any], model: String, clientIP: String) async -> HTTPResponse {
         let keys = await MainActor.run { AppState.shared.cloudAPIKeys }
 
-        if model.hasPrefix("claude") {
-            guard let apiKey = keys["ANTHROPIC_API_KEY"], !apiKey.isEmpty else {
-                return HTTPResponse.serverError("No Anthropic API key configured")
-            }
-            return await routeToAnthropic(body: body, apiKey: apiKey, model: model, clientIP: clientIP)
-        } else if model.hasPrefix("gpt") {
-            guard let apiKey = keys["OPENAI_API_KEY"], !apiKey.isEmpty else {
-                return HTTPResponse.serverError("No OpenAI API key configured")
-            }
-            return await routeToOpenAI(body: body, apiKey: apiKey, clientIP: clientIP)
-        } else if model.hasPrefix("gemini") {
-            guard let apiKey = keys["GOOGLE_API_KEY"], !apiKey.isEmpty else {
-                return HTTPResponse.serverError("No Google API key configured")
-            }
-            return await routeToGemini(body: body, apiKey: apiKey, model: model, clientIP: clientIP)
-        } else if model.hasPrefix("grok") {
-            guard let apiKey = keys["XAI_API_KEY"], !apiKey.isEmpty else {
-                return HTTPResponse.serverError("No xAI API key configured")
-            }
-            return await routeToXAI(body: body, apiKey: apiKey, clientIP: clientIP)
+        guard let primaryProvider = providerForModel(model) else {
+            return HTTPResponse.badRequest("Unsupported cloud model: \(model)")
         }
-        return HTTPResponse.badRequest("Unsupported cloud model: \(model)")
+
+        guard let keyName = providerKeyNames[primaryProvider],
+              let apiKey = keys[keyName], !apiKey.isEmpty else {
+            // No key for primary — try fallbacks immediately
+            return await routeWithFallback(body: body, model: model, primaryProvider: primaryProvider, keys: keys, clientIP: clientIP,
+                                           reason: "No \(primaryProvider) API key configured")
+        }
+
+        // Try primary provider with retry (handles transient 500s and timeouts)
+        let response = await routeWithRetry(provider: primaryProvider, body: body, model: model, apiKey: apiKey, clientIP: clientIP)
+
+        // If primary failed with server error, try fallbacks
+        if response.statusCode >= 500 || response.statusCode == 429 {
+            TorboLog.warn("Primary provider \(primaryProvider) failed (\(response.statusCode)), trying fallbacks", subsystem: "Gateway")
+            return await routeWithFallback(body: body, model: model, primaryProvider: primaryProvider, keys: keys, clientIP: clientIP,
+                                           reason: "Primary provider returned \(response.statusCode)")
+        }
+
+        return response
+    }
+
+    /// Route with retry (exponential backoff for transient errors)
+    private func routeWithRetry(provider: String, body: [String: Any], model: String, apiKey: String, clientIP: String) async -> HTTPResponse {
+        var lastResponse: HTTPResponse?
+        var delay: TimeInterval = 1.0
+
+        for attempt in 1...3 {
+            let (response, _) = await routeToProvider(provider, body: body, model: model, apiKey: apiKey, clientIP: clientIP)
+            lastResponse = response
+
+            // Success or client error (4xx except 429) — don't retry
+            if response.statusCode < 500 && response.statusCode != 429 {
+                return response
+            }
+
+            // 429 — check Retry-After header
+            if response.statusCode == 429 {
+                if let retryAfter = response.headers["Retry-After"], let secs = Double(retryAfter) {
+                    delay = min(secs, 30.0)
+                } else {
+                    delay = min(delay * 2, 30.0) // Exponential if no header
+                }
+            }
+
+            if attempt < 3 {
+                let jitter = delay * Double.random(in: -0.25...0.25)
+                TorboLog.warn("\(provider) attempt \(attempt)/3 failed (\(response.statusCode)), retrying in \(String(format: "%.1f", delay + jitter))s", subsystem: "Gateway")
+                try? await Task.sleep(nanoseconds: UInt64((delay + jitter) * 1_000_000_000))
+                delay = min(delay * 2, 30.0)
+            }
+        }
+
+        return lastResponse ?? HTTPResponse.serverError("All retry attempts failed for \(provider)")
+    }
+
+    /// Try fallback providers when primary fails
+    private func routeWithFallback(body: [String: Any], model: String, primaryProvider: String, keys: [String: String], clientIP: String, reason: String) async -> HTTPResponse {
+        let fallbacks = fallbackOrder[primaryProvider] ?? []
+
+        for fallbackProvider in fallbacks {
+            guard let keyName = providerKeyNames[fallbackProvider],
+                  let apiKey = keys[keyName], !apiKey.isEmpty else { continue }
+
+            let fallbackModel = fallbackModels[fallbackProvider] ?? model
+            TorboLog.info("Falling back to \(fallbackProvider) (\(fallbackModel))", subsystem: "Gateway")
+
+            let (response, _) = await routeToProvider(fallbackProvider, body: body, model: fallbackModel, apiKey: apiKey, clientIP: clientIP)
+            if response.statusCode < 500 {
+                return response
+            }
+        }
+
+        // All providers failed
+        return HTTPResponse.serverError("\(reason). Fallback providers also unavailable.")
     }
 
     private func routeToAnthropic(body: [String: Any], apiKey: String, model: String, clientIP: String) async -> HTTPResponse {
@@ -2179,7 +2283,7 @@ actor GatewayServer {
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.setValue(apiKey, forHTTPHeaderField: "x-api-key")
-        req.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
+        req.setValue("2024-10-22", forHTTPHeaderField: "anthropic-version")
         req.timeoutInterval = 120
 
         var anthropicBody: [String: Any] = [
@@ -2217,7 +2321,24 @@ actor GatewayServer {
 
         do {
             let (data, resp) = try await URLSession.shared.data(for: req)
-            let code = (resp as? HTTPURLResponse)?.statusCode ?? 500
+            let httpResp = resp as? HTTPURLResponse
+            let code = httpResp?.statusCode ?? 500
+
+            // 401/403 — API key is invalid or expired
+            if code == 401 || code == 403 {
+                TorboLog.error("Anthropic API key invalid/expired (HTTP \(code))", subsystem: "Gateway")
+                return HTTPResponse(statusCode: code, headers: ["Content-Type": "application/json"],
+                    body: Data("{\"error\":{\"message\":\"Anthropic API key is invalid or expired. Update it in Settings → API Keys.\",\"type\":\"auth_error\"}}".utf8))
+            }
+            // 429 — rate limited, pass through with Retry-After
+            if code == 429 {
+                var headers = ["Content-Type": "application/json"]
+                if let retryAfter = httpResp?.value(forHTTPHeaderField: "Retry-After") {
+                    headers["Retry-After"] = retryAfter
+                }
+                TorboLog.warn("Anthropic rate limited (429)", subsystem: "Gateway")
+                return HTTPResponse(statusCode: 429, headers: headers, body: data)
+            }
 
             // Convert Anthropic response to OpenAI format for compatibility
             if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
@@ -2282,7 +2403,20 @@ actor GatewayServer {
 
         do {
             let (data, resp) = try await URLSession.shared.data(for: req)
-            let code = (resp as? HTTPURLResponse)?.statusCode ?? 500
+            let httpResp = resp as? HTTPURLResponse
+            let code = httpResp?.statusCode ?? 500
+
+            if code == 401 || code == 403 {
+                TorboLog.error("OpenAI API key invalid/expired (HTTP \(code))", subsystem: "Gateway")
+                return HTTPResponse(statusCode: code, headers: ["Content-Type": "application/json"],
+                    body: Data("{\"error\":{\"message\":\"OpenAI API key is invalid or expired. Update it in Settings → API Keys.\",\"type\":\"auth_error\"}}".utf8))
+            }
+            if code == 429 {
+                var headers = ["Content-Type": "application/json"]
+                if let retryAfter = httpResp?.value(forHTTPHeaderField: "Retry-After") { headers["Retry-After"] = retryAfter }
+                TorboLog.warn("OpenAI rate limited (429)", subsystem: "Gateway")
+                return HTTPResponse(statusCode: 429, headers: headers, body: data)
+            }
 
             if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                let choices = json["choices"] as? [[String: Any]],
@@ -2316,7 +2450,20 @@ actor GatewayServer {
 
         do {
             let (data, resp) = try await URLSession.shared.data(for: req)
-            let code = (resp as? HTTPURLResponse)?.statusCode ?? 500
+            let httpResp = resp as? HTTPURLResponse
+            let code = httpResp?.statusCode ?? 500
+
+            if code == 401 || code == 403 {
+                TorboLog.error("xAI API key invalid/expired (HTTP \(code))", subsystem: "Gateway")
+                return HTTPResponse(statusCode: code, headers: ["Content-Type": "application/json"],
+                    body: Data("{\"error\":{\"message\":\"xAI API key is invalid or expired. Update it in Settings → API Keys.\",\"type\":\"auth_error\"}}".utf8))
+            }
+            if code == 429 {
+                var headers = ["Content-Type": "application/json"]
+                if let retryAfter = httpResp?.value(forHTTPHeaderField: "Retry-After") { headers["Retry-After"] = retryAfter }
+                TorboLog.warn("xAI rate limited (429)", subsystem: "Gateway")
+                return HTTPResponse(statusCode: 429, headers: headers, body: data)
+            }
 
             if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                let choices = json["choices"] as? [[String: Any]],

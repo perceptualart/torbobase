@@ -8,10 +8,13 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 APP_NAME="Torbo Base"
-BUNDLE_ID="com.perceptualart.torbobase"
+BUNDLE_NAME="TorboBase"
+BUNDLE_ID="ai.torbo.base"
 TEAM_ID="${TORBO_TEAM_ID:-}"
 SIGNING_IDENTITY="${TORBO_SIGNING_IDENTITY:-}"
 NOTARY_PROFILE="${TORBO_NOTARY_PROFILE:-notarytool}"
+ENTITLEMENTS="$PROJECT_DIR/Resources/TorboBase.entitlements"
+INFO_PLIST_TEMPLATE="$PROJECT_DIR/Resources/Info.plist"
 
 # Auto-detect signing identity if not set
 if [ -z "$SIGNING_IDENTITY" ]; then
@@ -32,141 +35,115 @@ VERSION=$(date +"%Y.%m.%d")
 
 echo "═══════════════════════════════════════════"
 echo "  Building $APP_NAME v$VERSION"
+echo "  Identity: $SIGNING_IDENTITY"
 echo "═══════════════════════════════════════════"
 echo ""
 
-# ─── 1. Clean & Build Release ───
-echo "▸ Building release binary..."
+# ─── 1. Clean & Build Universal Release ───
+echo "▸ [1/5] Building universal binary (arm64 + x86_64)..."
 cd "$PROJECT_DIR"
-swift build -c release 2>&1 | tail -3
-BINARY="$PROJECT_DIR/.build/release/TorboBase"
+swift build -c release --arch arm64 --arch x86_64 2>&1 | tail -5
 
+# Universal binary is at .build/apple/Products/Release/ (NOT intermediate dirs)
+BINARY="$PROJECT_DIR/.build/apple/Products/Release/$BUNDLE_NAME"
 if [ ! -f "$BINARY" ]; then
+    BINARY=$(find "$PROJECT_DIR/.build" -name "$BUNDLE_NAME" -path "*/Products/*" -type f -perm +111 2>/dev/null | head -1)
+fi
+
+if [ -z "$BINARY" ] || [ ! -f "$BINARY" ]; then
     echo "✗ Build failed — binary not found"
     exit 1
 fi
-echo "✓ Binary built: $(du -h "$BINARY" | awk '{print $1}')"
+
+# Verify it's universal
+ARCHES=$(file "$BINARY" | grep -o 'arm64\|x86_64' | tr '\n' ' ')
+echo "✓ Binary built: $(du -h "$BINARY" | awk '{print $1}') [$ARCHES]"
 
 # ─── 2. Create App Bundle ───
 echo ""
-echo "▸ Creating app bundle..."
+echo "▸ [2/5] Creating app bundle..."
 rm -rf "$APP_DIR"
 mkdir -p "$APP_DIR/Contents/MacOS"
 mkdir -p "$APP_DIR/Contents/Resources"
 
 # Copy binary
-cp "$BINARY" "$APP_DIR/Contents/MacOS/TorboBase"
+cp "$BINARY" "$APP_DIR/Contents/MacOS/$BUNDLE_NAME"
+
+# Copy Info.plist from the canonical template (single source of truth)
+cp "$INFO_PLIST_TEMPLATE" "$APP_DIR/Contents/Info.plist"
+
+# Inject dynamic version
+/usr/bin/plutil -replace CFBundleShortVersionString -string "$VERSION" "$APP_DIR/Contents/Info.plist"
+/usr/bin/plutil -replace CFBundleVersion -string "$VERSION" "$APP_DIR/Contents/Info.plist"
+
+# PkgInfo
+echo -n "APPL????" > "$APP_DIR/Contents/PkgInfo"
 
 # Copy icon if it exists
 ICON_SRC="$DIST_DIR/AppIcon.icns"
 if [ -f "$ICON_SRC" ]; then
     cp "$ICON_SRC" "$APP_DIR/Contents/Resources/AppIcon.icns"
-    ICON_LINE="<key>CFBundleIconFile</key>
-	<string>AppIcon</string>"
+    echo "  ✓ App icon copied"
 else
-    ICON_LINE=""
-    echo "  ⚠ No AppIcon.icns found — using default icon"
+    echo "  ⚠ No AppIcon.icns found — removing icon refs from Info.plist"
+    /usr/bin/plutil -remove CFBundleIconFile "$APP_DIR/Contents/Info.plist" 2>/dev/null || true
+    /usr/bin/plutil -remove CFBundleIconName "$APP_DIR/Contents/Info.plist" 2>/dev/null || true
 fi
 
-# Create Info.plist
-cat > "$APP_DIR/Contents/Info.plist" << PLIST
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-	<key>CFBundleDevelopmentRegion</key>
-	<string>en</string>
-	<key>CFBundleExecutable</key>
-	<string>TorboBase</string>
-	<key>CFBundleIdentifier</key>
-	<string>$BUNDLE_ID</string>
-	<key>CFBundleName</key>
-	<string>$APP_NAME</string>
-	<key>CFBundleDisplayName</key>
-	<string>$APP_NAME</string>
-	<key>CFBundlePackageType</key>
-	<string>APPL</string>
-	<key>CFBundleShortVersionString</key>
-	<string>$VERSION</string>
-	<key>CFBundleVersion</key>
-	<string>$VERSION</string>
-	<key>LSMinimumSystemVersion</key>
-	<string>14.0</string>
-	<key>NSHighResolutionCapable</key>
-	<true/>
-	<key>LSUIElement</key>
-	<false/>
-	<key>NSMicrophoneUsageDescription</key>
-	<string>Torbo Base needs microphone access for voice chat transcription.</string>
-	<key>NSLocalNetworkUsageDescription</key>
-	<string>Torbo Base uses the local network to serve AI requests to your devices.</string>
-	<key>NSBonjourServices</key>
-	<array>
-		<string>_torbobase._tcp</string>
-	</array>
-	$ICON_LINE
-</dict>
-</plist>
-PLIST
+echo "✓ App bundle created (bundle ID: $BUNDLE_ID)"
 
-echo "✓ App bundle created"
-
-# ─── 3. Code Sign ───
+# ─── 3. Code Sign (inside-out: binary first, then bundle) ───
 echo ""
-echo "▸ Code signing with: $SIGNING_IDENTITY"
+echo "▸ [3/5] Code signing with: $SIGNING_IDENTITY"
 
-# Sign the binary with hardened runtime + entitlements
-cat > /tmp/torbobase-entitlements.plist << 'ENT'
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-	<key>com.apple.security.cs.allow-jit</key>
-	<true/>
-	<key>com.apple.security.cs.allow-unsigned-executable-memory</key>
-	<true/>
-	<key>com.apple.security.cs.disable-library-validation</key>
-	<true/>
-	<key>com.apple.security.network.server</key>
-	<true/>
-	<key>com.apple.security.network.client</key>
-	<true/>
-	<key>com.apple.security.device.audio-input</key>
-	<true/>
-	<key>com.apple.security.files.user-selected.read-write</key>
-	<true/>
-</dict>
-</plist>
-ENT
-
+# Sign the binary FIRST (inside-out for hardened runtime)
+echo "  Signing binary..."
 codesign --force --options runtime \
+    --entitlements "$ENTITLEMENTS" \
     --sign "$SIGNING_IDENTITY" \
-    --entitlements /tmp/torbobase-entitlements.plist \
+    --timestamp \
+    "$APP_DIR/Contents/MacOS/$BUNDLE_NAME"
+
+# Then sign the bundle (seals all resources including Info.plist)
+echo "  Signing app bundle..."
+codesign --force --options runtime \
+    --entitlements "$ENTITLEMENTS" \
+    --sign "$SIGNING_IDENTITY" \
     --timestamp \
     "$APP_DIR"
 
 # Verify
+echo "  Verifying..."
 codesign --verify --deep --strict --verbose=2 "$APP_DIR" 2>&1 | tail -3
-echo "✓ Code signed"
+echo "✓ Code signed and verified"
 
 # ─── 4. Create DMG ───
 echo ""
-echo "▸ Creating DMG..."
+echo "▸ [4/5] Creating DMG..."
 rm -f "$DMG_PATH"
 
-# Create a temporary DMG with the app + Applications symlink
+# Strip xattrs (com.apple.provenance, com.apple.quarantine, com.apple.FinderInfo)
+# These cause TCC "Operation not permitted" errors and codesign --strict warnings
+xattr -rc "$APP_DIR" 2>/dev/null
+
+# Create staging with clean app + Applications symlink
 STAGING="$DIST_DIR/.dmg-staging"
 rm -rf "$STAGING"
 mkdir -p "$STAGING"
-cp -R "$APP_DIR" "$STAGING/"
+# Use tar --no-xattrs to copy without carrying over any macOS metadata
+cd "$DIST_DIR"
+tar cf - --no-xattrs --no-mac-metadata "$APP_NAME.app" | (cd "$STAGING" && tar xf -)
 ln -s /Applications "$STAGING/Applications"
 
-hdiutil create -volname "$APP_NAME" \
-    -srcfolder "$STAGING" \
-    -ov -format UDZO \
-    -imagekey zlib-level=9 \
-    "$DMG_PATH" 2>&1 | tail -2
+# Create DMG using makehybrid (avoids TCC issues with hdiutil create -srcfolder
+# which internally mounts a volume and may be blocked by Gatekeeper/TCC)
+DMG_RAW="$DIST_DIR/${DMG_NAME}-raw.dmg"
+rm -f "$DMG_RAW"
+hdiutil makehybrid -hfs -o "$DMG_RAW" "$STAGING" -hfs-volume-name "TorboBase" 2>&1 | tail -2
 
+# Compress to UDZO format (typically 70%+ savings)
+hdiutil convert "$DMG_RAW" -format UDZO -imagekey zlib-level=9 -o "$DMG_PATH" 2>&1 | tail -2
+rm -f "$DMG_RAW"
 rm -rf "$STAGING"
 
 # Sign the DMG
@@ -175,7 +152,7 @@ echo "✓ DMG created: $(du -h "$DMG_PATH" | awk '{print $1}')"
 
 # ─── 5. Notarize ───
 echo ""
-echo "▸ Submitting for notarization..."
+echo "▸ [5/5] Submitting for notarization..."
 echo "  (This can take 2-10 minutes)"
 
 SUBMIT_OUTPUT=$(xcrun notarytool submit "$DMG_PATH" \
@@ -203,4 +180,5 @@ echo "════════════════════════�
 echo "  ✓ $APP_NAME v$VERSION"
 echo "  ✓ DMG: $DMG_PATH"
 echo "  ✓ Size: $(du -h "$DMG_PATH" | awk '{print $1}')"
+echo "  ✓ Bundle ID: $BUNDLE_ID"
 echo "═══════════════════════════════════════════"
