@@ -1,6 +1,8 @@
 // Copyright 2026 Perceptual Art LLC. All rights reserved.
 // Licensed under Apache 2.0 — see LICENSE file.
 // Torbo Base — Screen Capture Tool
+// macOS only — uses /usr/sbin/screencapture
+#if os(macOS)
 import Foundation
 
 // MARK: - Screen Capture Engine
@@ -49,3 +51,4 @@ actor ScreenCapture {
         }
     }
 }
+#endif

@@ -2,6 +2,8 @@
 // Licensed under Apache 2.0 — see LICENSE file.
 // Torbo Base — DMG Builder Tool Integration
 // Extension to wire DMGBuilder into ToolProcessor
+// macOS only — depends on DMGBuilder.swift
+#if os(macOS)
 import Foundation
 
 extension ToolProcessor {
@@ -49,3 +51,4 @@ extension ToolProcessor {
         return results
     }
 }
+#endif

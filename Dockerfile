@@ -38,20 +38,27 @@ RUN useradd -m -s /bin/bash torbo
 WORKDIR /home/torbo
 
 # Copy binary from builder
-COPY --from=builder /app/.build/release/TorboBase .
+COPY --from=builder /app/.build/release/TorboBase ./torbo-base-server
 
-# Create data directories
-RUN mkdir -p .local/share/TorboBase .config/torbobase && \
+# Create data directories (XDG-compliant: ~/.config/torbobase/)
+RUN mkdir -p .config/torbobase/agents \
+             .config/torbobase/skills \
+             .config/torbobase/memory \
+             .config/torbobase/documents \
+             .config/torbobase/mcp && \
     chown -R torbo:torbo /home/torbo
 
 USER torbo
 
-# Default port
-EXPOSE 4200
+# Default environment
+ENV TORBO_PORT=18790
+ENV TORBO_HOST=0.0.0.0
+
+EXPOSE 18790
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s \
-    CMD curl -sf http://localhost:4200/health || exit 1
+    CMD curl -sf http://localhost:18790/health || exit 1
 
 # Run
-CMD ["./TorboBase"]
+CMD ["./torbo-base-server"]

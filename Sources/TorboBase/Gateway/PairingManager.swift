@@ -60,8 +60,10 @@ final class PairingManager: _PairingManagerBase {
     var qrString: String = ""
     #endif
 
-    // Bonjour
+    // Bonjour (macOS only — NetService not available on Linux)
+    #if os(macOS)
     private var netService: NetService?
+    #endif
     private let bonjourType = "_torbo-base._tcp."
 
     // Code expiration
@@ -102,6 +104,7 @@ final class PairingManager: _PairingManagerBase {
     // MARK: - Bonjour Publishing
 
     func startAdvertising(port: UInt16) {
+        #if os(macOS)
         let machineName = Host.current().localizedName ?? "Mac"
         let serviceName = "Torbo Base (\(machineName))"
 
@@ -121,12 +124,17 @@ final class PairingManager: _PairingManagerBase {
         netService?.setTXTRecord(NetService.data(fromTXTRecord: txt))
         netService?.publish()
         TorboLog.info("Bonjour: advertising \(serviceName) on port \(port)", subsystem: "Pairing")
+        #else
+        TorboLog.info("Bonjour not available on this platform — skipping advertising", subsystem: "Pairing")
+        #endif
     }
 
     func stopAdvertising() {
+        #if os(macOS)
         netService?.stop()
         netService = nil
         TorboLog.info("Bonjour: stopped advertising", subsystem: "Pairing")
+        #endif
     }
 
     // MARK: - Code Generation

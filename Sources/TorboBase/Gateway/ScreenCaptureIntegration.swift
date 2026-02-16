@@ -2,6 +2,8 @@
 // Licensed under Apache 2.0 — see LICENSE file.
 // Torbo Base — Screen Capture Integration
 // Extension to wire ScreenCapture into ToolProcessor
+// macOS only — depends on ScreenCapture.swift
+#if os(macOS)
 import Foundation
 
 extension ToolProcessor {
@@ -49,3 +51,4 @@ extension ToolProcessor {
         return results
     }
 }
+#endif

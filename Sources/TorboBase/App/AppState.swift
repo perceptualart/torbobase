@@ -664,12 +664,25 @@ final class AppState: _TorboObservable {
             let iface = ptr.pointee
             guard iface.ifa_addr.pointee.sa_family == UInt8(AF_INET) else { continue }
             let name = String(cString: iface.ifa_name)
+            #if os(macOS)
             guard name == "en0" || name == "en1" else { continue }
+            #else
+            guard name == "eth0" || name == "en0" else { continue }
+            #endif
             var hostname = [CChar](repeating: 0, count: Int(NI_MAXHOST))
-            if getnameinfo(iface.ifa_addr, socklen_t(iface.ifa_addr.pointee.sa_len),
+            #if os(macOS)
+            let saLen = socklen_t(iface.ifa_addr.pointee.sa_len)
+            #else
+            let saLen = socklen_t(MemoryLayout<sockaddr_in>.size)
+            #endif
+            if getnameinfo(iface.ifa_addr, saLen,
                            &hostname, socklen_t(hostname.count), nil, 0, NI_NUMERICHOST) == 0 {
                 address = String(cString: hostname)
+                #if os(macOS)
                 if name == "en0" { break }
+                #else
+                if name == "eth0" { break }
+                #endif
             }
         }
         return address

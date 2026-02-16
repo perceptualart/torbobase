@@ -1,22 +1,22 @@
 // Copyright 2026 Perceptual Art LLC. All rights reserved.
 // Licensed under Apache 2.0 — see LICENSE file.
-// Torbo Base — Linux Headless Entry Point
-// On Linux, Torbo Base runs as a headless server with no UI.
+// Torbo Base — Headless Server Entry Point
+// On non-macOS platforms, Torbo Base runs as a headless server with no UI.
 // All configuration is via environment variables or the REST API.
 //
-// This file is conditionally compiled — only active on Linux.
+// This file is conditionally compiled — only active on non-macOS.
 // macOS uses TorboBaseApp.swift (SwiftUI app) as entry point instead.
 
-#if os(Linux)
+#if !os(macOS)
 import Foundation
 
 @main
-struct TorboBaseLinux {
+struct TorboBaseServer {
     static func main() async {
         let banner = """
         ╔═══════════════════════════════════════════════════╗
-        ║         Torbo Base — Linux Server Mode            ║
-        ║         © 2026 Perceptual Art LLC                  ║
+        ║         Torbo Base — Headless Server Mode          ║
+        ║         \u{00a9} 2026 Perceptual Art LLC                  ║
         ║                                                   ║
         ║         "All watched over by machines             ║
         ║          of loving grace."                        ║
@@ -28,9 +28,18 @@ struct TorboBaseLinux {
         PlatformPaths.ensureDirectories()
         TorboLog.info("Data directory: \(PlatformPaths.dataDir)", subsystem: "Main")
 
-        // Parse configuration from environment
-        let port = UInt16(ProcessInfo.processInfo.environment["TORBO_PORT"] ?? "8420") ?? 8420
+        // Migrate secrets (file-based keychain on non-macOS)
+        KeychainManager.migrateFromUserDefaults()
+
+        // Load persisted settings
+        AppState.shared.loadPersistedData()
+
+        // Parse configuration from environment (overrides persisted settings)
+        let port = UInt16(ProcessInfo.processInfo.environment["TORBO_PORT"] ?? "18790") ?? 18790
         let host = ProcessInfo.processInfo.environment["TORBO_HOST"] ?? "127.0.0.1"
+
+        // Update AppState with configured port
+        await MainActor.run { AppState.shared.serverPort = port }
 
         TorboLog.info("Starting server on \(host):\(port)", subsystem: "Main")
         TorboLog.info("Set TORBO_PORT and TORBO_HOST to change", subsystem: "Main")
@@ -45,10 +54,10 @@ struct TorboBaseLinux {
         TorboLog.info("Initializing agent configs...", subsystem: "Main")
         _ = await AgentConfigManager.shared.listAgents()
 
-        // Start the gateway server (NIO path on Linux)
-        TorboLog.info("Starting NIO gateway server...", subsystem: "Main")
-        // The NIOServer is already conditionally compiled for Linux
-        // GatewayServer.shared handles the startup
+        // Start the gateway server — this is the critical call that was missing
+        TorboLog.info("Starting gateway server...", subsystem: "Main")
+        await GatewayServer.shared.start(appState: AppState.shared)
+        TorboLog.info("Gateway running on port \(port)", subsystem: "Main")
 
         // Start background services
         TorboLog.info("Starting proactive agent...", subsystem: "Main")
@@ -76,7 +85,9 @@ struct TorboBaseLinux {
         }
 
         TorboLog.info("All systems online. Press Ctrl+C to stop.", subsystem: "Main")
-        TorboLog.info("API: http://\(host):\(port)/v1/", subsystem: "Main")
+        TorboLog.info("API:       http://\(host):\(port)/v1/", subsystem: "Main")
+        TorboLog.info("Chat:      http://\(host):\(port)/chat", subsystem: "Main")
+        TorboLog.info("Dashboard: http://\(host):\(port)/dashboard", subsystem: "Main")
 
         // Graceful shutdown on SIGINT/SIGTERM via ShutdownCoordinator
         signal(SIGINT, SIG_IGN)

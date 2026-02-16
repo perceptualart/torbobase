@@ -109,6 +109,7 @@ actor ChatRoomStore {
 
 actor GatewayServer {
     static let shared = GatewayServer()
+    static let serverStartTime = Date()
 
     #if canImport(Network)
     private var listener: NWListener?
@@ -482,7 +483,12 @@ actor GatewayServer {
             guard let sa = ptr.pointee.ifa_addr else { continue }
             guard sa.pointee.sa_family == UInt8(AF_INET) else { continue }
             var hostname = [CChar](repeating: 0, count: Int(NI_MAXHOST))
-            getnameinfo(sa, socklen_t(sa.pointee.sa_len),
+            #if os(macOS)
+            let saLen = socklen_t(sa.pointee.sa_len)
+            #else
+            let saLen = socklen_t(MemoryLayout<sockaddr_in>.size)
+            #endif
+            getnameinfo(sa, saLen,
                         &hostname, socklen_t(hostname.count), nil, 0, NI_NUMERICHOST)
             let ip = String(cString: hostname)
             if ip.hasPrefix("100.") {
@@ -551,6 +557,15 @@ actor GatewayServer {
                                 "Permissions-Policy": "microphone=(self), camera=()"
                               ],
                               body: Data(WebChatHTML.page.utf8))
+        }
+
+        // Web dashboard UI — serves the built-in management dashboard
+        if req.method == "GET" && req.path == "/dashboard" {
+            return HTTPResponse(statusCode: 200,
+                              headers: [
+                                "Content-Type": "text/html; charset=utf-8"
+                              ],
+                              body: Data(DashboardHTML.page.utf8))
         }
 
         // Access level — no auth
@@ -625,6 +640,11 @@ actor GatewayServer {
                        required: .chatOnly, granted: false, detail: "Gateway OFF")
             return HTTPResponse(statusCode: 403, headers: ["Content-Type": "application/json"],
                               body: Data("{\"error\":\"Gateway is OFF\"}".utf8))
+        }
+
+        // MARK: - Dashboard API
+        if req.path.hasPrefix("/v1/dashboard") || req.path.hasPrefix("/v1/config") || req.path.hasPrefix("/v1/audit") {
+            return await handleDashboardRoute(req, clientIP: clientIP)
         }
 
         // MARK: - LoA (Library of Alexandria) Shortcuts
@@ -3021,6 +3041,210 @@ actor GatewayServer {
         } catch {
             return HTTPResponse.serverError("Image generation error: \(error.localizedDescription)")
         }
+    }
+
+    // MARK: - Dashboard API
+
+    /// Dashboard management endpoints for the web UI.
+    /// Routes: /v1/dashboard/*, /v1/config/*, /v1/audit/*
+    private func handleDashboardRoute(_ req: HTTPRequest, clientIP: String) async -> HTTPResponse {
+        let stateRef = appState
+        let currentLevel = await MainActor.run { stateRef?.accessLevel ?? .off }
+
+        // GET /v1/dashboard/status — Aggregate server status
+        if req.method == "GET" && req.path == "/v1/dashboard/status" {
+            return await guardedRoute(level: .chatOnly, current: currentLevel, clientIP: clientIP, req: req) {
+                let s = self.appState
+                let state = await MainActor.run { () -> [String: Any] in
+                    let uptime = Date().timeIntervalSince(GatewayServer.serverStartTime)
+                    let hours = Int(uptime) / 3600
+                    let mins = (Int(uptime) % 3600) / 60
+
+                    var status: [String: Any] = [
+                        "server": [
+                            "running": s?.serverRunning ?? false,
+                            "port": s?.serverPort ?? 0,
+                            "uptime": "\(hours)h \(mins)m",
+                            "uptimeSeconds": Int(uptime),
+                            "version": TorboVersion.current
+                        ] as [String: Any],
+                        "accessLevel": [
+                            "current": s?.accessLevel.rawValue ?? 0,
+                            "name": s?.accessLevel.name ?? "unknown"
+                        ] as [String: Any],
+                        "connections": [
+                            "active": s?.connectedClients ?? 0,
+                            "totalRequests": s?.totalRequests ?? 0,
+                            "blockedRequests": s?.blockedRequests ?? 0
+                        ] as [String: Any],
+                        "ollama": [
+                            "running": s?.ollamaRunning ?? false,
+                            "installed": s?.ollamaInstalled ?? false,
+                            "models": s?.ollamaModels ?? []
+                        ] as [String: Any],
+                        "settings": [
+                            "logLevel": s?.logLevel ?? "info",
+                            "rateLimit": s?.rateLimit ?? 60,
+                            "maxConcurrentTasks": s?.maxConcurrentTasks ?? 3,
+                            "lanAccess": s?.allowLANAccess ?? false
+                        ] as [String: Any]
+                    ]
+
+                    // Bridge status
+                    var bridges: [String: Bool] = [:]
+                    bridges["telegram"] = s?.telegramConnected ?? false
+                    bridges["discord"] = s?.discordBotToken != nil
+                    bridges["slack"] = s?.slackBotToken != nil
+                    bridges["signal"] = s?.signalPhoneNumber != nil
+                    bridges["whatsapp"] = s?.whatsappAccessToken != nil
+                    status["bridges"] = bridges
+
+                    return status
+                }
+
+                // Add LoA stats (async)
+                var response = state
+                let totalScrolls = await MemoryIndex.shared.count
+                let categories = await MemoryIndex.shared.categoryCounts()
+                let entityCount = await MemoryIndex.shared.knownEntities.count
+                response["loa"] = [
+                    "totalScrolls": totalScrolls,
+                    "categories": categories,
+                    "entityCount": entityCount
+                ] as [String: Any]
+
+                return HTTPResponse.json(response)
+            }
+        }
+
+        // GET /v1/config/apikeys — List configured API keys (masked)
+        if req.method == "GET" && req.path == "/v1/config/apikeys" {
+            return await guardedRoute(level: .readFiles, current: currentLevel, clientIP: clientIP, req: req) {
+                var keys: [[String: Any]] = []
+                for provider in CloudProvider.allCases {
+                    let raw = KeychainManager.getAPIKey(for: provider)
+                    let configured = !raw.isEmpty
+                    var masked = ""
+                    if configured && raw.count > 10 {
+                        masked = String(raw.prefix(6)) + "..." + String(raw.suffix(4))
+                    } else if configured {
+                        masked = "***configured***"
+                    }
+                    keys.append([
+                        "provider": provider.rawValue,
+                        "keyName": provider.keyName,
+                        "configured": configured,
+                        "masked": masked
+                    ] as [String: Any])
+                }
+                return HTTPResponse.json(["keys": keys])
+            }
+        }
+
+        // PUT /v1/config/apikeys — Set/delete API keys
+        if req.method == "PUT" && req.path == "/v1/config/apikeys" {
+            return await guardedRoute(level: .fullAccess, current: currentLevel, clientIP: clientIP, req: req) {
+                guard let body = req.jsonBody, let keys = body["keys"] as? [String: String] else {
+                    return HTTPResponse.badRequest("Missing 'keys' object")
+                }
+                KeychainManager.setAllAPIKeys(keys)
+                let sRef = self.appState
+                await MainActor.run { sRef?.cloudAPIKeys = KeychainManager.getAllAPIKeys() }
+                return HTTPResponse.json(["status": "updated", "count": keys.count])
+            }
+        }
+
+        // GET /v1/config/settings — Current settings
+        if req.method == "GET" && req.path == "/v1/config/settings" {
+            return await guardedRoute(level: .chatOnly, current: currentLevel, clientIP: clientIP, req: req) {
+                let s = self.appState
+                let settings = await MainActor.run { () -> [String: Any] in
+                    [
+                        "serverPort": s?.serverPort ?? 0,
+                        "accessLevel": s?.accessLevel.rawValue ?? 0,
+                        "logLevel": s?.logLevel ?? "info",
+                        "rateLimit": s?.rateLimit ?? 60,
+                        "maxConcurrentTasks": s?.maxConcurrentTasks ?? 3,
+                        "lanAccess": s?.allowLANAccess ?? false,
+                        "systemPromptEnabled": s?.systemPromptEnabled ?? false,
+                        "systemPrompt": s?.systemPrompt ?? ""
+                    ] as [String: Any]
+                }
+                return HTTPResponse.json(settings)
+            }
+        }
+
+        // PUT /v1/config/settings — Update settings
+        if req.method == "PUT" && req.path == "/v1/config/settings" {
+            return await guardedRoute(level: .fullAccess, current: currentLevel, clientIP: clientIP, req: req) {
+                guard let body = req.jsonBody else {
+                    return HTTPResponse.badRequest("Missing JSON body")
+                }
+                let s = self.appState
+                await MainActor.run {
+                    if let logLevel = body["logLevel"] as? String {
+                        s?.logLevel = logLevel
+                    }
+                    if let rateLimit = body["rateLimit"] as? Int {
+                        s?.rateLimit = rateLimit
+                    }
+                    if let maxTasks = body["maxConcurrentTasks"] as? Int {
+                        s?.maxConcurrentTasks = maxTasks
+                    }
+                    if let lan = body["lanAccess"] as? Bool {
+                        s?.allowLANAccess = lan
+                    }
+                    if let enabled = body["systemPromptEnabled"] as? Bool {
+                        s?.systemPromptEnabled = enabled
+                    }
+                    if let prompt = body["systemPrompt"] as? String {
+                        s?.systemPrompt = prompt
+                    }
+                    if let level = body["accessLevel"] as? Int,
+                       let newLevel = AccessLevel(rawValue: level) {
+                        s?.accessLevel = newLevel
+                    }
+                }
+                return HTTPResponse.json(["status": "updated"])
+            }
+        }
+
+        // GET /v1/audit/log — Paginated audit log
+        if req.method == "GET" && req.path == "/v1/audit/log" {
+            return await guardedRoute(level: .readFiles, current: currentLevel, clientIP: clientIP, req: req) {
+                let query = req.queryParams
+                let limit = min(Int(query["limit"] ?? "50") ?? 50, 200)
+                let offset = Int(query["offset"] ?? "0") ?? 0
+
+                let s = self.appState
+                let (entries, total) = await MainActor.run { () -> ([[String: Any]], Int) in
+                    let log = s?.auditLog ?? []
+                    let total = log.count
+                    let sliced = Array(log.dropFirst(offset).prefix(limit))
+                    let mapped: [[String: Any]] = sliced.map { entry in
+                        let isoFormatter = ISO8601DateFormatter()
+                        return [
+                            "timestamp": isoFormatter.string(from: entry.timestamp),
+                            "clientIP": entry.clientIP,
+                            "method": entry.method,
+                            "path": entry.path,
+                            "requiredLevel": entry.requiredLevel.rawValue,
+                            "granted": entry.granted,
+                            "detail": entry.detail
+                        ] as [String: Any]
+                    }
+                    return (mapped, total)
+                }
+                return HTTPResponse.json([
+                    "entries": entries,
+                    "total": total,
+                    "limit": limit,
+                    "offset": offset
+                ] as [String: Any])
+            }
+        }
+
+        return HTTPResponse.notFound()
     }
 
     // MARK: - LoA (Library of Alexandria) Shortcuts

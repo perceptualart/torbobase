@@ -1,6 +1,8 @@
 // Copyright 2026 Perceptual Art LLC. All rights reserved.
 // Licensed under Apache 2.0 — see LICENSE file.
 // Torbo Base — DMG Builder Tool
+// macOS only — uses hdiutil, sips, iconutil
+#if os(macOS)
 import Foundation
 
 // MARK: - DMG Builder
@@ -265,3 +267,4 @@ actor DMGBuilder {
         }
     }
 }
+#endif
