@@ -39,7 +39,7 @@ Any device on your network — Mac, PC, phone, tablet — can connect through th
 
 ## Install
 
-1. Download **TorboBase-3.0.0.dmg** from the [latest release](https://github.com/michaelmurphyllc/torbo-base/releases/latest)
+1. Download **TorboBase-3.0.0.dmg** from the [latest release](https://github.com/perceptualart/torbo-base/releases/latest)
 2. Open the DMG and drag **Torbo Base** to Applications
 3. Launch — the setup wizard walks you through configuration
 
@@ -48,7 +48,7 @@ Any device on your network — Mac, PC, phone, tablet — can connect through th
 ## Build from Source
 
 ```bash
-git clone https://github.com/michaelmurphyllc/torbo-base.git
+git clone https://github.com/perceptualart/torbo-base.git
 cd torbo-base
 swift build
 swift run TorboBase
