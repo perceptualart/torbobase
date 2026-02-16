@@ -181,13 +181,13 @@ actor DMGBuilder {
                 if output.hasPrefix("v") {
                     return String(output.dropFirst())
                 }
-                return output.isEmpty ? "2.0.0" : output
+                return output.isEmpty ? TorboVersion.current : output
             }
         } catch {
             // Fall through to default
         }
         
-        return "2.0.0"
+        return TorboVersion.current
     }
     
     /// Fallback build method if build.sh doesn't exist

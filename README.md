@@ -1,8 +1,8 @@
-# ORB Base
+# Torbo Base
 
 **Your local AI gateway. Private. Powerful. Yours.**
 
-ORB Base is a macOS application that runs a local OpenAI-compatible API gateway on your network. It routes requests to local models (via Ollama) or cloud providers (Anthropic, OpenAI, Google) — giving you a single endpoint for all your AI tools.
+Torbo Base is a macOS application that runs a local OpenAI-compatible API gateway on your network. It routes requests to local models (via Ollama) or cloud providers (Anthropic, OpenAI, Google) — giving you a single endpoint for all your AI tools.
 
 Any device on your network — Mac, PC, phone, tablet — can connect through the built-in web chat or any OpenAI-compatible client.
 
@@ -27,22 +27,32 @@ Any device on your network — Mac, PC, phone, tablet — can connect through th
 - **Web chat UI** — built-in chat interface at `/chat` for any browser
 - **Zero data collection** — 100% private, no telemetry, no analytics
 
-## Requirements
+## System Requirements
 
-- macOS 14 (Sonoma) or later
-- [Ollama](https://ollama.com) (optional, for local models)
-- API keys for cloud providers (optional)
+- **macOS 13.0 (Ventura)** or later
+- **Apple Silicon or Intel Mac** — Universal Binary (arm64 + x86_64)
+- [Ollama](https://ollama.com) — recommended for local model inference
+- API keys (optional):
+  - [Anthropic](https://console.anthropic.com/) — Claude models
+  - [OpenAI](https://platform.openai.com/) — GPT models, DALL-E, Whisper
+  - [Google](https://aistudio.google.com/) — Gemini models
 
-## Quick Start
+## Install
+
+1. Download **TorboBase-3.0.0.dmg** from the [latest release](https://github.com/michaelmurphyllc/torbo-base/releases/latest)
+2. Open the DMG and drag **Torbo Base** to Applications
+3. Launch — the setup wizard walks you through configuration
+
+> Torbo Base is notarized and stapled by Apple. No Gatekeeper warnings.
+
+## Build from Source
 
 ```bash
-git clone https://github.com/perceptualart/ORBBase.git
-cd ORBBase
+git clone https://github.com/michaelmurphyllc/torbo-base.git
+cd torbo-base
 swift build
-swift run ORBBase
+swift run TorboBase
 ```
-
-The setup wizard will walk you through configuration on first launch.
 
 ## Connecting Clients
 
@@ -101,7 +111,10 @@ Sources/ORBBase/
 
 - All API keys stored in macOS Keychain
 - Bearer token required for all API requests
-- 6-tier access control limits what clients can do
+- **6-tier access control** — OFF → CHAT → READ → WRITE → EXEC → FULL
+- **CORS hardening** — strict origin validation, no wildcard in production
+- **Command execution allowlist** — only approved commands can run
+- **SSRF protection** — blocks requests to internal/private IP ranges
 - Sandbox paths restrict file access to approved directories
 - Rate limiting prevents abuse
 - Full audit log of all requests
@@ -117,4 +130,4 @@ Proprietary — Copyright © 2026 Perceptual Art LLC. All rights reserved.
 
 See [LICENSE](LICENSE) for details.
 
-"ORB", "ORB Base", and the ORB logo are trademarks of Perceptual Art LLC.
+"Torbo", "Torbo Base", and the Torbo logo are trademarks of Perceptual Art LLC.
