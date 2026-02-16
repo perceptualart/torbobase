@@ -239,12 +239,12 @@ struct RainbowAccessSlider: View {
     }
 
     private func positionForLevel(_ lv: AccessLevel, width: CGFloat) -> CGFloat {
-        let usable = width - 28 // padding
+        let usable = max(1, width - 28) // padding; guard against zero
         return 14 + usable * (CGFloat(lv.rawValue) / (levelCount - 1))
     }
 
     private func levelFromPosition(_ x: CGFloat, width: CGFloat) -> AccessLevel {
-        let usable = width - 28
+        let usable = max(1, width - 28)
         let normalized = (x - 14) / usable
         let index = Int(round(normalized * (levelCount - 1)))
         let clamped = max(0, min(5, index))

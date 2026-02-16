@@ -13,13 +13,18 @@ struct OrbRenderer: View {
 
     @State private var smoothLevel: Float = 0.15
     @State private var targetLevel: Float = 0.15
-    @State private var appearScale: CGFloat = 0.0
+    @State private var appearScale: CGFloat = 0.001
 
     var body: some View {
         TimelineView(.animation(minimumInterval: 1/30)) { timeline in
             let t = timeline.date.timeIntervalSinceReferenceDate
 
             Canvas { context, size in
+                // Guard against zero-size frames during initial layout —
+                // applying transforms/scales to a zero-dimension view produces
+                // a singular CGAffineTransform that crashes on Intel Macs.
+                guard size.width > 1, size.height > 1 else { return }
+
                 let center = CGPoint(x: size.width / 2, y: size.height / 2)
                 let baseRadius = min(size.width, size.height) * 0.45
 
