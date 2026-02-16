@@ -321,8 +321,9 @@ actor WorkflowEngine {
             let matches = regex.matches(in: text, range: NSRange(text.startIndex..., in: text))
             guard matches.count >= 2 else { continue }
 
-            return matches.enumerated().map { idx, match in
-                let desc = String(text[Range(match.range(at: 2), in: text)!]).trimmingCharacters(in: .whitespacesAndNewlines)
+            return matches.enumerated().compactMap { idx, match in
+                guard let range = Range(match.range(at: 2), in: text) else { return nil }
+                let desc = String(text[range]).trimmingCharacters(in: .whitespacesAndNewlines)
                 return WorkflowStep(
                     index: idx,
                     title: generateStepTitle(desc),

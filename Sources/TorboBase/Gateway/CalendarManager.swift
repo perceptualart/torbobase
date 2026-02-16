@@ -57,7 +57,20 @@ actor CalendarManager {
         if hasAccess { return true }
 
         do {
-            let granted = try await eventStore.requestFullAccessToEvents()
+            let granted: Bool
+            if #available(macOS 14, *) {
+                granted = try await eventStore.requestFullAccessToEvents()
+            } else {
+                granted = try await withCheckedThrowingContinuation { continuation in
+                    eventStore.requestAccess(to: .event) { result, error in
+                        if let error = error {
+                            continuation.resume(throwing: error)
+                        } else {
+                            continuation.resume(returning: result)
+                        }
+                    }
+                }
+            }
             hasAccess = granted
             if granted {
                 TorboLog.info("Access granted", subsystem: "Calendar")

@@ -1466,7 +1466,7 @@ enum WebChatHTML {
         html = html.replace(/^[\\-\\*] (.+)$/gm, '<li>$1</li>');
         html = html.replace(/(<li>[\\s\\S]*?<\\/li>)/g, '<ul>$1</ul>');
         html = html.replace(/^\\d+\\. (.+)$/gm, '<li>$1</li>');
-        html = html.replace(/\\[([^\\]]+)\\]\\(([^)]+)\\)/g, '<a href="$2" target="_blank">$1</a>');
+        html = html.replace(/\\[([^\\]]+)\\]\\((https?:\\/\\/[^)]+)\\)/g, '<a href="$2" target="_blank">$1</a>');
         html = html.replace(/^---$/gm, '<hr style="border:none;border-top:1px solid rgba(255,255,255,0.1);margin:8px 0">');
         html = html.replace(/\\n/g, '<br>');
         html = html.replace(/<\\/(pre|h[123]|ul|ol|li|hr)><br>/g, '</$1>');

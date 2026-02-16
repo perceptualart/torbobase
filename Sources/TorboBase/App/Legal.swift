@@ -64,7 +64,7 @@ enum Legal {
     """
 
     static let aboutText = """
-    Torbo Base v2.0.0
+    Torbo Base v\(TorboVersion.current)
     Local AI Gateway with Access Control
 
     © 2026 Perceptual Art LLC

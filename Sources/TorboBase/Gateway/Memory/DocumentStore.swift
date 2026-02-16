@@ -329,9 +329,6 @@ actor DocumentStore {
 
     private func loadPDF(path: String) -> String? {
         // Shell out to pdftotext or use strings extraction
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/mdimporter")
-        // Fallback: use strings command to extract text
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: "/usr/bin/env")
         proc.arguments = ["python3", "-c", """

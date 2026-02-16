@@ -176,34 +176,41 @@ actor EmailManager {
     }
     
     /// Draft a new email (saved but not sent)
+    /// Escape a string for safe use inside AppleScript double-quoted strings.
+    private func escapeForAppleScript(_ s: String) -> String {
+        s.replacingOccurrences(of: "\\", with: "\\\\")
+         .replacingOccurrences(of: "\"", with: "\\\"")
+    }
+
     func draftEmail(to: String, subject: String, body: String, cc: String? = nil) async -> String {
-        // Escape quotes in the email content
-        let escapedSubject = subject.replacingOccurrences(of: "\"", with: "\\\"")
-        let escapedBody = body.replacingOccurrences(of: "\"", with: "\\\"")
-        
+        let escapedSubject = escapeForAppleScript(subject)
+        let escapedBody = escapeForAppleScript(body)
+
         var script = """
         tell application "Mail"
             set newMessage to make new outgoing message with properties {subject:"\(escapedSubject)", content:"\(escapedBody)", visible:true}
-            
+
             tell newMessage
         """
-        
+
         // Add recipients
         let recipients = to.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
         for recipient in recipients {
+            let escaped = escapeForAppleScript(recipient)
             script += """
-            
-                make new to recipient at end of to recipients with properties {address:"\(recipient)"}
+
+                make new to recipient at end of to recipients with properties {address:"\(escaped)"}
             """
         }
-        
+
         // Add CC recipients if provided
         if let cc = cc {
             let ccRecipients = cc.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
             for recipient in ccRecipients {
+                let escaped = escapeForAppleScript(recipient)
                 script += """
-                
-                make new cc recipient at end of cc recipients with properties {address:"\(recipient)"}
+
+                make new cc recipient at end of cc recipients with properties {address:"\(escaped)"}
                 """
             }
         }

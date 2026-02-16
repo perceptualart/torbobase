@@ -277,7 +277,7 @@ private struct HealthSectionHeader: View {
 /// Renamed from "Network Health" to "System Status" to avoid implying
 /// that the user's internet is down when local services aren't running.
 struct NetworkHealthView: View {
-    @Environment(AppState.self) private var state
+    @EnvironmentObject private var state: AppState
     @State private var localChecks: [HealthCheck] = []
     @State private var remoteChecks: [HealthCheck] = []
     @State private var cloudChecks: [HealthCheck] = []

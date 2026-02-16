@@ -7,11 +7,10 @@ import SwiftUI
 import CoreImage.CIFilterBuiltins
 
 struct DashboardView: View {
-    @Environment(AppState.self) private var state
+    @EnvironmentObject private var state: AppState
     @ObservedObject private var pairing = PairingManager.shared
 
     var body: some View {
-        @Bindable var state = state
 
         NavigationSplitView {
             // Sidebar
@@ -122,11 +121,10 @@ struct DashboardView: View {
 // MARK: - Home View (The Orb + Overview)
 
 struct HomeView: View {
-    @Environment(AppState.self) private var state
+    @EnvironmentObject private var state: AppState
     @ObservedObject private var pairing = PairingManager.shared
 
     var body: some View {
-        @Bindable var state = state
 
         ScrollView {
             VStack(spacing: 20) {
@@ -385,7 +383,7 @@ struct HomeView: View {
 // MARK: - Models View
 
 struct ModelsView: View {
-    @Environment(AppState.self) private var state
+    @EnvironmentObject private var state: AppState
     @State private var modelToInstall: String = ""
     @State private var showInstallGuide = false
 
@@ -646,7 +644,7 @@ struct ModelsView: View {
 // MARK: - Sessions View
 
 struct SessionsView: View {
-    @Environment(AppState.self) private var state
+    @EnvironmentObject private var state: AppState
 
     var body: some View {
         ScrollView {
@@ -727,10 +725,9 @@ struct SessionsView: View {
 // MARK: - Security View
 
 struct SecurityView: View {
-    @Environment(AppState.self) private var state
+    @EnvironmentObject private var state: AppState
 
     var body: some View {
-        @Bindable var state = state
 
         ScrollView {
             VStack(alignment: .leading, spacing: 24) {
@@ -820,7 +817,7 @@ struct SecurityView: View {
                         .background(Color.white.opacity(0.06))
                         .cornerRadius(4)
                         .frame(width: 60)
-                        .onChange(of: state.rateLimit) { _, val in
+                        .onChange(of: state.rateLimit) { val in
                             AppConfig.rateLimit = val
                         }
                 }
@@ -901,8 +898,10 @@ struct SecurityView: View {
 // MARK: - Settings View
 
 struct SettingsView: View {
-    @Environment(AppState.self) private var state
+    @EnvironmentObject private var state: AppState
     @State private var newPath = ""
+    @State private var newOrigin = ""
+    @State private var newCommand = ""
     @State private var showClearConfirm = false
     @State private var storageSize = "Calculating..."
     @State private var launchAtLogin = LaunchAtLogin.isEnabled
@@ -918,7 +917,6 @@ struct SettingsView: View {
     ]
 
     var body: some View {
-        @Bindable var state = state
 
         ScrollView {
             VStack(alignment: .leading, spacing: 24) {
@@ -979,7 +977,7 @@ struct SettingsView: View {
                 }
                 .toggleStyle(.switch)
                 .controlSize(.small)
-                .onChange(of: launchAtLogin) { _, enabled in
+                .onChange(of: launchAtLogin) { enabled in
                     LaunchAtLogin.setEnabled(enabled)
                 }
 
@@ -1166,6 +1164,112 @@ struct SettingsView: View {
                     .buttonStyle(.plain)
                     .foregroundStyle(.cyan.opacity(0.6))
                 }
+
+                // CORS Allowed Origins
+                SectionHeader(title: "CORS ALLOWED ORIGINS")
+                Text("Origins allowed to make cross-origin requests. Sensitive endpoints (/exec, /v1/fetch, /v1/browser) never include CORS headers.")
+                    .font(.system(size: 10))
+                    .foregroundStyle(.white.opacity(0.2))
+                VStack(spacing: 2) {
+                    ForEach(AppConfig.allowedCORSOrigins, id: \.self) { origin in
+                        HStack {
+                            Image(systemName: "network").font(.system(size: 10)).foregroundStyle(.cyan.opacity(0.4))
+                            Text(origin).font(.system(size: 11, design: .monospaced)).foregroundStyle(.white.opacity(0.6))
+                            Spacer()
+                            Button {
+                                var origins = AppConfig.allowedCORSOrigins
+                                origins.removeAll(where: { $0 == origin })
+                                AppConfig.allowedCORSOrigins = origins
+                            } label: {
+                                Image(systemName: "minus.circle").font(.system(size: 10)).foregroundStyle(.red.opacity(0.5))
+                            }
+                            .buttonStyle(.plain)
+                        }
+                        .padding(.horizontal, 8).padding(.vertical, 3)
+                        .background(Color.white.opacity(0.02)).cornerRadius(4)
+                    }
+                }
+                HStack {
+                    TextField("Add origin (e.g. http://localhost:3000)...", text: $newOrigin)
+                        .textFieldStyle(.plain)
+                        .font(.system(size: 11, design: .monospaced))
+                        .padding(.horizontal, 8).padding(.vertical, 4)
+                        .background(Color.white.opacity(0.06)).cornerRadius(4)
+                    Button {
+                        guard !newOrigin.isEmpty else { return }
+                        var origins = AppConfig.allowedCORSOrigins
+                        if !origins.contains(newOrigin) { origins.append(newOrigin) }
+                        AppConfig.allowedCORSOrigins = origins
+                        newOrigin = ""
+                    } label: {
+                        Image(systemName: "plus.circle").font(.system(size: 12))
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.cyan.opacity(0.6))
+                }
+
+                // Allowed Commands (Execution Allowlist)
+                SectionHeader(title: "ALLOWED COMMANDS")
+                Text("Commands allowed for sandboxed execution (/exec). Full access (/exec/shell) is unrestricted.")
+                    .font(.system(size: 10))
+                    .foregroundStyle(.white.opacity(0.2))
+                VStack(spacing: 2) {
+                    let commands = AppConfig.allowedCommands
+                    // Show in a compact wrapped layout
+                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 80), spacing: 4)], spacing: 4) {
+                        ForEach(commands, id: \.self) { cmd in
+                            HStack(spacing: 4) {
+                                Text(cmd).font(.system(size: 10, design: .monospaced)).foregroundStyle(.white.opacity(0.6))
+                                Button {
+                                    var cmds = AppConfig.allowedCommands
+                                    cmds.removeAll(where: { $0 == cmd })
+                                    AppConfig.allowedCommands = cmds
+                                } label: {
+                                    Image(systemName: "xmark").font(.system(size: 7)).foregroundStyle(.red.opacity(0.5))
+                                }
+                                .buttonStyle(.plain)
+                            }
+                            .padding(.horizontal, 6).padding(.vertical, 3)
+                            .background(Color.white.opacity(0.04)).cornerRadius(4)
+                        }
+                    }
+                }
+                HStack {
+                    TextField("Add command...", text: $newCommand)
+                        .textFieldStyle(.plain)
+                        .font(.system(size: 11, design: .monospaced))
+                        .padding(.horizontal, 8).padding(.vertical, 4)
+                        .background(Color.white.opacity(0.06)).cornerRadius(4)
+                    Button {
+                        guard !newCommand.isEmpty else { return }
+                        var cmds = AppConfig.allowedCommands
+                        if !cmds.contains(newCommand) { cmds.append(newCommand) }
+                        AppConfig.allowedCommands = cmds
+                        newCommand = ""
+                    } label: {
+                        Image(systemName: "plus.circle").font(.system(size: 12))
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.cyan.opacity(0.6))
+                }
+
+                // SSRF Protection
+                SectionHeader(title: "SSRF PROTECTION")
+                Toggle(isOn: Binding(
+                    get: { AppConfig.ssrfProtectionEnabled },
+                    set: { AppConfig.ssrfProtectionEnabled = $0 }
+                )) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Block requests to private/internal IPs")
+                            .font(.system(size: 12))
+                            .foregroundStyle(.white.opacity(0.6))
+                        Text("Prevents /v1/fetch from accessing localhost, LAN, and cloud metadata endpoints. Disable only if you need to fetch from local services.")
+                            .font(.system(size: 10))
+                            .foregroundStyle(.white.opacity(0.2))
+                    }
+                }
+                .toggleStyle(.switch)
+                .controlSize(.small)
 
                 // System Prompt
                 SectionHeader(title: "SYSTEM PROMPT")
@@ -1598,7 +1702,7 @@ struct AuditRow: View {
 
 #Preview {
     DashboardView()
-        .environment(AppState.shared)
+        .environmentObject(AppState.shared)
         .frame(width: 800, height: 700)
 }
 

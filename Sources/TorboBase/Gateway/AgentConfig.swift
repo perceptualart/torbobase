@@ -372,10 +372,9 @@ actor AgentConfigManager {
                 try? encoded.write(to: sidFile, options: .atomic)
             }
             TorboLog.info("Created default SiD config", subsystem: "Agents")
-        } else {
+        } else if var sid = loaded["sid"] {
             // SiD exists on disk — only update identity fields if they still match
             // a known previous default. If the user has customized them, hands off.
-            var sid = loaded["sid"]!
             let defaults = AgentConfig.sid
             var changed = false
 

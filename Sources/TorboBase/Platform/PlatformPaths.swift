@@ -101,21 +101,4 @@ enum PlatformPaths {
         return path
     }
 
-    /// Check if we're running on Linux.
-    static var isLinux: Bool {
-        #if os(Linux)
-        return true
-        #else
-        return false
-        #endif
-    }
-
-    /// Check if we're running on macOS.
-    static var isMacOS: Bool {
-        #if os(macOS)
-        return true
-        #else
-        return false
-        #endif
-    }
 }

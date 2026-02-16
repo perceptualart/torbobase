@@ -224,7 +224,7 @@ FIRST LAUNCH
   5. Pair your iPhone via the Home tab
 
 REQUIREMENTS
-  • macOS 14.0 (Sonoma) or later
+  • macOS 13.0 (Ventura) or later
   • Apple Silicon or Intel Mac
   • Ollama (https://ollama.com) for local models
   • Optional: Anthropic / OpenAI / Google API keys
@@ -307,7 +307,7 @@ echo "▸ [6/6] Verifying..."
 APP_SIZE=$(du -sh "${APP_BUNDLE}" | awk '{print $1}')
 echo "  App size: ${APP_SIZE}"
 echo "  Bundle ID: ai.torbo.base"
-echo "  Min macOS: 14.0"
+echo "  Min macOS: 13.0"
 echo ""
 echo "  ╔═══════════════════════════════════════╗"
 echo "  ║   BUILD COMPLETE                      ║"

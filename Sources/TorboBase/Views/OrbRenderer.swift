@@ -81,10 +81,10 @@ struct OrbRenderer: View {
             }
         }
         .scaleEffect(appearScale)
-        .onChange(of: audioLevels) { _, newLevels in
+        .onChange(of: audioLevels) { newLevels in
             targetLevel = calculateSmoothedLevel(from: newLevels)
         }
-        .onChange(of: targetLevel) { _, newTarget in
+        .onChange(of: targetLevel) { newTarget in
             withAnimation(.easeOut(duration: 0.08)) {
                 smoothLevel = newTarget
             }

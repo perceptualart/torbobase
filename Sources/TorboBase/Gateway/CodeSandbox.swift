@@ -300,7 +300,9 @@ actor CodeSandbox {
     /// Get a generated file's data for serving via HTTP
     func getFile(path: String) -> Data? {
         // Security: only serve files from our sandbox directory
-        guard path.hasPrefix(baseDir) else {
+        let resolvedPath = (path as NSString).standardizingPath
+        let resolvedBase = (baseDir as NSString).standardizingPath
+        guard resolvedPath.hasPrefix(resolvedBase + "/") || resolvedPath == resolvedBase else {
             TorboLog.warn("Rejected file access outside sandbox: \(path)", subsystem: "Sandbox")
             return nil
         }

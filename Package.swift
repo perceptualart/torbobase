@@ -17,7 +17,7 @@ let targetDependencies: [Target.Dependency] = []
 
 let package = Package(
     name: "TorboBase",
-    platforms: [.macOS(.v14)],
+    platforms: [.macOS(.v13)],
     dependencies: dependencies,
     targets: [
         .executableTarget(

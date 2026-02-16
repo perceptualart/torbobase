@@ -43,10 +43,12 @@ final class NIOResponseWriter: ResponseWriter, @unchecked Sendable {
         }
     }
 
-    func sendStreamHeaders() {
-        let headers = "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\nConnection: keep-alive\r\nAccess-Control-Allow-Origin: *\r\n\r\n"
-        var buffer = allocator.buffer(capacity: headers.utf8.count)
-        buffer.writeString(headers)
+    func sendStreamHeaders(origin: String? = nil) {
+        var h = "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\nConnection: keep-alive\r\n"
+        if let origin = origin { h += "Access-Control-Allow-Origin: \(origin)\r\n" }
+        h += "\r\n"
+        var buffer = allocator.buffer(capacity: h.utf8.count)
+        buffer.writeString(h)
         channel.writeAndFlush(NIOAny(buffer), promise: nil)
     }
 

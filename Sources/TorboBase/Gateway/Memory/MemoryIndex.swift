@@ -326,7 +326,7 @@ actor MemoryIndex {
                         categories: [String]? = nil) -> [SearchResult] {
         var results = entries.filter { entry in
             entry.timestamp >= startDate && entry.timestamp <= endDate &&
-            (categories == nil || categories!.contains(entry.category))
+            (categories?.contains(entry.category) ?? true)
         }
         // Sort by importance descending
         results.sort { $0.importance > $1.importance }

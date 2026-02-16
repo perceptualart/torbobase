@@ -47,8 +47,8 @@ struct Skill: Codable, Identifiable {
             "required_access_level": requiredAccessLevel,
             "enabled": enabled,
             "tags": tags,
-            "has_prompt": promptContent != nil && !promptContent!.isEmpty,
-            "has_tools": toolDefinitions != nil && !toolDefinitions!.isEmpty,
+            "has_prompt": !(promptContent?.isEmpty ?? true),
+            "has_tools": !(toolDefinitions?.isEmpty ?? true),
             "has_mcp": mcpConfigFile != nil
         ]
     }

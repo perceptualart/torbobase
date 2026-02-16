@@ -6,10 +6,9 @@
 import SwiftUI
 
 struct SkillsView: View {
-    @Environment(AppState.self) private var state
+    @EnvironmentObject private var state: AppState
     @State private var skills: [[String: Any]] = []
     @State private var isLoading = true
-    @State private var selectedSkill: [String: Any]? = nil
     @State private var showRemoveConfirm = false
     @State private var skillToRemove: String? = nil
 

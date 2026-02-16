@@ -114,7 +114,7 @@ final class PairingManager: _PairingManagerBase {
 
         // TXT record with metadata
         let txt: [String: Data] = [
-            "version": Data("2.0.0".utf8),
+            "version": Data(TorboVersion.current.utf8),
             "platform": Data("macos".utf8),
             "name": Data(machineName.utf8)
         ]

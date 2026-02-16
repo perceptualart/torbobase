@@ -17,7 +17,8 @@ enum WindowOpener {
 struct TorboBaseApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
     @Environment(\.openWindow) private var openWindow
-    @State private var appState = AppState.shared
+    // ObservedObject instead of @State — AppState is an ObservableObject singleton
+    @ObservedObject private var appState = AppState.shared
     @State private var eulaAccepted = Legal.eulaAccepted
     @State private var setupCompleted = AppConfig.setupCompleted
 
@@ -25,7 +26,7 @@ struct TorboBaseApp: App {
         // Menu bar — always present
         MenuBarExtra {
             MenuBarView()
-                .environment(appState)
+                .environmentObject(appState)
         } label: {
             // The label is rendered IMMEDIATELY on launch (unlike the content
             // popup, which only appears when the user clicks the menu bar icon).
@@ -51,10 +52,10 @@ struct TorboBaseApp: App {
                     SetupWizardView {
                         setupCompleted = true
                     }
-                    .environment(appState)
+                    .environmentObject(appState)
                 } else {
                     DashboardView()
-                        .environment(appState)
+                        .environmentObject(appState)
                 }
             }
             .frame(minWidth: 720, minHeight: 560)
@@ -69,7 +70,6 @@ struct TorboBaseApp: App {
         .windowStyle(.hiddenTitleBar)
         .windowResizability(.contentMinSize)
         .defaultSize(width: 860, height: 640)
-        .defaultPosition(.center)
     }
 }
 

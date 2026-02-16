@@ -194,8 +194,8 @@ struct TelegramConfig: Codable {
 // MARK: - Version
 
 enum TorboVersion {
-    static let current = "2.0.0"
-    static let build = "1"
+    static let current = "3.0.0"
+    static let build = "3"
     static let display = "v\(current)"
     static let full = "v\(current) (\(build))"
 }
@@ -277,6 +277,35 @@ enum AppConfig {
         set { defaults.set(newValue, forKey: "torboSandboxPaths") }
     }
 
+    static var allowedCORSOrigins: [String] {
+        get {
+            defaults.stringArray(forKey: "torboAllowedCORSOrigins") ?? [
+                "http://localhost:18790", "http://127.0.0.1:18790"
+            ]
+        }
+        set { defaults.set(newValue, forKey: "torboAllowedCORSOrigins") }
+    }
+
+    static var allowedCommands: [String] {
+        get {
+            defaults.stringArray(forKey: "torboAllowedCommands") ?? [
+                "ls", "cat", "head", "tail", "wc", "grep", "find", "echo", "date",
+                "pwd", "whoami", "uname", "file", "stat", "md5", "shasum", "diff",
+                "sort", "uniq", "tr", "cut", "awk", "sed", "jq", "curl", "git",
+                "swift", "python3", "node", "npm", "brew"
+            ]
+        }
+        set { defaults.set(newValue, forKey: "torboAllowedCommands") }
+    }
+
+    static var ssrfProtectionEnabled: Bool {
+        get {
+            if defaults.object(forKey: "torboSSRFProtection") == nil { return true }
+            return defaults.bool(forKey: "torboSSRFProtection")
+        }
+        set { defaults.set(newValue, forKey: "torboSSRFProtection") }
+    }
+
     static var rateLimit: Int {
         get {
             let v = defaults.integer(forKey: "torboRateLimit")
@@ -330,19 +359,36 @@ enum AppConfig {
 
 // MARK: - App State
 
-#if canImport(Observation)
-@Observable
+// ObservableObject (Combine) is used instead of @Observable (Observation framework)
+// for macOS 13 (Ventura) compatibility. @Observable requires macOS 14+.
+// On Linux (no Combine), AppState is a plain class — headless mode doesn't need UI observation.
+#if canImport(Combine)
+import Combine
+/// Alias so AppState can conditionally conform to ObservableObject.
+protocol _TorboObservable: ObservableObject {}
+#else
+protocol _TorboObservable: AnyObject {}
 #endif
-final class AppState {
+
+final class AppState: _TorboObservable {
     static let shared = AppState()
 
-    // Access control
+    /// Helper: notify Combine subscribers that a property will change (no-op on Linux).
+    private func willChangeUI() {
+        #if canImport(Combine)
+        objectWillChange.send()
+        #endif
+    }
+
+    // Access control — willChangeUI() triggers SwiftUI update, didSet persists the change
     var accessLevel: AccessLevel {
+        willSet { willChangeUI() }
         didSet { AppConfig.accessLevel = accessLevel.rawValue }
     }
 
     /// ProactiveAgent toggle — controls autonomous task execution
     var proactiveAgentEnabled: Bool = false {
+        willSet { willChangeUI() }
         didSet {
             UserDefaults.standard.set(proactiveAgentEnabled, forKey: "proactiveAgentEnabled")
             if proactiveAgentEnabled {
@@ -354,7 +400,9 @@ final class AppState {
     }
 
     /// Per-agent access levels — synced from AgentConfigManager
-    var agentAccessLevels: [String: AccessLevel] = ["sid": .fullAccess]
+    var agentAccessLevels: [String: AccessLevel] = ["sid": .fullAccess] {
+        willSet { willChangeUI() }
+    }
 
     func accessLevel(for agentID: String) -> AccessLevel {
         if accessLevel == .off { return .off }
@@ -377,37 +425,38 @@ final class AppState {
     }
 
     // Server
-    var serverRunning = false
-    var serverPort: UInt16 = AppConfig.serverPort
-    var serverError: String?
-    var serverToken: String
+    var serverRunning = false { willSet { willChangeUI() } }
+    var serverPort: UInt16 = AppConfig.serverPort { willSet { willChangeUI() } }
+    var serverError: String? { willSet { willChangeUI() } }
+    var serverToken: String { willSet { willChangeUI() } }
 
     /// Allow connections from other devices on the local network (phone, tablet).
     /// When false, the gateway binds to 127.0.0.1 (Mac only).
     /// When true, the gateway binds to 0.0.0.0 (all interfaces — required for phone pairing).
     var allowLANAccess: Bool {
+        willSet { willChangeUI() }
         didSet { UserDefaults.standard.set(allowLANAccess, forKey: "torboAllowLANAccess") }
     }
 
     // Ollama
-    var ollamaRunning = false
-    var ollamaInstalled = false
-    var ollamaModels: [String] = []
-    var modelDetails: [ModelInfo] = []
-    var pullingModel: String? = nil
-    var pullProgress: Double = 0
+    var ollamaRunning = false { willSet { willChangeUI() } }
+    var ollamaInstalled = false { willSet { willChangeUI() } }
+    var ollamaModels: [String] = [] { willSet { willChangeUI() } }
+    var modelDetails: [ModelInfo] = [] { willSet { willChangeUI() } }
+    var pullingModel: String? = nil { willSet { willChangeUI() } }
+    var pullProgress: Double = 0 { willSet { willChangeUI() } }
 
     // Clients
-    var connectedClients: Int = 0
-    var activeClientIPs: Set<String> = []
+    var connectedClients: Int = 0 { willSet { willChangeUI() } }
+    var activeClientIPs: Set<String> = [] { willSet { willChangeUI() } }
 
     // Audit
-    var auditLog: [AuditEntry] = []
-    var totalRequests: Int = 0
-    var blockedRequests: Int = 0
+    var auditLog: [AuditEntry] = [] { willSet { willChangeUI() } }
+    var totalRequests: Int = 0 { willSet { willChangeUI() } }
+    var blockedRequests: Int = 0 { willSet { willChangeUI() } }
 
     // Rate limiting
-    var rateLimit: Int = AppConfig.rateLimit
+    var rateLimit: Int = AppConfig.rateLimit { willSet { willChangeUI() } }
 
     // Global capability toggles — categories set to false are disabled for ALL agents
     var globalCapabilities: [String: Bool] = {
@@ -417,6 +466,7 @@ final class AppState {
         }
         return [:]
     }() {
+        willSet { willChangeUI() }
         didSet {
             if let data = try? JSONSerialization.data(withJSONObject: globalCapabilities) {
                 UserDefaults.standard.set(data, forKey: "torboGlobalCapabilities")
@@ -426,6 +476,7 @@ final class AppState {
 
     // Parallel execution
     var maxConcurrentTasks: Int = 3 {
+        willSet { willChangeUI() }
         didSet {
             let clamped = max(1, min(maxConcurrentTasks, 10))
             if clamped != maxConcurrentTasks { maxConcurrentTasks = clamped }
@@ -435,56 +486,59 @@ final class AppState {
 
     // Logging
     var logLevel: String = "info" {
+        willSet { willChangeUI() }
         didSet { TorboLog.minimumLevel = LogLevel.from(logLevel) }
     }
 
     // Conversations
-    var sessions: [ConversationSession] = []
-    var recentMessages: [ConversationMessage] = []
+    var sessions: [ConversationSession] = [] { willSet { willChangeUI() } }
+    var recentMessages: [ConversationMessage] = [] { willSet { willChangeUI() } }
 
     // Setup
-    var setupCompleted: Bool = AppConfig.setupCompleted
+    var setupCompleted: Bool = AppConfig.setupCompleted { willSet { willChangeUI() } }
 
     // Cloud providers
-    var cloudAPIKeys: [String: String] = AppConfig.cloudAPIKeys
+    var cloudAPIKeys: [String: String] = AppConfig.cloudAPIKeys { willSet { willChangeUI() } }
 
     // Telegram
-    var telegramConfig: TelegramConfig = AppConfig.telegramConfig
-    var telegramConnected: Bool = false
+    var telegramConfig: TelegramConfig = AppConfig.telegramConfig { willSet { willChangeUI() } }
+    var telegramConnected: Bool = false { willSet { willChangeUI() } }
 
     // Discord
-    var discordBotToken: String?
-    var discordChannelID: String?
+    var discordBotToken: String? { willSet { willChangeUI() } }
+    var discordChannelID: String? { willSet { willChangeUI() } }
 
     // Slack
-    var slackBotToken: String?
-    var slackChannelID: String?
-    var slackBotUserID: String?
+    var slackBotToken: String? { willSet { willChangeUI() } }
+    var slackChannelID: String? { willSet { willChangeUI() } }
+    var slackBotUserID: String? { willSet { willChangeUI() } }
 
     // WhatsApp
-    var whatsappAccessToken: String?
-    var whatsappPhoneNumberID: String?
-    var whatsappVerifyToken: String?
+    var whatsappAccessToken: String? { willSet { willChangeUI() } }
+    var whatsappPhoneNumberID: String? { willSet { willChangeUI() } }
+    var whatsappVerifyToken: String? { willSet { willChangeUI() } }
 
     // Signal
-    var signalPhoneNumber: String?
-    var signalAPIURL: String?
+    var signalPhoneNumber: String? { willSet { willChangeUI() } }
+    var signalAPIURL: String? { willSet { willChangeUI() } }
 
     // System prompt
     var systemPromptEnabled: Bool = AppConfig.systemPromptEnabled {
+        willSet { willChangeUI() }
         didSet { AppConfig.systemPromptEnabled = systemPromptEnabled }
     }
     var systemPrompt: String = AppConfig.systemPrompt {
+        willSet { willChangeUI() }
         didSet { AppConfig.systemPrompt = systemPrompt }
     }
 
     // System stats
-    var cpuUsage: Double = 0
-    var memoryUsage: Double = 0
-    var diskFree: String = ""
+    var cpuUsage: Double = 0 { willSet { willChangeUI() } }
+    var memoryUsage: Double = 0 { willSet { willChangeUI() } }
+    var diskFree: String = "" { willSet { willChangeUI() } }
 
     // Navigation
-    var currentTab: DashboardTab = .home
+    var currentTab: DashboardTab = .home { willSet { willChangeUI() } }
 
     // Computed
     var localIP: String {

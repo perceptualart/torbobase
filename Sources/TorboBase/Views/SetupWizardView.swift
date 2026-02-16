@@ -80,7 +80,7 @@ enum SetupStep: Int, CaseIterable {
 }
 
 struct SetupWizardView: View {
-    @Environment(AppState.self) private var state
+    @EnvironmentObject private var state: AppState
     @State private var currentStep: SetupStep = .welcome
     @State private var selectedModel: String = "qwen2.5:7b"
     @State private var selectedLevel: AccessLevel = .chatOnly

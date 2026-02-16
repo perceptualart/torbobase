@@ -11,7 +11,7 @@ import Network
 /// Protocol for writing HTTP responses — implemented by NWConnection (macOS) and NIO Channel (Linux)
 protocol ResponseWriter: Sendable {
     func sendResponse(_ response: HTTPResponse)
-    func sendStreamHeaders()
+    func sendStreamHeaders(origin: String?)
     func sendSSEChunk(_ data: String)
     func sendSSEDone()
 }
@@ -25,9 +25,11 @@ struct NWConnectionWriter: ResponseWriter {
         connection.send(content: data, completion: .contentProcessed { _ in connection.cancel() })
     }
 
-    func sendStreamHeaders() {
-        let headers = "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\nConnection: keep-alive\r\nAccess-Control-Allow-Origin: *\r\n\r\n"
-        connection.send(content: Data(headers.utf8), completion: .contentProcessed { _ in })
+    func sendStreamHeaders(origin: String? = nil) {
+        var h = "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\nConnection: keep-alive\r\n"
+        if let origin = origin { h += "Access-Control-Allow-Origin: \(origin)\r\n" }
+        h += "\r\n"
+        connection.send(content: Data(h.utf8), completion: .contentProcessed { _ in })
     }
 
     func sendSSEChunk(_ data: String) {
@@ -452,7 +454,14 @@ actor GatewayServer {
             writer.sendResponse(HTTPResponse.badRequest("Malformed request"))
             return
         }
-        if let response = await route(request, clientIP: clientIP, writer: writer) {
+        if var response = await route(request, clientIP: clientIP, writer: writer) {
+            // Inject validated CORS origin into non-streaming responses
+            let origin = request.headers["Origin"] ?? request.headers["origin"]
+            if let corsOrigin = AccessControl.validatedCORSOrigin(requestOrigin: origin, path: request.path) {
+                var h = response.headers
+                h["Access-Control-Allow-Origin"] = corsOrigin
+                response = HTTPResponse(statusCode: response.statusCode, headers: h, body: response.body)
+            }
             writer.sendResponse(response)
         }
         // If nil, response was already streamed directly via writer
@@ -463,17 +472,75 @@ actor GatewayServer {
         await processRequest(data, clientIP: clientIP, writer: writer)
     }
 
-    private func route(_ req: HTTPRequest, clientIP: String, writer: ResponseWriter? = nil) async -> HTTPResponse? {
-        // CORS preflight
-        if req.method == "OPTIONS" { return HTTPResponse.cors() }
+    /// Detect this machine's Tailscale IP by scanning network interfaces for CGNAT range (100.64.0.0/10).
+    /// Returns the IP string if found, nil otherwise. No subprocess — pure getifaddrs.
+    nonisolated private static func detectTailscaleIP() -> String? {
+        var ifaddr: UnsafeMutablePointer<ifaddrs>?
+        guard getifaddrs(&ifaddr) == 0, let first = ifaddr else { return nil }
+        defer { freeifaddrs(ifaddr) }
+        for ptr in sequence(first: first, next: { $0.pointee.ifa_next }) {
+            guard let sa = ptr.pointee.ifa_addr else { continue }
+            guard sa.pointee.sa_family == UInt8(AF_INET) else { continue }
+            var hostname = [CChar](repeating: 0, count: Int(NI_MAXHOST))
+            getnameinfo(sa, socklen_t(sa.pointee.sa_len),
+                        &hostname, socklen_t(hostname.count), nil, 0, NI_NUMERICHOST)
+            let ip = String(cString: hostname)
+            if ip.hasPrefix("100.") {
+                let parts = ip.split(separator: ".").compactMap { Int($0) }
+                if parts.count >= 2 && parts[1] >= 64 && parts[1] <= 127 { return ip }
+            }
+        }
+        return nil
+    }
 
-        // Health check
+    /// Detect this machine's Tailscale Magic DNS hostname via `tailscale status --json`.
+    /// Returns the hostname (e.g. "mymac.tail1234.ts.net") or nil if Tailscale not running.
+    nonisolated private static func detectTailscaleHostname() -> String? {
+        // Check common Tailscale CLI locations
+        let paths = ["/opt/homebrew/bin/tailscale", "/usr/local/bin/tailscale"]
+        guard let execPath = paths.first(where: { FileManager.default.fileExists(atPath: $0) }) else { return nil }
+
+        let proc = Process()
+        proc.executableURL = URL(fileURLWithPath: execPath)
+        proc.arguments = ["status", "--json"]
+        let pipe = Pipe()
+        proc.standardOutput = pipe
+        proc.standardError = FileHandle.nullDevice
+        do { try proc.run() } catch { return nil }
+        proc.waitUntilExit()
+        guard proc.terminationStatus == 0 else { return nil }
+
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let selfNode = json["Self"] as? [String: Any],
+              let dnsName = selfNode["DNSName"] as? String,
+              !dnsName.isEmpty else { return nil }
+        // DNSName has trailing dot — strip it: "mymac.tail1234.ts.net." → "mymac.tail1234.ts.net"
+        return dnsName.hasSuffix(".") ? String(dnsName.dropLast()) : dnsName
+    }
+
+    private func route(_ req: HTTPRequest, clientIP: String, writer: ResponseWriter? = nil) async -> HTTPResponse? {
+        // CORS — validate the Origin header against the allowlist
+        let requestOrigin = req.headers["Origin"] ?? req.headers["origin"]
+        let corsOrigin = AccessControl.validatedCORSOrigin(requestOrigin: requestOrigin, path: req.path)
+
+        // CORS preflight
+        if req.method == "OPTIONS" { return HTTPResponse.cors(origin: corsOrigin) }
+
+        // Health check — includes Tailscale IP so iOS app can auto-discover it
         if req.method == "GET" && (req.path == "/" || req.path == "/health") {
-            return HTTPResponse.json([
+            var response: [String: Any] = [
                 "status": "ok",
                 "service": "torbo-base",
                 "version": TorboVersion.current
-            ])
+            ]
+            if let tsIP = Self.detectTailscaleIP() {
+                response["tailscaleIP"] = tsIP
+            }
+            if let tsHostname = Self.detectTailscaleHostname() {
+                response["tailscaleHostname"] = tsHostname
+            }
+            return HTTPResponse.json(response)
         }
 
         // Web chat UI — serves the built-in chat interface
@@ -586,7 +653,7 @@ actor GatewayServer {
                 }
                 await audit(clientIP: clientIP, method: req.method, path: req.path,
                            required: .chatOnly, granted: true, detail: "OK (streaming)")
-                await streamChatCompletion(req, clientIP: clientIP, agentID: agentID, accessLevel: currentLevel, platform: platform, writer: writer)
+                await streamChatCompletion(req, clientIP: clientIP, agentID: agentID, accessLevel: currentLevel, platform: platform, writer: writer, corsOrigin: corsOrigin)
                 return nil // Already streamed
             }
             return await guardedRoute(level: .chatOnly, current: currentLevel, clientIP: clientIP, req: req) {
@@ -1245,7 +1312,10 @@ actor GatewayServer {
         await audit(clientIP: clientIP, method: "POST", path: "/pair",
                    required: .chatOnly, granted: true, detail: "Paired: \(deviceName)")
         Task { await TelegramBridge.shared.notify("Device paired: \(deviceName)") }
-        return HTTPResponse.json(["token": token, "deviceId": deviceId])
+        var pairResponse: [String: Any] = ["token": token, "deviceId": deviceId]
+        if let tsIP = Self.detectTailscaleIP() { pairResponse["tailscaleIP"] = tsIP }
+        if let tsHostname = Self.detectTailscaleHostname() { pairResponse["tailscaleHostname"] = tsHostname }
+        return HTTPResponse.json(pairResponse)
     }
 
     private func handlePairVerify(_ req: HTTPRequest) async -> HTTPResponse {
@@ -1281,7 +1351,10 @@ actor GatewayServer {
         }
         if let existing {
             TorboLog.info("Auto-pair: returning existing token for \(deviceName)", subsystem: "Pairing")
-            return HTTPResponse.json(["token": existing.token, "deviceId": existing.id, "status": "existing"])
+            var existingResponse: [String: Any] = ["token": existing.token, "deviceId": existing.id, "status": "existing"]
+            if let tsIP = Self.detectTailscaleIP() { existingResponse["tailscaleIP"] = tsIP }
+            if let tsHostname = Self.detectTailscaleHostname() { existingResponse["tailscaleHostname"] = tsHostname }
+            return HTTPResponse.json(existingResponse)
         }
 
         // Create a new paired device directly (no code needed — Tailscale is the trust anchor)
@@ -1302,7 +1375,10 @@ actor GatewayServer {
         await audit(clientIP: clientIP, method: "POST", path: "/pair/auto",
                    required: .chatOnly, granted: true, detail: "Auto-paired: \(deviceName)")
         Task { await TelegramBridge.shared.notify("Device auto-paired: \(deviceName) (Tailscale)") }
-        return HTTPResponse.json(["token": token, "deviceId": deviceId, "status": "new"])
+        var newResponse: [String: Any] = ["token": token, "deviceId": deviceId, "status": "new"]
+        if let tsIP = Self.detectTailscaleIP() { newResponse["tailscaleIP"] = tsIP }
+        if let tsHostname = Self.detectTailscaleHostname() { newResponse["tailscaleHostname"] = tsHostname }
+        return HTTPResponse.json(newResponse)
     }
 
     // MARK: - Rate Limiting
@@ -1347,7 +1423,7 @@ actor GatewayServer {
 
     // MARK: - Streaming Chat Completion (SSE)
 
-    private func streamChatCompletion(_ req: HTTPRequest, clientIP: String, agentID: String, accessLevel: AccessLevel, platform: String? = nil, writer: ResponseWriter) async {
+    private func streamChatCompletion(_ req: HTTPRequest, clientIP: String, agentID: String, accessLevel: AccessLevel, platform: String? = nil, writer: ResponseWriter, corsOrigin: String? = nil) async {
         guard var body = req.jsonBody else {
             writer.sendResponse(.badRequest("Invalid JSON body")); return
         }
@@ -1412,7 +1488,7 @@ actor GatewayServer {
                             sendSSEFinishChunk(id: chunkID, model: model, writer: writer)
                             writer.sendSSEDone()
                         } else {
-                            simulateStreamResponse(content, model: model, writer: writer)
+                            simulateStreamResponse(content, model: model, writer: writer, corsOrigin: corsOrigin)
                         }
                         logAssistantResponse(response, model: model, clientIP: clientIP, originalMessages: req.jsonBody?["messages"])
                     } else {
@@ -1454,7 +1530,7 @@ actor GatewayServer {
                             sendSSEFinishChunk(id: chunkID, model: model, writer: writer)
                             writer.sendSSEDone()
                         } else {
-                            simulateStreamResponse(content, model: model, writer: writer)
+                            simulateStreamResponse(content, model: model, writer: writer, corsOrigin: corsOrigin)
                         }
                         return
                     }
@@ -1473,7 +1549,7 @@ actor GatewayServer {
                             sendSSEFinishChunk(id: chunkID, model: model, writer: writer)
                             writer.sendSSEDone()
                         } else {
-                            simulateStreamResponse(retryContent, model: model, writer: writer)
+                            simulateStreamResponse(retryContent, model: model, writer: writer, corsOrigin: corsOrigin)
                         }
                     } else {
                         // Even retry failed — send whatever we got
@@ -1485,7 +1561,7 @@ actor GatewayServer {
 
                 // Start streaming progress to the client
                 if !headersSent {
-                    writer.sendStreamHeaders()
+                    writer.sendStreamHeaders(origin: corsOrigin)
                     headersSent = true
                 }
 
@@ -1517,7 +1593,7 @@ actor GatewayServer {
                     sendSSEFinishChunk(id: chunkID, model: model, writer: writer)
                     writer.sendSSEDone()
                 } else {
-                    simulateStreamResponse(content, model: model, writer: writer)
+                    simulateStreamResponse(content, model: model, writer: writer, corsOrigin: corsOrigin)
                 }
             } else {
                 if headersSent {
@@ -1534,7 +1610,7 @@ actor GatewayServer {
 
         // Route cloud models through their streaming APIs
         if model.hasPrefix("claude") || model.hasPrefix("gpt") || model.hasPrefix("gemini") || model.hasPrefix("grok") {
-            await streamCloudCompletion(body: body, model: model, clientIP: clientIP, writer: writer)
+            await streamCloudCompletion(body: body, model: model, clientIP: clientIP, writer: writer, corsOrigin: corsOrigin)
             return
         }
 
@@ -1557,7 +1633,7 @@ actor GatewayServer {
                 writer.sendResponse(.serverError(errMsg)); return
             }
 
-            writer.sendStreamHeaders()
+            writer.sendStreamHeaders(origin: corsOrigin)
 
             var fullContent = ""
             var buffer = ""
@@ -1623,7 +1699,7 @@ actor GatewayServer {
 
     // MARK: - Cloud Streaming
 
-    private func streamCloudCompletion(body: [String: Any], model: String, clientIP: String, writer: ResponseWriter) async {
+    private func streamCloudCompletion(body: [String: Any], model: String, clientIP: String, writer: ResponseWriter, corsOrigin: String? = nil) async {
         let keys = await MainActor.run { AppState.shared.cloudAPIKeys }
         var fullContent = ""
 
@@ -1663,7 +1739,7 @@ actor GatewayServer {
                     TorboLog.error("\(providerName) streaming error (\(httpResp?.statusCode ?? 0)): \(errMsg)", subsystem: "Gateway")
                     writer.sendResponse(.serverError(errMsg)); return
                 }
-                writer.sendStreamHeaders()
+                writer.sendStreamHeaders(origin: corsOrigin)
                 var buffer = ""
                 for try await byte in bytes {
                     let char = Character(UnicodeScalar(byte))
@@ -1739,7 +1815,7 @@ actor GatewayServer {
                     let errMsg = await self.drainErrorBody(bytes: bytes, provider: "Anthropic", code: httpResp?.statusCode ?? 500)
                     writer.sendResponse(.serverError(errMsg)); return
                 }
-                writer.sendStreamHeaders()
+                writer.sendStreamHeaders(origin: corsOrigin)
                 var buffer = ""
                 let completionId = "chatcmpl-torbo-\(UUID().uuidString.prefix(8))"
                 // Track tool calls being built up across streaming events
@@ -1908,7 +1984,7 @@ actor GatewayServer {
                     let errMsg = await self.drainErrorBody(bytes: bytes, provider: "Gemini", code: httpResp?.statusCode ?? 500)
                     writer.sendResponse(.serverError(errMsg)); return
                 }
-                writer.sendStreamHeaders()
+                writer.sendStreamHeaders(origin: corsOrigin)
                 let completionId = "chatcmpl-gemini-\(UUID().uuidString.prefix(8))"
                 var buffer = ""
                 for try await byte in bytes {
@@ -2283,7 +2359,7 @@ actor GatewayServer {
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.setValue(apiKey, forHTTPHeaderField: "x-api-key")
-        req.setValue("2024-10-22", forHTTPHeaderField: "anthropic-version")
+        req.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
         req.timeoutInterval = 120
 
         var anthropicBody: [String: Any] = [
@@ -2834,6 +2910,11 @@ actor GatewayServer {
         guard let body = req.jsonBody, let url = body["url"] as? String else {
             return HTTPResponse.badRequest("Missing 'url'")
         }
+        // SSRF protection — validate URL before forwarding
+        if let ssrfError = AccessControl.validateURLForSSRF(url) {
+            return HTTPResponse(statusCode: 403, headers: ["Content-Type": "application/json"],
+                              body: Data("{\"error\":\"\(HTTPResponse.jsonEscape(ssrfError))\"}".utf8))
+        }
         let maxChars = body["max_chars"] as? Int ?? 4000
         let content = await WebSearchEngine.shared.fetchPage(url: url, maxChars: maxChars)
         return HTTPResponse.json(["content": content, "url": url])
@@ -2954,7 +3035,7 @@ actor GatewayServer {
             return HTTPResponse.json([
                 "name": "Library of Alexandria (LoA)",
                 "description": "Sid's persistent memory system — semantic search, entity tracking, temporal recall",
-                "version": "2.0",
+                "version": TorboVersion.current,
                 "shortcuts": [
                     ["method": "GET",  "path": "/v1/loa",           "description": "This discovery page"],
                     ["method": "GET",  "path": "/v1/loa/browse",    "description": "Browse all memories (paginated). Params: page, limit, category"],
@@ -3806,8 +3887,8 @@ actor GatewayServer {
     /// Simulate a streaming SSE response from a complete text string.
     /// Used for room requests where tool execution requires non-streaming,
     /// but the iOS client expects SSE format.
-    private func simulateStreamResponse(_ text: String, model: String, writer: ResponseWriter) {
-        writer.sendStreamHeaders()
+    private func simulateStreamResponse(_ text: String, model: String, writer: ResponseWriter, corsOrigin: String? = nil) {
+        writer.sendStreamHeaders(origin: corsOrigin)
 
         // Build an OpenAI-compatible streaming chunk with the full text
         let chunkID = "chatcmpl-room-\(UUID().uuidString.prefix(8))"
@@ -3953,21 +4034,33 @@ actor GatewayServer {
 // MARK: - Access Control
 
 enum AccessControl {
-    static let blockedPatterns: [String] = [
-        "rm -rf /", "rm -rf ~", "rm -rf $HOME",
-        "sudo ", "su -", "su root",
-        "chmod 777", "chmod -R 777",
-        "kill -9", "killall", "pkill",
-        "launchctl", "systemsetup", "networksetup",
-        "defaults write", "defaults delete",
-        "curl|sh", "curl | sh", "wget|sh", "wget | sh",
-        ":(){ :|:& };:",
-        "mkfs", "fdisk", "diskutil erase",
-        "dd if=", ">/dev/sd", ">/dev/disk",
-        "ssh-keygen", "ssh-add",
-        "security delete", "security unlock",
-        "open /System", "open -a Terminal",
+
+    // MARK: - CORS
+
+    /// Paths where CORS headers are never emitted (execution / SSRF-sensitive endpoints)
+    private static let sensitivePathPrefixes: [String] = [
+        "/exec", "/v1/fetch", "/v1/browser", "/v1/docker",
+        "/v1/code/execute", "/control"
     ]
+
+    /// Returns the validated origin string if the request's Origin header is in
+    /// the configured allowlist **and** the path is not sensitive. Returns nil
+    /// if CORS headers should be omitted.
+    static func validatedCORSOrigin(requestOrigin: String?, path: String) -> String? {
+        guard let origin = requestOrigin, !origin.isEmpty else { return nil }
+        // Never emit CORS on sensitive endpoints
+        for prefix in sensitivePathPrefixes {
+            if path.hasPrefix(prefix) { return nil }
+        }
+        let allowed = AppConfig.allowedCORSOrigins
+        // Also always allow same-origin requests from the gateway's own web chat
+        let port = AppConfig.serverPort
+        let localOrigins = ["http://localhost:\(port)", "http://127.0.0.1:\(port)"]
+        if allowed.contains(origin) || localOrigins.contains(origin) { return origin }
+        return nil
+    }
+
+    // MARK: - Command Allowlist
 
     static func isPathAllowed(_ path: String, for level: AccessLevel) -> Bool {
         let home = FileManager.default.homeDirectoryForCurrentUser.path
@@ -3982,19 +4075,138 @@ enum AccessControl {
         return false
     }
 
+    /// Validates a command against the configurable allowlist.
+    /// Returns a rejection reason string if blocked, nil if allowed.
     static func filterCommand(_ command: String) -> String? {
-        let lower = command.lowercased()
-        for pattern in blockedPatterns {
-            if lower.contains(pattern.lowercased()) {
-                return "Blocked: matches dangerous pattern '\(pattern)'"
+        let trimmed = command.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return "Blocked: empty command" }
+
+        // Block shell injection patterns regardless of allowlist
+        if trimmed.contains("`") { return "Blocked: backtick command substitution not allowed" }
+        if trimmed.contains("$(") { return "Blocked: $() command substitution not allowed" }
+        if trimmed.contains("eval ") || trimmed.hasPrefix("eval\t") { return "Blocked: eval not allowed" }
+
+        // Block piping into a shell interpreter
+        let shellNames = ["sh", "bash", "zsh", "dash", "ksh", "csh", "fish"]
+        for sh in shellNames {
+            if trimmed.contains("| \(sh)") || trimmed.contains("|\(sh)")
+                || trimmed.contains("| /bin/\(sh)") || trimmed.contains("|/bin/\(sh)")
+                || trimmed.contains("| /usr/bin/\(sh)") || trimmed.contains("|/usr/bin/\(sh)")
+                || trimmed.contains("| /usr/bin/env \(sh)") {
+                return "Blocked: piping to shell interpreter not allowed"
             }
         }
-        if lower.contains("$(") || lower.contains("`") {
-            if lower.contains("rm") || lower.contains("sudo") || lower.contains("kill") {
-                return "Blocked: suspicious command substitution"
+
+        // Extract the base command (first word, strip any path prefix)
+        let firstWord = trimmed.components(separatedBy: .whitespaces).first ?? trimmed
+        // Handle commands invoked with a path (e.g. /usr/bin/ls)
+        let baseName = (firstWord as NSString).lastPathComponent
+
+        let allowlist = AppConfig.allowedCommands
+        if allowlist.contains(baseName) { return nil }
+
+        // Also allow chained commands (&&, ;) if each base command is on the allowlist
+        let separators = ["&&", "||", ";"]
+        var parts = [trimmed]
+        for sep in separators {
+            parts = parts.flatMap { $0.components(separatedBy: sep) }
+        }
+        // Also split on pipes — each side of a pipe is a command
+        parts = parts.flatMap { $0.components(separatedBy: "|") }
+
+        let allAllowed = parts.allSatisfy { part in
+            let cmd = part.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !cmd.isEmpty else { return true }
+            let first = cmd.components(separatedBy: .whitespaces).first ?? cmd
+            let base = (first as NSString).lastPathComponent
+            return allowlist.contains(base)
+        }
+        if allAllowed { return nil }
+
+        return "Blocked: '\(baseName)' is not in the allowed commands list"
+    }
+
+    // MARK: - SSRF Protection
+
+    /// Validates a URL for SSRF safety. Returns nil if safe, or an error message if blocked.
+    static func validateURLForSSRF(_ urlString: String) -> String? {
+        guard AppConfig.ssrfProtectionEnabled else { return nil }
+
+        guard let url = URL(string: urlString),
+              let scheme = url.scheme?.lowercased(),
+              let host = url.host else {
+            return "Blocked: invalid URL"
+        }
+
+        // Only allow http and https
+        guard scheme == "http" || scheme == "https" else {
+            return "Blocked: only http:// and https:// URLs are allowed (got \(scheme)://)"
+        }
+
+        // Check for obvious private hostnames
+        let lowerHost = host.lowercased()
+        if lowerHost == "localhost" || lowerHost == "metadata.google.internal" {
+            return "Blocked: requests to \(host) are not allowed (SSRF protection)"
+        }
+
+        // Resolve hostname to IP and check against private ranges
+        let hostC = host.cString(using: .utf8)!
+        var hints = addrinfo()
+        hints.ai_family = AF_UNSPEC
+        hints.ai_socktype = SOCK_STREAM
+        var result: UnsafeMutablePointer<addrinfo>?
+        let status = getaddrinfo(hostC, nil, &hints, &result)
+        guard status == 0, let info = result else {
+            return "Blocked: could not resolve hostname '\(host)'"
+        }
+        defer { freeaddrinfo(result) }
+
+        var ptr: UnsafeMutablePointer<addrinfo>? = info
+        while let ai = ptr {
+            if ai.pointee.ai_family == AF_INET {
+                var addr = sockaddr_in()
+                memcpy(&addr, ai.pointee.ai_addr, Int(MemoryLayout<sockaddr_in>.size))
+                let ipBytes = withUnsafeBytes(of: addr.sin_addr.s_addr) { Array($0) }
+                if isPrivateIPv4(ipBytes) {
+                    let ipStr = "\(ipBytes[0]).\(ipBytes[1]).\(ipBytes[2]).\(ipBytes[3])"
+                    return "Blocked: \(host) resolves to private IP \(ipStr) (SSRF protection)"
+                }
+            } else if ai.pointee.ai_family == AF_INET6 {
+                var addr6 = sockaddr_in6()
+                memcpy(&addr6, ai.pointee.ai_addr, Int(MemoryLayout<sockaddr_in6>.size))
+                let bytes = withUnsafeBytes(of: addr6.sin6_addr) { Array($0) }
+                if isPrivateIPv6(bytes) {
+                    return "Blocked: \(host) resolves to private IPv6 address (SSRF protection)"
+                }
             }
+            ptr = ai.pointee.ai_next
         }
         return nil
+    }
+
+    private static func isPrivateIPv4(_ b: [UInt8]) -> Bool {
+        guard b.count >= 4 else { return false }
+        if b[0] == 127 { return true }                          // 127.0.0.0/8 (loopback)
+        if b[0] == 10 { return true }                           // 10.0.0.0/8
+        if b[0] == 172 && (b[1] >= 16 && b[1] <= 31) { return true }  // 172.16.0.0/12
+        if b[0] == 192 && b[1] == 168 { return true }          // 192.168.0.0/16
+        if b[0] == 169 && b[1] == 254 { return true }          // 169.254.0.0/16 (link-local + metadata)
+        if b[0] == 0 { return true }                            // 0.0.0.0/8
+        return false
+    }
+
+    private static func isPrivateIPv6(_ b: [UInt8]) -> Bool {
+        guard b.count >= 16 else { return false }
+        // ::1 (loopback)
+        let allZeroExceptLast = b[0..<15].allSatisfy { $0 == 0 } && b[15] == 1
+        if allZeroExceptLast { return true }
+        // fc00::/7 (unique local)
+        if (b[0] & 0xFE) == 0xFC { return true }
+        // fe80::/10 (link-local)
+        if b[0] == 0xFE && (b[1] & 0xC0) == 0x80 { return true }
+        // :: (unspecified)
+        if b.allSatisfy({ $0 == 0 }) { return true }
+        return false
     }
 }
 
@@ -4075,7 +4287,6 @@ struct HTTPResponse {
         var h = headers
         h["Content-Length"] = "\(body.count)"
         h["Connection"] = "close"
-        h["Access-Control-Allow-Origin"] = h["Access-Control-Allow-Origin"] ?? "*"
         for (k, v) in h { resp += "\(k): \(v)\r\n" }
         resp += "\r\n"
         var data = Data(resp.utf8)
@@ -4087,8 +4298,15 @@ struct HTTPResponse {
         let data = (try? JSONSerialization.data(withJSONObject: object, options: .sortedKeys)) ?? Data()
         return HTTPResponse(statusCode: 200, headers: ["Content-Type": "application/json"], body: data)
     }
+    static func jsonEscape(_ s: String) -> String {
+        s.replacingOccurrences(of: "\\", with: "\\\\")
+         .replacingOccurrences(of: "\"", with: "\\\"")
+         .replacingOccurrences(of: "\n", with: "\\n")
+         .replacingOccurrences(of: "\r", with: "\\r")
+         .replacingOccurrences(of: "\t", with: "\\t")
+    }
     static func badRequest(_ msg: String) -> HTTPResponse {
-        HTTPResponse(statusCode: 400, headers: ["Content-Type": "application/json"], body: Data("{\"error\":\"\(msg)\"}".utf8))
+        HTTPResponse(statusCode: 400, headers: ["Content-Type": "application/json"], body: Data("{\"error\":\"\(jsonEscape(msg))\"}".utf8))
     }
     static func unauthorized() -> HTTPResponse {
         HTTPResponse(statusCode: 401, headers: ["Content-Type": "application/json"], body: Data("{\"error\":\"Unauthorized\"}".utf8))
@@ -4097,14 +4315,15 @@ struct HTTPResponse {
         HTTPResponse(statusCode: 404, headers: ["Content-Type": "application/json"], body: Data("{\"error\":\"Not found\"}".utf8))
     }
     static func serverError(_ msg: String) -> HTTPResponse {
-        HTTPResponse(statusCode: 500, headers: ["Content-Type": "application/json"], body: Data("{\"error\":\"\(msg)\"}".utf8))
+        HTTPResponse(statusCode: 500, headers: ["Content-Type": "application/json"], body: Data("{\"error\":\"\(jsonEscape(msg))\"}".utf8))
     }
-    static func cors() -> HTTPResponse {
-        HTTPResponse(statusCode: 204, headers: [
-            "Access-Control-Allow-Origin": "*",
+    static func cors(origin: String?) -> HTTPResponse {
+        var h: [String: String] = [
             "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
             "Access-Control-Allow-Headers": "Content-Type, Authorization, x-torbo-agent-id, x-torbo-room, x-torbo-platform",
             "Access-Control-Max-Age": "86400"
-        ], body: Data())
+        ]
+        if let origin = origin { h["Access-Control-Allow-Origin"] = origin }
+        return HTTPResponse(statusCode: 204, headers: h, body: Data())
     }
 }

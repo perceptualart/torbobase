@@ -197,7 +197,7 @@ actor ConversationStore {
         }
 
         let data = ExportData(
-            version: "2.0.0",
+            version: TorboVersion.current,
             exportedAt: Date(),
             messages: messages,
             sessions: sessions

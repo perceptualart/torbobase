@@ -7,7 +7,7 @@
 import SwiftUI
 
 struct AgentsView: View {
-    @Environment(AppState.self) private var state
+    @EnvironmentObject private var state: AppState
     @State private var agents: [AgentConfig] = []
     @State private var selectedAgentID: String? = "sid"
     @State private var editConfig: AgentConfig = AgentConfig.sid
