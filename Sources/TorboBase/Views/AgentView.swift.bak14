@@ -10,7 +10,7 @@ struct AgentsView: View {
     @EnvironmentObject private var state: AppState
     @State private var agents: [AgentConfig] = []
     @State private var selectedAgentID: String? = "sid"
-    @State private var editConfig: AgentConfig = AgentConfig.newAgent(id: "sid", name: "SiD")
+    @State private var editConfig: AgentConfig = AgentConfig.sid
     @State private var isLoading = true
     @State private var showCreateSheet = false
     @State private var showDeleteConfirm = false
@@ -260,9 +260,6 @@ struct AgentsView: View {
                             }
                             .pickerStyle(.segmented)
                         }
-                            .onChange(of: editConfig.accessLevel) { _, _ in
-                                Task { await saveConfig() }
-                            }
                         fieldRow(label: "Directory Scopes (one per line, empty = unrestricted)") {
                             TextEditor(text: Binding(
                                 get: { editConfig.directoryScopes.joined(separator: "\n") },

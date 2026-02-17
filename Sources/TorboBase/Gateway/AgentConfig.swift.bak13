@@ -115,7 +115,7 @@ struct AgentConfig: Codable, Equatable, Identifiable {
         backgroundKnowledge: "",
         elevenLabsVoiceID: "",
         fallbackTTSVoice: "nova",
-        accessLevel: 1,  // Changed from 5 - user can upgrade if needed
+        accessLevel: 5,
         directoryScopes: [],
         enabledSkillIDs: []
     )

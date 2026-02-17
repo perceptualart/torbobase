@@ -96,7 +96,7 @@ struct DashboardView: View {
                 case .models:
                     ModelsView()
                 case .sessions:
-                    SpacesView()
+                    SessionsView()
                 case .security:
                     SecurityView()
                 case .settings:
@@ -641,9 +641,9 @@ struct ModelsView: View {
     }
 }
 
-// MARK: - Spaces View
+// MARK: - Sessions View
 
-struct SpacesView: View {
+struct SessionsView: View {
     @EnvironmentObject private var state: AppState
 
     var body: some View {
@@ -651,10 +651,10 @@ struct SpacesView: View {
             VStack(alignment: .leading, spacing: 24) {
                 HStack {
                     VStack(alignment: .leading, spacing: 4) {
-                        Text("Spaces")
+                        Text("Sessions")
                             .font(.system(size: 22, weight: .bold))
                             .foregroundStyle(.white)
-                        Text("Organized conversation history by agent and day")
+                        Text("Conversation history from connected clients")
                             .font(.system(size: 12))
                             .foregroundStyle(.white.opacity(0.4))
                     }

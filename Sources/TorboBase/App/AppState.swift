@@ -696,7 +696,7 @@ enum DashboardTab: String, CaseIterable {
     case agents = "Agents"
     case skills = "Skills"
     case models = "Models"
-    case sessions = "Sessions"
+    case sessions = "Spaces"
     case security = "Security"
     case settings = "Settings"
 
