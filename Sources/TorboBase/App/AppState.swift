@@ -432,14 +432,6 @@ final class AppState: _TorboObservable {
     var serverError: String? { willSet { willChangeUI() } }
     var serverToken: String { willSet { willChangeUI() } }
 
-    /// Allow connections from other devices on the local network (phone, tablet).
-    /// When false, the gateway binds to 127.0.0.1 (Mac only).
-    /// When true, the gateway binds to 0.0.0.0 (all interfaces — required for phone pairing).
-    var allowLANAccess: Bool {
-        willSet { willChangeUI() }
-        didSet { UserDefaults.standard.set(allowLANAccess, forKey: "torboAllowLANAccess") }
-    }
-
     // Ollama
     var ollamaRunning = false { willSet { willChangeUI() } }
     var ollamaInstalled = false { willSet { willChangeUI() } }
@@ -576,12 +568,6 @@ final class AppState: _TorboObservable {
         }
         self.serverToken = AppConfig.serverToken
 
-        // Default to LAN access ON — required for phone pairing to work
-        if UserDefaults.standard.object(forKey: "torboAllowLANAccess") == nil {
-            self.allowLANAccess = true
-        } else {
-            self.allowLANAccess = UserDefaults.standard.bool(forKey: "torboAllowLANAccess")
-        }
     }
 
     func addAuditEntry(_ entry: AuditEntry) {

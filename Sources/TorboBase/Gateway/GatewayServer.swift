@@ -138,12 +138,9 @@ actor GatewayServer {
                 return
             }
 
-            // Bind to all interfaces if LAN access is enabled (required for phone pairing),
-            // otherwise bind to localhost only for maximum security.
-            let lanEnabled = await MainActor.run { appState.allowLANAccess }
-            let bindHost: NWEndpoint.Host = lanEnabled ? .ipv4(.any) : .ipv4(.loopback)
-            params.requiredLocalEndpoint = NWEndpoint.hostPort(host: bindHost, port: nwPort)
-            TorboLog.info("Binding to \(lanEnabled ? "0.0.0.0" : "127.0.0.1"):\(port)", subsystem: "Gateway")
+            // Always bind to all interfaces — required for phone pairing and Tailscale.
+            params.requiredLocalEndpoint = NWEndpoint.hostPort(host: .ipv4(.any), port: nwPort)
+            TorboLog.info("Binding to 0.0.0.0:\(port)", subsystem: "Gateway")
             listener = try NWListener(using: params)
 
             listener?.newConnectionHandler = { [weak self] conn in
@@ -3091,7 +3088,6 @@ actor GatewayServer {
                             "logLevel": s?.logLevel ?? "info",
                             "rateLimit": s?.rateLimit ?? 60,
                             "maxConcurrentTasks": s?.maxConcurrentTasks ?? 3,
-                            "lanAccess": s?.allowLANAccess ?? false
                         ] as [String: Any]
                     ]
 
@@ -3170,7 +3166,6 @@ actor GatewayServer {
                         "logLevel": s?.logLevel ?? "info",
                         "rateLimit": s?.rateLimit ?? 60,
                         "maxConcurrentTasks": s?.maxConcurrentTasks ?? 3,
-                        "lanAccess": s?.allowLANAccess ?? false,
                         "systemPromptEnabled": s?.systemPromptEnabled ?? false,
                         "systemPrompt": s?.systemPrompt ?? ""
                     ] as [String: Any]
@@ -3195,9 +3190,6 @@ actor GatewayServer {
                     }
                     if let maxTasks = body["maxConcurrentTasks"] as? Int {
                         s?.maxConcurrentTasks = maxTasks
-                    }
-                    if let lan = body["lanAccess"] as? Bool {
-                        s?.allowLANAccess = lan
                     }
                     if let enabled = body["systemPromptEnabled"] as? Bool {
                         s?.systemPromptEnabled = enabled
