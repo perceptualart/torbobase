@@ -260,7 +260,7 @@ struct AgentsView: View {
                             }
                             .pickerStyle(.segmented)
                         }
-                            .onChange(of: editConfig.accessLevel) { _, _ in
+                            .onChange(of: editConfig.accessLevel) { _ in
                                 Task { await saveConfig() }
                             }
                         fieldRow(label: "Directory Scopes (one per line, empty = unrestricted)") {

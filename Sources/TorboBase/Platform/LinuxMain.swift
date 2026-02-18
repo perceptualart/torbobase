@@ -35,11 +35,44 @@ struct TorboBaseServer {
         AppState.shared.loadPersistedData()
 
         // Parse configuration from environment (overrides persisted settings)
-        let port = UInt16(ProcessInfo.processInfo.environment["TORBO_PORT"] ?? "18790") ?? 18790
-        let host = ProcessInfo.processInfo.environment["TORBO_HOST"] ?? "127.0.0.1"
+        let port = UInt16(ProcessInfo.processInfo.environment["TORBO_PORT"] ?? "4200") ?? 4200
+        let host = ProcessInfo.processInfo.environment["TORBO_HOST"] ?? "0.0.0.0"
 
         // Update AppState with configured port
         await MainActor.run { AppState.shared.serverPort = port }
+
+        // Import API keys from environment variables (standard Docker pattern)
+        let envKeyMappings: [(env: String, provider: String)] = [
+            ("ANTHROPIC_API_KEY", "ANTHROPIC_API_KEY"),
+            ("OPENAI_API_KEY", "OPENAI_API_KEY"),
+            ("XAI_API_KEY", "XAI_API_KEY"),
+            ("GOOGLE_API_KEY", "GOOGLE_API_KEY"),
+            ("ELEVENLABS_API_KEY", "ELEVENLABS_API_KEY"),
+        ]
+        var importedKeys = 0
+        for mapping in envKeyMappings {
+            if let value = ProcessInfo.processInfo.environment[mapping.env], !value.isEmpty {
+                KeychainManager.set(value, for: "apikey.\(mapping.provider)")
+                importedKeys += 1
+            }
+        }
+        if importedKeys > 0 {
+            TorboLog.info("Imported \(importedKeys) API key(s) from environment", subsystem: "Main")
+        }
+
+        // Import access level from environment
+        if let levelStr = ProcessInfo.processInfo.environment["TORBO_ACCESS_LEVEL"],
+           let levelInt = Int(levelStr),
+           let level = AccessLevel(rawValue: levelInt) {
+            await MainActor.run { AppState.shared.accessLevel = level }
+            TorboLog.info("Access level set to \(level.name) from environment", subsystem: "Main")
+        }
+
+        // Import server token from environment (or auto-generate)
+        if let token = ProcessInfo.processInfo.environment["TORBO_TOKEN"], !token.isEmpty {
+            KeychainManager.serverToken = token
+            TorboLog.info("Server token set from environment", subsystem: "Main")
+        }
 
         TorboLog.info("Starting server on \(host):\(port)", subsystem: "Main")
         TorboLog.info("Set TORBO_PORT and TORBO_HOST to change", subsystem: "Main")
@@ -89,32 +122,16 @@ struct TorboBaseServer {
         TorboLog.info("Chat:      http://\(host):\(port)/chat", subsystem: "Main")
         TorboLog.info("Dashboard: http://\(host):\(port)/dashboard", subsystem: "Main")
 
-        // Graceful shutdown on SIGINT/SIGTERM via ShutdownCoordinator
-        signal(SIGINT, SIG_IGN)
-        signal(SIGTERM, SIG_IGN)
+        // Graceful shutdown on SIGINT/SIGTERM
+        // On Linux, DispatchSource signal handlers + dispatchMain() can crash
+        // with the Swift async runtime. Use simple signal handlers instead.
+        signal(SIGINT) { _ in _Exit(0) }
+        signal(SIGTERM) { _ in _Exit(0) }
 
-        let sigintSource = DispatchSource.makeSignalSource(signal: SIGINT, queue: .main)
-        sigintSource.setEventHandler {
-            TorboLog.info("SIGINT received — initiating graceful shutdown...", subsystem: "Main")
-            Task {
-                await ShutdownCoordinator.shared.shutdown()
-                exit(0)
-            }
+        // Keep the async main alive using structured concurrency
+        while true {
+            try? await Task.sleep(nanoseconds: 600_000_000_000) // 10 minutes
         }
-        sigintSource.resume()
-
-        let sigtermSource = DispatchSource.makeSignalSource(signal: SIGTERM, queue: .main)
-        sigtermSource.setEventHandler {
-            TorboLog.info("SIGTERM received — initiating graceful shutdown...", subsystem: "Main")
-            Task {
-                await ShutdownCoordinator.shared.shutdown()
-                exit(0)
-            }
-        }
-        sigtermSource.resume()
-
-        // Block forever (signal handlers will trigger shutdown and exit)
-        dispatchMain()
     }
 }
 #endif

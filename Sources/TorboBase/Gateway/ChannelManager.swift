@@ -49,7 +49,7 @@ actor ChannelManager {
     }
 
     private var activeChannels: Set<Channel> = []
-    private let configPath = NSHomeDirectory() + "/Library/Application Support/TorboBase/channels.json"
+    private let configPath = PlatformPaths.dataDir + "/channels.json"
 
     // MARK: - Initialization
 

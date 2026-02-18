@@ -25,20 +25,19 @@ final class NIOResponseWriter: ResponseWriter, @unchecked Sendable {
     }
 
     func sendResponse(_ response: HTTPResponse) {
+        // serialize() produces the complete HTTP response (status line + headers + body)
         let serialized = response.serialize()
         var buffer = allocator.buffer(capacity: serialized.count)
         buffer.writeBytes(serialized)
-        let head = HTTPResponseHead(version: .http1_1, status: .ok)
-        // Write raw bytes (HTTPResponse.serialize() includes the full HTTP response)
-        channel.write(NIOAny(HTTPServerResponsePart.head(head)), promise: nil)
-        channel.writeAndFlush(NIOAny(HTTPServerResponsePart.body(.byteBuffer(buffer))), promise: nil)
-        channel.close(promise: nil)
+        channel.writeAndFlush(NIOAny(buffer)).whenComplete { [weak self] _ in
+            self?.channel.close(promise: nil)
+        }
     }
 
     func sendRawResponse(_ data: Data) {
         var buffer = allocator.buffer(capacity: data.count)
         buffer.writeBytes(data)
-        channel.writeAndFlush(NIOAny(buffer), promise: nil).whenComplete { [weak self] _ in
+        channel.writeAndFlush(NIOAny(buffer)).whenComplete { [weak self] _ in
             self?.channel.close(promise: nil)
         }
     }
@@ -63,7 +62,7 @@ final class NIOResponseWriter: ResponseWriter, @unchecked Sendable {
         let done = "data: [DONE]\n\n"
         var buffer = allocator.buffer(capacity: done.utf8.count)
         buffer.writeString(done)
-        channel.writeAndFlush(NIOAny(buffer), promise: nil).whenComplete { [weak self] _ in
+        channel.writeAndFlush(NIOAny(buffer)).whenComplete { [weak self] _ in
             self?.channel.close(promise: nil)
         }
     }

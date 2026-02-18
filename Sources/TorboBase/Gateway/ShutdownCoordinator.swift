@@ -37,7 +37,7 @@ actor ShutdownCoordinator {
         isShuttingDown = true
 
         TorboLog.info("Initiating graceful shutdown...", subsystem: "Shutdown")
-        let startTime = CFAbsoluteTimeGetCurrent()
+        let startTime = Date().timeIntervalSinceReferenceDate
 
         // 1. Stop the Memory Army (background workers)
         TorboLog.info("Stopping Memory Army...", subsystem: "Shutdown")
@@ -59,7 +59,7 @@ actor ShutdownCoordinator {
         let memCount = await MemoryIndex.shared.count
         TorboLog.info("Memory index has \(memCount) entries — preserved.", subsystem: "Shutdown")
 
-        let elapsed = (CFAbsoluteTimeGetCurrent() - startTime) * 1000
+        let elapsed = (Date().timeIntervalSinceReferenceDate - startTime) * 1000
         TorboLog.info("Graceful shutdown complete in \(String(format: "%.0f", elapsed))ms. Until next time.", subsystem: "Shutdown")
         TorboLog.info("\"We were trying to build a machine of loving grace. I think we did.\"", subsystem: "Shutdown")
     }

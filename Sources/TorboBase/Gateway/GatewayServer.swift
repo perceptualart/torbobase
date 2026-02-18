@@ -2,6 +2,9 @@
 // Licensed under Apache 2.0 — see LICENSE file.
 // Torbo Base — by Michael David Murphy
 import Foundation
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
 #if canImport(Network)
 import Network
 #endif
@@ -1694,16 +1697,17 @@ actor GatewayServer {
             writer.sendSSEDone()
 
             // Log the full assistant response
-            if !fullContent.isEmpty {
-                let assistantMsg = ConversationMessage(role: "assistant", content: fullContent, model: model, clientIP: clientIP)
+            let capturedContent = fullContent
+            if !capturedContent.isEmpty {
+                let assistantMsg = ConversationMessage(role: "assistant", content: capturedContent, model: model, clientIP: clientIP)
                 let s = appState
                 await MainActor.run { s?.addMessage(assistantMsg) }
 
                 if let messages = (req.jsonBody?["messages"] as? [[String: Any]]),
                    let userContent = extractTextContent(from: messages.last(where: { $0["role"] as? String == "user" })?["content"]) {
-                    Task { await TelegramBridge.shared.forwardExchange(user: userContent, assistant: fullContent, model: model) }
+                    Task { await TelegramBridge.shared.forwardExchange(user: userContent, assistant: capturedContent, model: model) }
                     // Memory extraction (background)
-                    MemoryRouter.shared.processExchange(userMessage: userContent, assistantResponse: fullContent, model: model)
+                    MemoryRouter.shared.processExchange(userMessage: userContent, assistantResponse: capturedContent, model: model)
                 }
             }
         } catch {
@@ -2065,15 +2069,16 @@ actor GatewayServer {
         }
 
         // Log the full assistant response
-        if !fullContent.isEmpty {
-            let assistantMsg = ConversationMessage(role: "assistant", content: fullContent, model: model, clientIP: clientIP)
+        let capturedCloudContent = fullContent
+        if !capturedCloudContent.isEmpty {
+            let assistantMsg = ConversationMessage(role: "assistant", content: capturedCloudContent, model: model, clientIP: clientIP)
             let s = appState
             await MainActor.run { s?.addMessage(assistantMsg) }
             if let messages = body["messages"] as? [[String: Any]],
                let userContent = extractTextContent(from: messages.last(where: { $0["role"] as? String == "user" })?["content"]) {
-                Task { await TelegramBridge.shared.forwardExchange(user: userContent, assistant: fullContent, model: model) }
+                Task { await TelegramBridge.shared.forwardExchange(user: userContent, assistant: capturedCloudContent, model: model) }
                 // Memory extraction (background)
-                MemoryRouter.shared.processExchange(userMessage: userContent, assistantResponse: fullContent, model: model)
+                MemoryRouter.shared.processExchange(userMessage: userContent, assistantResponse: capturedCloudContent, model: model)
             }
         }
     }
@@ -4377,7 +4382,11 @@ enum AccessControl {
         let hostC = host.cString(using: .utf8)!
         var hints = addrinfo()
         hints.ai_family = AF_UNSPEC
+        #if os(Linux)
+        hints.ai_socktype = Int32(SOCK_STREAM.rawValue)
+        #else
         hints.ai_socktype = SOCK_STREAM
+        #endif
         var result: UnsafeMutablePointer<addrinfo>?
         let status = getaddrinfo(hostC, nil, &hints, &result)
         guard status == 0, let info = result else {

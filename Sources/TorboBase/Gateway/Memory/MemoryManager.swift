@@ -4,6 +4,9 @@
 // MemoryManager.swift — Persistent memory for Sid across all conversations
 // Uses local Ollama for extraction (zero cloud cost)
 import Foundation
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
 
 /// Sid's persistent memory — survives across all sessions and context limits.
 /// Stored as JSON on disk, extracted by local Ollama after every exchange.

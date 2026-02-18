@@ -5,6 +5,9 @@
 // Gives bridges multi-turn memory so users can have real conversations
 
 import Foundation
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
 
 /// Thread-safe per-channel conversation buffer for messaging bridges.
 /// Each channel (phone number, chat ID, thread TS, etc.) gets a rolling window

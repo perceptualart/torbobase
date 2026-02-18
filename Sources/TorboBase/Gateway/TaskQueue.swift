@@ -78,7 +78,7 @@ actor TaskQueue {
     private let storePath: String
 
     init() {
-        let path = NSHomeDirectory() + "/Library/Application Support/TorboBase/task_queue.json"
+        let path = PlatformPaths.tasksFile
         storePath = path
         // Bootstrap from disk using nonisolated static helper
         let (loadedTasks, loadedOrder) = Self.bootstrapTasks(from: path)
@@ -146,7 +146,8 @@ actor TaskQueue {
 
                         // Check if this was part of a workflow
                         if let wfID = task.workflowID {
-                            Task { await WorkflowEngine.shared.onTaskFailed(taskID: task.id, workflowID: wfID) }
+                            let taskID = task.id
+                            Task { await WorkflowEngine.shared.onTaskFailed(taskID: taskID, workflowID: wfID) }
                         }
                     }
                     continue  // Skip — deps not met yet

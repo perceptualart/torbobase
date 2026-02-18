@@ -3,6 +3,9 @@
 // Torbo Base — by Michael David Murphy
 // Telegram integration — forward conversations and send notifications
 import Foundation
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
 
 actor TelegramBridge {
     static let shared = TelegramBridge()

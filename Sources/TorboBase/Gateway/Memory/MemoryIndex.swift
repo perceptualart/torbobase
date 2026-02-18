@@ -4,7 +4,14 @@
 // Semantic search over Sid's memories using local embeddings via Ollama
 // Uses SQLite (built into macOS) for persistence + cosine similarity for retrieval
 import Foundation
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
+#if canImport(SQLite3)
 import SQLite3
+#elseif canImport(CSQLite3)
+import CSQLite3
+#endif
 
 /// A persistent vector store for Sid's memories.
 /// Embeds text using `nomic-embed-text` via Ollama, stores in SQLite,
@@ -188,7 +195,7 @@ actor MemoryIndex {
             return []
         }
 
-        let startTime = CFAbsoluteTimeGetCurrent()
+        let startTime = Date().timeIntervalSinceReferenceDate
 
         var results: [(entry: IndexEntry, score: Float)] = []
 
@@ -217,7 +224,7 @@ actor MemoryIndex {
         results.sort { $0.score > $1.score }
         let topResults = results.prefix(topK)
 
-        let elapsed = (CFAbsoluteTimeGetCurrent() - startTime) * 1000
+        let elapsed = (Date().timeIntervalSinceReferenceDate - startTime) * 1000
         TorboLog.info("Search completed in \(String(format: "%.1f", elapsed))ms — \(topResults.count) results", subsystem: "LoA·Index")
 
         // Track access for returned results
@@ -239,7 +246,7 @@ actor MemoryIndex {
     func hybridSearch(query: String, topK: Int = 10) async -> [SearchResult] {
         guard isReady, !query.isEmpty else { return [] }
 
-        let startTime = CFAbsoluteTimeGetCurrent()
+        let startTime = Date().timeIntervalSinceReferenceDate
 
         // --- Phase 1: BM25 keyword scoring (instant, no embedding needed) ---
         let bm25Results = bm25.search(query: query, topK: topK * 3)
@@ -301,7 +308,7 @@ actor MemoryIndex {
         // Sort by RRF score descending
         rrfScores.sort { $0.score > $1.score }
 
-        let elapsed = (CFAbsoluteTimeGetCurrent() - startTime) * 1000
+        let elapsed = (Date().timeIntervalSinceReferenceDate - startTime) * 1000
         TorboLog.info("Hybrid search (BM25+RRF) in \(String(format: "%.1f", elapsed))ms — \(bm25Results.count) BM25, \(vectorResults.count) vector, \(min(topK, rrfScores.count)) fused", subsystem: "LoA·Index")
 
         // Track access for returned results

@@ -41,6 +41,7 @@ enum AccessLevel: Int, CaseIterable, Codable {
         }
     }
 
+    #if canImport(SwiftUI)
     var color: Color {
         switch self {
         case .off: return .gray
@@ -51,6 +52,7 @@ enum AccessLevel: Int, CaseIterable, Codable {
         case .fullAccess: return .red
         }
     }
+    #endif
 
     var icon: String {
         switch self {

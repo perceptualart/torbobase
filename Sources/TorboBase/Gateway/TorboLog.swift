@@ -61,11 +61,9 @@ enum TorboLog {
 
     // MARK: - File Logging
 
-    /// Log directory: ~/Library/Application Support/TorboBase/logs/
+    /// Log directory: uses PlatformPaths.dataDir + /logs/
     private static let logDir: URL = {
-        let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
-            ?? URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Library/Application Support")
-        let dir = appSupport.appendingPathComponent("TorboBase/logs", isDirectory: true)
+        let dir = URL(fileURLWithPath: PlatformPaths.dataDir).appendingPathComponent("logs", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir
     }()

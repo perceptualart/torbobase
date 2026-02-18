@@ -8,6 +8,9 @@ import Foundation
 #if canImport(CommonCrypto)
 import CommonCrypto
 #endif
+#if canImport(Crypto)
+import Crypto
+#endif
 
 // MARK: - Webhook Definition
 
@@ -66,8 +69,8 @@ actor WebhookManager {
     /// Replay protection: track recent delivery IDs to prevent duplicate processing
     private var recentDeliveryIDs: [String: Date] = [:]
     private var schedulerTask: Task<Void, Never>?
-    private let storePath = NSHomeDirectory() + "/Library/Application Support/TorboBase/webhooks.json"
-    private let schedulePath = NSHomeDirectory() + "/Library/Application Support/TorboBase/schedules.json"
+    private let storePath = PlatformPaths.webhooksFile
+    private let schedulePath = PlatformPaths.schedulesFile
 
     // MARK: - Initialization
 
@@ -143,13 +146,22 @@ actor WebhookManager {
             let bodyString = (try? JSONSerialization.data(withJSONObject: payload)).flatMap { String(data: $0, encoding: .utf8) } ?? ""
             let bodyData = Data(bodyString.utf8)
             let keyData = Data(secret.utf8)
-            var hmac = [UInt8](repeating: 0, count: Int(CC_SHA256_DIGEST_LENGTH))
+            let expectedSig: String
+            #if canImport(CommonCrypto)
+            var hmacBytes = [UInt8](repeating: 0, count: Int(CC_SHA256_DIGEST_LENGTH))
             keyData.withUnsafeBytes { keyPtr in
                 bodyData.withUnsafeBytes { dataPtr in
-                    CCHmac(CCHmacAlgorithm(kCCHmacAlgSHA256), keyPtr.baseAddress, keyData.count, dataPtr.baseAddress, bodyData.count, &hmac)
+                    CCHmac(CCHmacAlgorithm(kCCHmacAlgSHA256), keyPtr.baseAddress, keyData.count, dataPtr.baseAddress, bodyData.count, &hmacBytes)
                 }
             }
-            let expectedSig = "sha256=" + hmac.map { String(format: "%02x", $0) }.joined()
+            expectedSig = "sha256=" + hmacBytes.map { String(format: "%02x", $0) }.joined()
+            #elseif canImport(Crypto)
+            let symmetricKey = SymmetricKey(data: keyData)
+            let mac = HMAC<SHA256>.authenticationCode(for: bodyData, using: symmetricKey)
+            expectedSig = "sha256=" + Data(mac).map { String(format: "%02x", $0) }.joined()
+            #else
+            expectedSig = ""
+            #endif
             // Constant-time comparison to prevent timing attacks
             let sigBytes = Array(sig.utf8)
             let expectedBytes = Array(expectedSig.utf8)

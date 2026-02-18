@@ -5,6 +5,9 @@
 // Uses webhook-based inbound + REST outbound messaging
 
 import Foundation
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
 
 actor WhatsAppBridge {
     static let shared = WhatsAppBridge()

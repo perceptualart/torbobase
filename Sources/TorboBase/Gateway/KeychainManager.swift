@@ -13,6 +13,9 @@ import CommonCrypto
 #if canImport(IOKit)
 import IOKit
 #endif
+#if canImport(Crypto)
+import Crypto
+#endif
 
 /// Secure key-value storage for sensitive data.
 /// Uses encrypted file-based storage (~/.config/torbobase/keychain.enc) on all platforms.
@@ -56,11 +59,21 @@ enum KeychainManager {
         seed += NSHomeDirectory()
         // SHA-256 to get a 32-byte key
         let seedData = Data(seed.utf8)
+        #if canImport(CommonCrypto)
         var hash = [UInt8](repeating: 0, count: Int(CC_SHA256_DIGEST_LENGTH))
         seedData.withUnsafeBytes { ptr in
             _ = CC_SHA256(ptr.baseAddress, CC_LONG(seedData.count), &hash)
         }
         let key = Data(hash)
+        #elseif canImport(Crypto)
+        let digest = SHA256.hash(data: seedData)
+        let key = Data(digest)
+        #else
+        // Fallback: use seed bytes directly (truncated/padded to 32)
+        var keyBytes = Array(seedData.prefix(32))
+        while keyBytes.count < 32 { keyBytes.append(0) }
+        let key = Data(keyBytes)
+        #endif
         _cachedEncryptionKey = key
         return key
     }
@@ -98,10 +111,11 @@ enum KeychainManager {
         #endif
     }
 
-    /// Encrypt data using AES-256-CBC
+    /// Encrypt data — AES-256-CBC on macOS (CommonCrypto), AES-256-GCM on Linux (swift-crypto)
     private static func encrypt(_ plaintext: Data) -> Data? {
         let key = encryptionKey
-        // Generate random IV
+        #if canImport(CommonCrypto)
+        // macOS: AES-256-CBC via CommonCrypto
         var iv = [UInt8](repeating: 0, count: kCCBlockSizeAES128)
         guard SecRandomCopyBytes(kSecRandomDefault, iv.count, &iv) == errSecSuccess else { return nil }
 
@@ -123,13 +137,26 @@ enum KeychainManager {
         }
 
         guard status == kCCSuccess else { return nil }
-        // Prepend IV to ciphertext
         return Data(iv) + Data(buffer.prefix(numBytesEncrypted))
+        #elseif canImport(Crypto)
+        // Linux: AES-256-GCM via swift-crypto
+        do {
+            let symmetricKey = SymmetricKey(data: key)
+            let sealedBox = try AES.GCM.seal(plaintext, using: symmetricKey)
+            return sealedBox.combined
+        } catch {
+            return nil
+        }
+        #else
+        return nil
+        #endif
     }
 
-    /// Decrypt data using AES-256-CBC
+    /// Decrypt data — AES-256-CBC on macOS (CommonCrypto), AES-256-GCM on Linux (swift-crypto)
     private static func decrypt(_ ciphertext: Data) -> Data? {
         let key = encryptionKey
+        #if canImport(CommonCrypto)
+        // macOS: AES-256-CBC via CommonCrypto
         guard ciphertext.count > kCCBlockSizeAES128 else { return nil }
 
         let iv = ciphertext.prefix(kCCBlockSizeAES128)
@@ -156,6 +183,18 @@ enum KeychainManager {
 
         guard status == kCCSuccess else { return nil }
         return Data(buffer.prefix(numBytesDecrypted))
+        #elseif canImport(Crypto)
+        // Linux: AES-256-GCM via swift-crypto
+        do {
+            let symmetricKey = SymmetricKey(data: key)
+            let sealedBox = try AES.GCM.SealedBox(combined: ciphertext)
+            return try AES.GCM.open(sealedBox, using: symmetricKey)
+        } catch {
+            return nil
+        }
+        #else
+        return nil
+        #endif
     }
 
     // MARK: - Storage

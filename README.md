@@ -62,15 +62,37 @@ Torbo Base runs as a headless server on Linux (and experimentally on Windows) wi
 
 ### Docker (Recommended)
 
+The fastest way to get started. Requires [Docker](https://docs.docker.com/get-docker/).
+
+**Quick start with Docker Compose:**
+
+```bash
+git clone https://github.com/perceptualart/torbo-base.git
+cd torbo-base
+cp .env.example .env       # Edit with your API keys
+docker compose up -d        # Build and start in background
+docker compose logs -f      # Watch logs
+```
+
+Then open `http://localhost:4200/chat` to chat, or `http://localhost:4200/dashboard` to manage the server.
+
+**Or with plain Docker:**
+
 ```bash
 docker build -t torbo-base .
-docker run -p 18790:18790 \
+docker run -d -p 4200:4200 \
   -e TORBO_HOST=0.0.0.0 \
+  -e ANTHROPIC_API_KEY=sk-ant-... \
   -v torbo-data:/home/torbo/.config/torbobase \
+  --name torbo-base \
   torbo-base
 ```
 
-Then open `http://localhost:18790/dashboard` in your browser.
+**Connecting to Ollama on the host:**
+
+If Ollama is running on your host machine, Docker Compose handles this automatically via `host.docker.internal`. For plain Docker, add `--add-host=host.docker.internal:host-gateway`.
+
+**Persistent data** is stored in the `torbo-data` volume at `/home/torbo/.config/torbobase/` (agents, skills, memory, conversations, logs).
 
 ### Linux Native Build
 
@@ -78,54 +100,45 @@ Requires Swift 5.10+ on Ubuntu 22.04+:
 
 ```bash
 # Install Swift (see https://swift.org/install)
+sudo apt-get install libsqlite3-dev
 git clone https://github.com/perceptualart/torbo-base.git
 cd torbo-base
 swift build -c release
 .build/release/TorboBase
 ```
 
-Or use the build script to produce a distributable archive:
-
-```bash
-./scripts/build-linux.sh
-# Output: dist/torbo-base-linux-amd64.tar.gz
-```
-
 ### Environment Variables
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `TORBO_PORT` | `18790` | Server port |
-| `TORBO_HOST` | `127.0.0.1` | Bind address (`0.0.0.0` for all interfaces) |
+| `TORBO_PORT` | `4200` | Server port |
+| `TORBO_HOST` | `0.0.0.0` | Bind address (`127.0.0.1` for localhost only) |
+| `TORBO_ACCESS_LEVEL` | `1` | Access level: 0=OFF, 1=CHAT, 2=READ, 3=WRITE, 4=EXEC, 5=FULL |
+| `TORBO_TOKEN` | (auto-generated) | Server auth token for API requests |
+| `ANTHROPIC_API_KEY` | — | Anthropic (Claude) API key |
+| `OPENAI_API_KEY` | — | OpenAI (GPT) API key |
+| `XAI_API_KEY` | — | xAI (Grok) API key |
+| `GOOGLE_API_KEY` | — | Google (Gemini) API key |
+| `ELEVENLABS_API_KEY` | — | ElevenLabs TTS API key |
+| `OLLAMA_HOST` | `http://host.docker.internal:11434` | Ollama server URL |
 | `TELEGRAM_BOT_TOKEN` | — | Enable Telegram bridge |
 | `DISCORD_BOT_TOKEN` | — | Enable Discord bridge |
 | `SLACK_BOT_TOKEN` | — | Enable Slack bridge |
 | `SIGNAL_PHONE` | — | Enable Signal bridge |
 
-### Windows (Experimental)
-
-Swift on Windows is experimental. Install [Swift for Windows 5.10+](https://www.swift.org/install/windows/), then:
-
-```powershell
-swift build -c release
-.build\release\TorboBase.exe
-```
-
-Note: Not all features may work on Windows. macOS-specific features (Bonjour, AppleScript, screencapture) are disabled.
-
 ## Connecting Clients
 
 ### Web Dashboard
-Open `http://<your-ip>:18790/dashboard` to manage the server — configure API keys, agents, access levels, and monitor the system.
+Open `http://<your-ip>:4200/dashboard` to manage the server — configure API keys, agents, access levels, and monitor the system.
 
 ### Web Chat (any device)
-Open `http://<your-ip>:18790/chat` in any browser on your network.
+Open `http://<your-ip>:4200/chat` in any browser on your network.
 
 ### OpenAI-compatible clients
 Point any OpenAI SDK client at your gateway:
 
 ```
-Base URL: http://<your-ip>:18790/v1
+Base URL: http://<your-ip>:4200/v1
 API Key: <your-server-token>
 ```
 

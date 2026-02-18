@@ -5,6 +5,9 @@
 // Uses conversations.history polling + chat.postMessage for responses
 
 import Foundation
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
 
 actor SlackBridge {
     static let shared = SlackBridge()

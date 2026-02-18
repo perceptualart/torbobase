@@ -176,36 +176,94 @@ actor CodeSandbox {
         let filesBefore = Set((try? FileManager.default.contentsOfDirectory(atPath: workDir)) ?? [])
 
         // Execute with timeout
-        var stdoutData = Data()
-        var stderrData = Data()
-        var didTimeout = false
-
         do {
             try process.run()
 
-            // Set up async reading
-            let readTask = Task {
-                stdoutData = stdoutPipe.fileHandleForReading.readDataToEndOfFile()
-                stderrData = stderrPipe.fileHandleForReading.readDataToEndOfFile()
+            let processID = process.processIdentifier
+
+            // Set up async reading — returns data instead of mutating captured vars
+            let readTask = Task { () -> (Data, Data) in
+                let stdout = stdoutPipe.fileHandleForReading.readDataToEndOfFile()
+                let stderr = stderrPipe.fileHandleForReading.readDataToEndOfFile()
+                return (stdout, stderr)
             }
 
-            // Timeout handler
-            let timeoutTask = Task {
+            // Timeout handler — returns whether timeout occurred
+            let timeoutTask = Task { () -> Bool in
                 try await Task.sleep(nanoseconds: UInt64(config.timeout) * 1_000_000_000)
                 if process.isRunning {
                     process.terminate()
-                    didTimeout = true
                     // Give 2 more seconds then force kill
                     try? await Task.sleep(nanoseconds: 2_000_000_000)
                     if process.isRunning {
-                        kill(process.processIdentifier, SIGKILL)
+                        kill(processID, SIGKILL)
                     }
+                    return true
                 }
+                return false
             }
 
             process.waitUntilExit()
             timeoutTask.cancel()
-            await readTask.value
+            let (stdoutData, stderrData) = await readTask.value
+            let didTimeout = (try? await timeoutTask.value) ?? false
+
+            // Process output
+            var stdout = String(data: stdoutData, encoding: .utf8) ?? ""
+            var stderr = String(data: stderrData, encoding: .utf8) ?? ""
+            var truncated = false
+
+            if stdout.count > config.maxOutputSize {
+                stdout = String(stdout.prefix(config.maxOutputSize))
+                truncated = true
+            }
+            if stderr.count > config.maxOutputSize {
+                stderr = String(stderr.prefix(config.maxOutputSize))
+            }
+
+            if didTimeout {
+                stderr += "\n[Execution timed out after \(Int(config.timeout))s]"
+            }
+
+            // Find generated files (new files in working directory)
+            let filesAfter = Set((try? FileManager.default.contentsOfDirectory(atPath: workDir)) ?? [])
+            let newFiles = filesAfter.subtracting(filesBefore).subtracting(["code\(language.fileExtension)"])
+
+            let generatedFiles = newFiles.compactMap { fileName -> CodeExecutionResult.GeneratedFile? in
+                let filePath = "\(workDir)/\(fileName)"
+                guard let attrs = try? FileManager.default.attributesOfItem(atPath: filePath),
+                      let size = attrs[.size] as? Int else { return nil }
+                guard size <= config.maxFileSize else { return nil }  // Skip oversized files
+                return CodeExecutionResult.GeneratedFile(
+                    name: fileName,
+                    path: filePath,
+                    size: size,
+                    mimeType: mimeType(for: fileName)
+                )
+            }
+
+            let result = CodeExecutionResult(
+                exitCode: process.terminationStatus,
+                stdout: stdout,
+                stderr: stderr,
+                generatedFiles: generatedFiles,
+                executionTime: Date().timeIntervalSince(startTime),
+                language: language.rawValue,
+                truncated: truncated
+            )
+
+            TorboLog.info("\(language.rawValue) execution complete — exit: \(result.exitCode), " +
+                  "stdout: \(stdout.count) chars, files: \(generatedFiles.count), " +
+                  "time: \(String(format: "%.1f", result.executionTime))s", subsystem: "Sandbox")
+
+            // Schedule cleanup (keep files for 5 minutes — shorter to reduce exposure)
+            Task {
+                try? await Task.sleep(nanoseconds: 300 * 1_000_000_000)
+                try? FileManager.default.removeItem(atPath: workDir)
+                TorboLog.info("Cleaned up exec_\(execID)", subsystem: "Sandbox")
+            }
+
+            return result
 
         } catch {
             return CodeExecutionResult(
@@ -218,63 +276,6 @@ actor CodeSandbox {
                 truncated: false
             )
         }
-
-        // Process output
-        var stdout = String(data: stdoutData, encoding: .utf8) ?? ""
-        var stderr = String(data: stderrData, encoding: .utf8) ?? ""
-        var truncated = false
-
-        if stdout.count > config.maxOutputSize {
-            stdout = String(stdout.prefix(config.maxOutputSize))
-            truncated = true
-        }
-        if stderr.count > config.maxOutputSize {
-            stderr = String(stderr.prefix(config.maxOutputSize))
-        }
-
-        if didTimeout {
-            stderr += "\n[Execution timed out after \(Int(config.timeout))s]"
-        }
-
-        // Find generated files (new files in working directory)
-        let filesAfter = Set((try? FileManager.default.contentsOfDirectory(atPath: workDir)) ?? [])
-        let newFiles = filesAfter.subtracting(filesBefore).subtracting(["code\(language.fileExtension)"])
-
-        let generatedFiles = newFiles.compactMap { fileName -> CodeExecutionResult.GeneratedFile? in
-            let filePath = "\(workDir)/\(fileName)"
-            guard let attrs = try? FileManager.default.attributesOfItem(atPath: filePath),
-                  let size = attrs[.size] as? Int else { return nil }
-            guard size <= config.maxFileSize else { return nil }  // Skip oversized files
-            return CodeExecutionResult.GeneratedFile(
-                name: fileName,
-                path: filePath,
-                size: size,
-                mimeType: mimeType(for: fileName)
-            )
-        }
-
-        let result = CodeExecutionResult(
-            exitCode: process.terminationStatus,
-            stdout: stdout,
-            stderr: stderr,
-            generatedFiles: generatedFiles,
-            executionTime: Date().timeIntervalSince(startTime),
-            language: language.rawValue,
-            truncated: truncated
-        )
-
-        TorboLog.info("\(language.rawValue) execution complete — exit: \(result.exitCode), " +
-              "stdout: \(stdout.count) chars, files: \(generatedFiles.count), " +
-              "time: \(String(format: "%.1f", result.executionTime))s", subsystem: "Sandbox")
-
-        // Schedule cleanup (keep files for 5 minutes — shorter to reduce exposure)
-        Task {
-            try? await Task.sleep(nanoseconds: 300 * 1_000_000_000)
-            try? FileManager.default.removeItem(atPath: workDir)
-            TorboLog.info("Cleaned up exec_\(execID)", subsystem: "Sandbox")
-        }
-
-        return result
     }
 
     // MARK: - Quick Execute (convenience)

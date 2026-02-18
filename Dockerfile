@@ -1,8 +1,13 @@
 # Torbo Base — Linux Docker Build
-# Multi-stage build: compile with Swift, run with slim image
+# Multi-stage build: compile with full SDK, run with slim runtime
+# (c) 2026 Perceptual Art LLC — Apache 2.0
 
 # Stage 1: Build
 FROM swift:5.10-jammy AS builder
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libsqlite3-dev \
+    && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
@@ -10,26 +15,21 @@ WORKDIR /app
 COPY Package.swift .
 
 # Resolve dependencies (cached if Package.swift unchanged)
-RUN swift package resolve 2>/dev/null || true
+RUN swift package resolve
 
 # Copy source
 COPY Sources/ Sources/
 
-# Build release binary
-RUN swift build -c release \
-    --static-swift-stdlib \
-    -Xlinker -lsqlite3 \
-    2>&1 | tail -5
+# Build release binary (dynamic Swift stdlib)
+RUN swift build -c release -Xlinker -lsqlite3
 
-# Stage 2: Runtime
-FROM ubuntu:22.04
+# Stage 2: Runtime (slim Swift image — includes Swift runtime + ICU + libdispatch)
+FROM swift:5.10-jammy-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libsqlite3-0 \
-    libcurl4 \
     ca-certificates \
-    python3 \
-    poppler-utils \
+    curl \
     && rm -rf /var/lib/apt/lists/*
 
 # Create app user
@@ -45,20 +45,22 @@ RUN mkdir -p .config/torbobase/agents \
              .config/torbobase/skills \
              .config/torbobase/memory \
              .config/torbobase/documents \
+             .config/torbobase/logs \
              .config/torbobase/mcp && \
     chown -R torbo:torbo /home/torbo
 
 USER torbo
 
 # Default environment
-ENV TORBO_PORT=18790
+ENV HOME=/home/torbo
+ENV TORBO_PORT=4200
 ENV TORBO_HOST=0.0.0.0
+ENV TORBO_ACCESS_LEVEL=1
 
-EXPOSE 18790
+EXPOSE 4200
 
 # Health check
-HEALTHCHECK --interval=30s --timeout=5s --start-period=10s \
-    CMD curl -sf http://localhost:18790/health || exit 1
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+    CMD curl -sf http://localhost:4200/health || exit 1
 
-# Run
 CMD ["./torbo-base-server"]

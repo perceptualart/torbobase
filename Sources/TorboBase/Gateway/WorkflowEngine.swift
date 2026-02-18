@@ -5,6 +5,9 @@
 // Builds on TaskQueue + ProactiveAgent for execution
 
 import Foundation
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
 
 // MARK: - Workflow Definition
 
@@ -46,7 +49,7 @@ actor WorkflowEngine {
     static let shared = WorkflowEngine()
 
     private var workflows: [String: Workflow] = [:]
-    private let storePath = NSHomeDirectory() + "/Library/Application Support/TorboBase/workflows.json"
+    private let storePath = PlatformPaths.workflowsFile
 
     /// Default agent for workflow steps when none specified
     private let defaultAgentID = "sid"

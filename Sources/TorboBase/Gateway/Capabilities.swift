@@ -3,6 +3,9 @@
 // Torbo Base — by Michael David Murphy
 // Capabilities — Tool registry, definitions, and execution engines
 import Foundation
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
 #if os(macOS)
 import AppKit
 #endif

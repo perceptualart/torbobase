@@ -1,0 +1,45 @@
+# Torbo Base — Docker Compose
+# (c) 2026 Perceptual Art LLC — Apache 2.0
+#
+# Usage:
+#   cp .env.example .env    # Edit with your API keys
+#   docker compose up -d    # Start in background
+#   docker compose logs -f  # Watch logs
+#   docker compose down     # Stop
+
+services:
+  torbo-base:
+    build: .
+    container_name: torbo-base
+    restart: unless-stopped
+    ports:
+      - "${TORBO_PORT:-4200}:4200"
+    environment:
+      # Server config
+      - TORBO_PORT=4200
+      - TORBO_HOST=0.0.0.0
+      - TORBO_ACCESS_LEVEL=${TORBO_ACCESS_LEVEL:-1}
+      - TORBO_TOKEN=${TORBO_TOKEN:-}
+      # LLM Provider API Keys
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - XAI_API_KEY=${XAI_API_KEY:-}
+      - GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
+      - ELEVENLABS_API_KEY=${ELEVENLABS_API_KEY:-}
+      # Ollama (if running on host or separate container)
+      - OLLAMA_HOST=${OLLAMA_HOST:-http://host.docker.internal:11434}
+      # Messaging bridges (optional)
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
+      - DISCORD_BOT_TOKEN=${DISCORD_BOT_TOKEN:-}
+      - SLACK_BOT_TOKEN=${SLACK_BOT_TOKEN:-}
+      - SIGNAL_PHONE=${SIGNAL_PHONE:-}
+    volumes:
+      # Persist data across container restarts
+      - torbo-data:/home/torbo/.config/torbobase
+    extra_hosts:
+      # Allow container to reach host services (Ollama, etc.)
+      - "host.docker.internal:host-gateway"
+
+volumes:
+  torbo-data:
+    driver: local

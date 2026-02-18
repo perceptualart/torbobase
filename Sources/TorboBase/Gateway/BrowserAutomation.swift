@@ -6,6 +6,9 @@
 // Requires: npx playwright (auto-installs on first use)
 
 import Foundation
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
 
 // MARK: - Browser Action Types
 

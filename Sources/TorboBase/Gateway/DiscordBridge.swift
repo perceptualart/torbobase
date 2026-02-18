@@ -5,6 +5,9 @@
 // Polls for messages, forwards to gateway, sends responses back
 
 import Foundation
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
 
 actor DiscordBridge {
     static let shared = DiscordBridge()

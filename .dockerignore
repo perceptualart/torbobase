@@ -6,3 +6,13 @@
 Dockerfile
 docker-compose.yml
 .dockerignore
+.env
+.env.example
+**/*.bak
+**/*.bak[0-9]*
+**/*.backup
+**/*.pre-fix
+**/*.dmg
+**/.DS_Store
+README.md
+DOCKER.md

@@ -3,6 +3,9 @@
 // Torbo Base — Memory Army
 // Background worker LLMs that maintain Sid's memory: Librarian, Searcher, Repairer, Watcher
 import Foundation
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
 
 /// The Memory Army — a team of local LLMs that keep Sid's memory alive.
 ///
@@ -84,7 +87,7 @@ actor MemoryArmy {
     /// Called after every conversation exchange.
     /// Extracts new facts, episodes, and insights, then indexes them.
     func librarianProcess(userMessage: String, assistantResponse: String, model: String) async {
-        let startTime = CFAbsoluteTimeGetCurrent()
+        let startTime = Date().timeIntervalSinceReferenceDate
         conversationCount += 1
 
         // Step 1: Extract structured memories using local LLM
@@ -119,7 +122,7 @@ actor MemoryArmy {
             indexed += 1
         }
 
-        let elapsed = (CFAbsoluteTimeGetCurrent() - startTime) * 1000
+        let elapsed = (Date().timeIntervalSinceReferenceDate - startTime) * 1000
         stats.memoriesExtracted += indexed
         stats.lastLibrarianRun = Date()
         TorboLog.info("Extracted \(indexed) memories in \(String(format: "%.0f", elapsed))ms", subsystem: "LoA·Librarian")
@@ -141,7 +144,7 @@ actor MemoryArmy {
 
     /// Called before every LLM request. Returns formatted memory context to inject into system prompt.
     func searcherRetrieve(userMessage: String, conversationHistory: [[String: Any]]?) async -> String {
-        let startTime = CFAbsoluteTimeGetCurrent()
+        let startTime = Date().timeIntervalSinceReferenceDate
 
         // Build search query from user message + recent conversation context
         var searchQuery = userMessage
@@ -175,7 +178,7 @@ actor MemoryArmy {
             results = await MemoryIndex.shared.search(query: searchQuery, topK: 8, minScore: 0.35)
         }
 
-        let elapsed = (CFAbsoluteTimeGetCurrent() - startTime) * 1000
+        let elapsed = (Date().timeIntervalSinceReferenceDate - startTime) * 1000
         stats.searchesPerformed += 1
         stats.lastSearcherRun = Date()
 
@@ -197,9 +200,17 @@ actor MemoryArmy {
                 let mostRecent = results.compactMap { $0.timestamp }.max()
                 let recentStr: String
                 if let recent = mostRecent {
+                    #if canImport(SwiftUI)
                     let formatter = RelativeDateTimeFormatter()
                     formatter.unitsStyle = .full
                     recentStr = formatter.localizedString(for: recent, relativeTo: Date())
+                    #else
+                    let interval = Date().timeIntervalSince(recent)
+                    if interval < 60 { recentStr = "just now" }
+                    else if interval < 3600 { recentStr = "\(Int(interval / 60)) minutes ago" }
+                    else if interval < 86400 { recentStr = "\(Int(interval / 3600)) hours ago" }
+                    else { recentStr = "\(Int(interval / 86400)) days ago" }
+                    #endif
                 } else {
                     recentStr = "recently"
                 }
@@ -216,7 +227,7 @@ actor MemoryArmy {
 
     /// Periodic maintenance — deduplicate, compress, prune stale memories.
     func runRepairCycle() async {
-        let startTime = CFAbsoluteTimeGetCurrent()
+        let startTime = Date().timeIntervalSinceReferenceDate
         TorboLog.info("Starting repair cycle...", subsystem: "LoA·Repairer")
 
         // Step 1: Find and remove near-duplicates
@@ -234,7 +245,7 @@ actor MemoryArmy {
             await MemoryIndex.shared.purgeBelow(importance: 0.1)
         }
 
-        let elapsed = (CFAbsoluteTimeGetCurrent() - startTime) * 1000
+        let elapsed = (Date().timeIntervalSinceReferenceDate - startTime) * 1000
         stats.repairCycles += 1
         stats.duplicatesRemoved += dupsRemoved
         stats.memoriesCompressed += compressed
@@ -986,10 +997,10 @@ actor MemoryArmy {
             "repairCycles": stats.repairCycles,
             "duplicatesRemoved": stats.duplicatesRemoved,
             "memoriesCompressed": stats.memoriesCompressed,
-            "lastLibrarianRun": stats.lastLibrarianRun?.ISO8601Format() ?? "never",
-            "lastSearcherRun": stats.lastSearcherRun?.ISO8601Format() ?? "never",
-            "lastRepairRun": stats.lastRepairRun?.ISO8601Format() ?? "never",
-            "lastWatcherRun": stats.lastWatcherRun?.ISO8601Format() ?? "never",
+            "lastLibrarianRun": stats.lastLibrarianRun.map { ISO8601DateFormatter().string(from: $0) } ?? "never",
+            "lastSearcherRun": stats.lastSearcherRun.map { ISO8601DateFormatter().string(from: $0) } ?? "never",
+            "lastRepairRun": stats.lastRepairRun.map { ISO8601DateFormatter().string(from: $0) } ?? "never",
+            "lastWatcherRun": stats.lastWatcherRun.map { ISO8601DateFormatter().string(from: $0) } ?? "never",
             "conversationCount": conversationCount,
             "isRunning": isRunning
         ]

@@ -5,6 +5,9 @@
 // Requires signal-cli running as REST server: https://github.com/bbernhard/signal-cli-rest-api
 
 import Foundation
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
 
 actor SignalBridge {
     static let shared = SignalBridge()
