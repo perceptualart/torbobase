@@ -723,6 +723,7 @@ struct ModelsView: View {
 
 struct SpacesView: View {
     @EnvironmentObject private var state: AppState
+    @State private var expandedDays: Set<String> = []
 
     var body: some View {
         ScrollView {
@@ -732,7 +733,7 @@ struct SpacesView: View {
                         Text("Spaces")
                             .font(.system(size: 22, weight: .bold))
                             .foregroundStyle(.white)
-                        Text("Organized conversation history by agent and day")
+                        Text("Conversation history organized by day")
                             .font(.system(size: 12))
                             .foregroundStyle(.white.opacity(0.4))
                     }
@@ -757,39 +758,58 @@ struct SpacesView: View {
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 60)
                 } else {
-                    VStack(spacing: 4) {
-                        ForEach(state.recentMessages.suffix(50).reversed()) { msg in
-                            HStack(alignment: .top, spacing: 8) {
-                                Image(systemName: msg.role == "user" ? "person.fill" : "cube.fill")
-                                    .font(.system(size: 10))
-                                    .foregroundStyle(msg.role == "user" ? .blue : .cyan)
-                                    .frame(width: 16)
-                                VStack(alignment: .leading, spacing: 2) {
-                                    HStack {
-                                        Text(msg.role.capitalized)
-                                            .font(.system(size: 10, weight: .semibold))
+                    // Group messages by day
+                    ForEach(messagesByDay, id: \.0) { day, messages in
+                        DisclosureGroup(isExpanded: Binding(
+                            get: { expandedDays.contains(day) },
+                            set: { if $0 { expandedDays.insert(day) } else { expandedDays.remove(day) } }
+                        )) {
+                            VStack(spacing: 4) {
+                                ForEach(messages) { msg in
+                                    HStack(alignment: .top, spacing: 8) {
+                                        Image(systemName: msg.role == "user" ? "person.fill" : "cube.fill")
+                                            .font(.system(size: 10))
                                             .foregroundStyle(msg.role == "user" ? .blue : .cyan)
-                                        if !msg.model.isEmpty {
-                                            Text("· \(msg.model)")
-                                                .font(.system(size: 9, design: .monospaced))
-                                                .foregroundStyle(.white.opacity(0.2))
+                                            .frame(width: 16)
+                                        VStack(alignment: .leading, spacing: 2) {
+                                            HStack {
+                                                Text(msg.role.capitalized)
+                                                    .font(.system(size: 10, weight: .semibold))
+                                                    .foregroundStyle(msg.role == "user" ? .blue : .cyan)
+                                                if !msg.model.isEmpty {
+                                                    Text("· \(msg.model)")
+                                                        .font(.system(size: 9, design: .monospaced))
+                                                        .foregroundStyle(.white.opacity(0.2))
+                                                }
+                                                Spacer()
+                                                Text(msg.timestamp, style: .time)
+                                                    .font(.system(size: 9))
+                                                    .foregroundStyle(.white.opacity(0.2))
+                                            }
+                                            Text(msg.content)
+                                                .font(.system(size: 11))
+                                                .foregroundStyle(.white.opacity(0.6))
+                                                .lineLimit(4)
                                         }
-                                        Spacer()
-                                        Text(msg.timestamp, style: .time)
-                                            .font(.system(size: 9))
-                                            .foregroundStyle(.white.opacity(0.2))
                                     }
-                                    Text(msg.content)
-                                        .font(.system(size: 11))
-                                        .foregroundStyle(.white.opacity(0.6))
-                                        .lineLimit(4)
+                                    .padding(.horizontal, 12)
+                                    .padding(.vertical, 6)
+                                    .background(Color.white.opacity(msg.role == "user" ? 0.02 : 0.04))
+                                    .cornerRadius(6)
                                 }
                             }
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 6)
-                            .background(Color.white.opacity(msg.role == "user" ? 0.02 : 0.04))
-                            .cornerRadius(6)
+                        } label: {
+                            HStack {
+                                Text(day)
+                                    .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                                    .foregroundStyle(.white.opacity(0.6))
+                                Spacer()
+                                Text("\(messages.count) msgs")
+                                    .font(.system(size: 10, design: .monospaced))
+                                    .foregroundStyle(.white.opacity(0.2))
+                            }
                         }
+                        .tint(.white.opacity(0.3))
                     }
                 }
 
@@ -798,88 +818,95 @@ struct SpacesView: View {
             .padding(24)
         }
     }
+
+    /// Group recent messages by day label (Today, Yesterday, or date)
+    private var messagesByDay: [(String, [ConversationMessage])] {
+        let cal = Calendar.current
+        let now = Date()
+        var groups: [(String, [ConversationMessage])] = []
+        var current: (String, [ConversationMessage])? = nil
+
+        for msg in state.recentMessages.suffix(100).reversed() {
+            let dayLabel: String
+            if cal.isDateInToday(msg.timestamp) {
+                dayLabel = "Today"
+            } else if cal.isDateInYesterday(msg.timestamp) {
+                dayLabel = "Yesterday"
+            } else {
+                let f = DateFormatter()
+                f.dateFormat = "MMM d, yyyy"
+                dayLabel = f.string(from: msg.timestamp)
+            }
+
+            if current?.0 == dayLabel {
+                current?.1.append(msg)
+            } else {
+                if let c = current { groups.append(c) }
+                current = (dayLabel, [msg])
+            }
+        }
+        if let c = current { groups.append(c) }
+        return groups
+    }
 }
 
 // MARK: - Security View
 
 struct SecurityView: View {
     @EnvironmentObject private var state: AppState
+    @State private var capabilitiesExpanded = false
+    @State private var auditExpanded = false
 
     var body: some View {
-
         ScrollView {
             VStack(alignment: .leading, spacing: 24) {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Security")
                         .font(.system(size: 22, weight: .bold))
                         .foregroundStyle(.white)
-                    Text("Access control, sandboxing, and audit")
+                    Text("Active protections, threat monitoring, and audit")
                         .font(.system(size: 12))
                         .foregroundStyle(.white.opacity(0.4))
                 }
 
-                // Access level detail
-                SectionHeader(title: "ACCESS LEVEL")
-                VStack(spacing: 2) {
-                    ForEach(AccessLevel.allCases, id: \.rawValue) { lvl in
-                        HStack(spacing: 10) {
-                            Circle()
-                                .fill(lvl == state.accessLevel ? lvl.color : lvl.color.opacity(0.2))
-                                .frame(width: 10, height: 10)
-                            Text("\(lvl.rawValue)")
-                                .font(.system(size: 12, weight: .bold, design: .monospaced))
-                                .foregroundStyle(.white.opacity(0.6))
-                                .frame(width: 16)
-                            Text(lvl.name)
-                                .font(.system(size: 12, weight: .semibold, design: .monospaced))
-                                .foregroundStyle(lvl == state.accessLevel ? lvl.color : .white.opacity(0.4))
-                                .frame(width: 50, alignment: .leading)
-                            Text(lvl.description)
-                                .font(.system(size: 11))
-                                .foregroundStyle(.white.opacity(0.3))
-                            Spacer()
-                            if lvl == state.accessLevel {
-                                Text("ACTIVE")
-                                    .font(.system(size: 9, weight: .bold, design: .monospaced))
-                                    .foregroundStyle(lvl.color)
-                                    .padding(.horizontal, 6)
-                                    .padding(.vertical, 2)
-                                    .background(lvl.color.opacity(0.15))
-                                    .cornerRadius(3)
-                            }
-                        }
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 6)
-                        .background(lvl == state.accessLevel ? Color.white.opacity(0.04) : .clear)
-                        .cornerRadius(4)
-                        .contentShape(Rectangle())
-                        .onTapGesture {
-                            if lvl != .fullAccess {
-                                withAnimation { state.accessLevel = lvl }
-                            }
-                        }
-                    }
+                // Security status cards
+                HStack(spacing: 12) {
+                    SecurityMetricCard(
+                        icon: "shield.checkered", label: "Access Level",
+                        value: "\(state.accessLevel.rawValue) — \(state.accessLevel.name)",
+                        color: state.accessLevel.color
+                    )
+                    SecurityMetricCard(
+                        icon: "hand.raised.fill", label: "Threats Blocked",
+                        value: "\(state.blockedRequests)",
+                        color: state.blockedRequests > 0 ? .red : .green
+                    )
+                    SecurityMetricCard(
+                        icon: "lock.fill", label: "Encryption",
+                        value: "AES-256",
+                        color: .cyan
+                    )
+                    SecurityMetricCard(
+                        icon: "network", label: "Binding",
+                        value: "localhost",
+                        color: .green
+                    )
                 }
 
-                // Sandbox paths
-                SectionHeader(title: "SANDBOX PATHS")
+                // Active protections
+                SectionHeader(title: "ACTIVE PROTECTIONS")
                 VStack(spacing: 2) {
-                    ForEach(AppConfig.sandboxPaths, id: \.self) { path in
-                        HStack {
-                            Image(systemName: "folder.fill")
-                                .font(.system(size: 10))
-                                .foregroundStyle(.cyan.opacity(0.5))
-                            Text(path)
-                                .font(.system(size: 11, design: .monospaced))
-                                .foregroundStyle(.white.opacity(0.6))
-                            Spacer()
-                        }
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 4)
-                        .background(Color.white.opacity(0.02))
-                        .cornerRadius(4)
-                    }
+                    SecurityProtectionRow(name: "Token Authentication", status: true, detail: "Bearer token required")
+                    SecurityProtectionRow(name: "Localhost Binding", status: true, detail: "NWListener + NIO bound to 127.0.0.1")
+                    SecurityProtectionRow(name: "API Key Encryption", status: true, detail: "AES-256-CBC at rest")
+                    SecurityProtectionRow(name: "Path Traversal Block", status: true, detail: "Sensitive files protected")
+                    SecurityProtectionRow(name: "Shell Injection Guard", status: true, detail: "Metachar + command blocklist")
+                    SecurityProtectionRow(name: "CORS Restriction", status: true, detail: "localhost only")
+                    SecurityProtectionRow(name: "Rate Limiting", status: state.rateLimit > 0, detail: state.rateLimit > 0 ? "\(state.rateLimit) req/min" : "Disabled")
+                    SecurityProtectionRow(name: "SSRF Protection", status: AppConfig.ssrfProtectionEnabled, detail: AppConfig.ssrfProtectionEnabled ? "Private IPs blocked" : "Disabled")
                 }
+
+                Divider().overlay(Color.white.opacity(0.06))
 
                 // Rate limiting
                 SectionHeader(title: "RATE LIMITING")
@@ -900,76 +927,149 @@ struct SecurityView: View {
                         }
                 }
 
-                // Global capability limits
-                SectionHeader(title: "GLOBAL CAPABILITIES")
-                VStack(spacing: 2) {
-                    ForEach(CapabilityCategory.allCases, id: \.self) { category in
-                        let tools = CapabilityRegistry.byCategory[category] ?? []
-                        HStack(spacing: 10) {
-                            Image(systemName: category.icon)
-                                .font(.system(size: 12))
-                                .foregroundStyle(state.globalCapabilities[category.rawValue] == false ? .red.opacity(0.5) : .cyan)
-                                .frame(width: 18)
-                            VStack(alignment: .leading, spacing: 1) {
-                                Text(category.label)
-                                    .font(.system(size: 12, weight: .medium))
-                                    .foregroundStyle(.white.opacity(state.globalCapabilities[category.rawValue] == false ? 0.3 : 0.8))
-                                Text(tools.map { $0.toolName }.joined(separator: ", "))
-                                    .font(.system(size: 9, design: .monospaced))
-                                    .foregroundStyle(.white.opacity(0.2))
-                                    .lineLimit(1)
-                            }
-                            Spacer()
-                            Toggle("", isOn: Binding(
-                                get: { state.globalCapabilities[category.rawValue] != false },
-                                set: { enabled in
-                                    if enabled {
-                                        state.globalCapabilities.removeValue(forKey: category.rawValue)
-                                    } else {
-                                        state.globalCapabilities[category.rawValue] = false
-                                    }
-                                }
-                            ))
-                            .toggleStyle(.switch)
-                            .labelsHidden()
-                            .scaleEffect(0.7)
-                            .tint(.cyan)
-                        }
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 5)
-                        .background(Color.white.opacity(0.02))
-                        .cornerRadius(4)
-                    }
-                }
-                HStack(spacing: 4) {
-                    Image(systemName: "exclamationmark.triangle")
-                        .font(.system(size: 9))
-                        .foregroundStyle(.orange.opacity(0.5))
-                    Text("Disabled categories are hidden from ALL agents, overriding per-agent settings.")
-                        .font(.system(size: 10))
-                        .foregroundStyle(.white.opacity(0.3))
-                }
+                Divider().overlay(Color.white.opacity(0.06))
 
-                // Audit log full view
-                SectionHeader(title: "FULL AUDIT LOG")
-                if state.auditLog.isEmpty {
-                    Text("No activity recorded")
-                        .font(.system(size: 12))
-                        .foregroundStyle(.white.opacity(0.2))
-                        .padding(.vertical, 20)
-                } else {
-                    VStack(spacing: 1) {
-                        ForEach(state.auditLog) { entry in
-                            AuditRow(entry: entry)
+                // Global capabilities — collapsed by default
+                DisclosureGroup(isExpanded: $capabilitiesExpanded) {
+                    VStack(spacing: 2) {
+                        ForEach(CapabilityCategory.allCases, id: \.self) { category in
+                            let tools = CapabilityRegistry.byCategory[category] ?? []
+                            HStack(spacing: 10) {
+                                Image(systemName: category.icon)
+                                    .font(.system(size: 12))
+                                    .foregroundStyle(state.globalCapabilities[category.rawValue] == false ? .red.opacity(0.5) : .cyan)
+                                    .frame(width: 18)
+                                VStack(alignment: .leading, spacing: 1) {
+                                    Text(category.label)
+                                        .font(.system(size: 12, weight: .medium))
+                                        .foregroundStyle(.white.opacity(state.globalCapabilities[category.rawValue] == false ? 0.3 : 0.8))
+                                    Text(tools.map { $0.toolName }.joined(separator: ", "))
+                                        .font(.system(size: 9, design: .monospaced))
+                                        .foregroundStyle(.white.opacity(0.2))
+                                        .lineLimit(1)
+                                }
+                                Spacer()
+                                Toggle("", isOn: Binding(
+                                    get: { state.globalCapabilities[category.rawValue] != false },
+                                    set: { enabled in
+                                        if enabled {
+                                            state.globalCapabilities.removeValue(forKey: category.rawValue)
+                                        } else {
+                                            state.globalCapabilities[category.rawValue] = false
+                                        }
+                                    }
+                                ))
+                                .toggleStyle(.switch)
+                                .labelsHidden()
+                                .scaleEffect(0.7)
+                                .tint(.cyan)
+                            }
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 5)
+                            .background(Color.white.opacity(0.02))
+                            .cornerRadius(4)
                         }
                     }
-                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                    HStack(spacing: 4) {
+                        Image(systemName: "exclamationmark.triangle")
+                            .font(.system(size: 9))
+                            .foregroundStyle(.orange.opacity(0.5))
+                        Text("Disabled categories are hidden from ALL agents, overriding per-agent settings.")
+                            .font(.system(size: 10))
+                            .foregroundStyle(.white.opacity(0.3))
+                    }
+                } label: {
+                    SectionHeader(title: "GLOBAL CAPABILITIES")
                 }
+                .tint(.white.opacity(0.3))
+
+                Divider().overlay(Color.white.opacity(0.06))
+
+                // Audit log — collapsed by default
+                DisclosureGroup(isExpanded: $auditExpanded) {
+                    if state.auditLog.isEmpty {
+                        Text("No activity recorded")
+                            .font(.system(size: 12))
+                            .foregroundStyle(.white.opacity(0.2))
+                            .padding(.vertical, 20)
+                    } else {
+                        VStack(spacing: 1) {
+                            ForEach(state.auditLog) { entry in
+                                AuditRow(entry: entry)
+                            }
+                        }
+                        .clipShape(RoundedRectangle(cornerRadius: 8))
+                    }
+                } label: {
+                    HStack {
+                        SectionHeader(title: "FULL AUDIT LOG")
+                        Spacer()
+                        Text("\(state.auditLog.count) entries")
+                            .font(.system(size: 10, design: .monospaced))
+                            .foregroundStyle(.white.opacity(0.2))
+                    }
+                }
+                .tint(.white.opacity(0.3))
 
                 Spacer(minLength: 20)
             }
             .padding(24)
         }
+    }
+}
+
+// MARK: - Security Helper Views
+
+private struct SecurityMetricCard: View {
+    let icon: String
+    let label: String
+    let value: String
+    let color: Color
+
+    var body: some View {
+        VStack(spacing: 6) {
+            Image(systemName: icon)
+                .font(.system(size: 16))
+                .foregroundStyle(color)
+            Text(value)
+                .font(.system(size: 11, weight: .bold, design: .monospaced))
+                .foregroundStyle(.white.opacity(0.8))
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+            Text(label)
+                .font(.system(size: 9))
+                .foregroundStyle(.white.opacity(0.3))
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 12)
+        .background(Color.white.opacity(0.03))
+        .cornerRadius(8)
+        .overlay(RoundedRectangle(cornerRadius: 8).stroke(color.opacity(0.15), lineWidth: 1))
+    }
+}
+
+private struct SecurityProtectionRow: View {
+    let name: String
+    let status: Bool
+    let detail: String
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Circle()
+                .fill(status ? Color.green : Color.red.opacity(0.5))
+                .frame(width: 6, height: 6)
+            Text(name)
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(.white.opacity(0.7))
+            Spacer()
+            Text(detail)
+                .font(.system(size: 10, design: .monospaced))
+                .foregroundStyle(.white.opacity(0.3))
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 5)
+        .background(Color.white.opacity(0.02))
+        .cornerRadius(4)
     }
 }
 
