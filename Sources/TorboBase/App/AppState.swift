@@ -341,6 +341,14 @@ enum AppConfig {
         set { defaults.set(newValue, forKey: "torboSystemPromptEnabled") }
     }
 
+    static var memoryEnabled: Bool {
+        get {
+            if defaults.object(forKey: "torboMemoryEnabled") == nil { return true }
+            return defaults.bool(forKey: "torboMemoryEnabled")
+        }
+        set { defaults.set(newValue, forKey: "torboMemoryEnabled") }
+    }
+
     static func generateToken() -> String {
         var bytes = [UInt8](repeating: 0, count: 32)
         #if canImport(Security)

@@ -51,11 +51,16 @@ actor MemoryRouter {
         let userContent = extractText(from: userMessage?["content"])
         guard !userContent.isEmpty else { return }
 
-        // Retrieve relevant memories
-        let memoryBlock = await MemoryArmy.shared.searcherRetrieve(
-            userMessage: userContent,
-            conversationHistory: messages
-        )
+        // Retrieve relevant memories (skip if memory system is disabled)
+        let memoryBlock: String?
+        if AppConfig.memoryEnabled {
+            memoryBlock = await MemoryArmy.shared.searcherRetrieve(
+                userMessage: userContent,
+                conversationHistory: messages
+            )
+        } else {
+            memoryBlock = nil
+        }
 
         // Also get the existing MemoryManager's prompt (for backward compatibility)
         let legacyMemory = await MemoryManager.shared.assembleMemoryPrompt()
@@ -81,7 +86,7 @@ actor MemoryRouter {
         }
 
         // 2. Memory context (from vector search)
-        if !memoryBlock.isEmpty {
+        if let memoryBlock, !memoryBlock.isEmpty {
             systemParts.append(memoryBlock)
         }
 
@@ -119,6 +124,7 @@ actor MemoryRouter {
     /// Extracts new memories and indexes them. Runs in background.
     /// Nonisolated so callers don't need to await — fires and forgets.
     nonisolated func processExchange(userMessage: String, assistantResponse: String, model: String) {
+        guard AppConfig.memoryEnabled else { return }
         // Run extraction in background — never block the response
         Task {
             // Memory Army's librarian handles extraction + indexing

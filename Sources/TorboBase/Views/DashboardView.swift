@@ -822,7 +822,6 @@ struct SpacesView: View {
     /// Group recent messages by day label (Today, Yesterday, or date)
     private var messagesByDay: [(String, [ConversationMessage])] {
         let cal = Calendar.current
-        let now = Date()
         var groups: [(String, [ConversationMessage])] = []
         var current: (String, [ConversationMessage])? = nil
 
@@ -1087,6 +1086,26 @@ struct SettingsView: View {
     @State private var portNeedsRestart = false
     @State private var keySaveTask: Task<Void, Never>?
 
+    // All sections collapsed by default
+    @State private var serverExpanded = false
+    @State private var apiKeysExpanded = false
+    @State private var voiceExpanded = false
+    @State private var telegramExpanded = false
+    @State private var discordExpanded = false
+    @State private var slackExpanded = false
+    @State private var whatsappExpanded = false
+    @State private var signalExpanded = false
+    @State private var imessageExpanded = false
+    @State private var sandboxExpanded = false
+    @State private var corsExpanded = false
+    @State private var commandsExpanded = false
+    @State private var ssrfExpanded = false
+    @State private var systemPromptExpanded = false
+    @State private var conversationExpanded = false
+    @State private var memoryExpanded = false
+    @State private var memoryEnabled = AppConfig.memoryEnabled
+    @State private var memoryStats: [String: Any] = [:]
+
     private let systemPromptPresets: [(String, String)] = [
         ("Concise", "You are a helpful assistant. Be concise and direct. Avoid unnecessary preamble."),
         ("Coder", "You are an expert software engineer. Write clean, efficient code. Explain your reasoning briefly."),
@@ -1097,443 +1116,630 @@ struct SettingsView: View {
     var body: some View {
 
         ScrollView {
-            VStack(alignment: .leading, spacing: 24) {
+            VStack(alignment: .leading, spacing: 16) {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Settings")
                         .font(.system(size: 22, weight: .bold))
                         .foregroundStyle(.white)
-                    Text("Configure Torbo Base")
+                    Text("All sections collapsed — expand what you need")
                         .font(.system(size: 12))
                         .foregroundStyle(.white.opacity(0.4))
                 }
 
-                // Server
-                SectionHeader(title: "SERVER")
-                HStack(spacing: 8) {
-                    Text("Port:")
-                        .font(.system(size: 12))
-                        .foregroundStyle(.white.opacity(0.5))
-                    TextField("", text: $portText)
-                        .textFieldStyle(.plain)
-                        .font(.system(size: 12, weight: .medium, design: .monospaced))
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 4)
-                        .background(Color.white.opacity(0.06))
-                        .cornerRadius(4)
-                        .frame(width: 70)
-                        .onSubmit { applyPort() }
-                    if portNeedsRestart {
-                        HStack(spacing: 4) {
-                            Image(systemName: "arrow.triangle.2.circlepath")
-                                .font(.system(size: 9))
-                            Text("Restart to apply")
-                                .font(.system(size: 10))
-                        }
-                        .foregroundStyle(.orange.opacity(0.7))
-                        Button("Restart Now") {
-                            Task {
-                                await GatewayServer.shared.stop()
-                                state.serverPort = AppConfig.serverPort
-                                await GatewayServer.shared.start(appState: state)
-                                portNeedsRestart = false
+                // MARK: Memory (Library of Alexandria)
+                DisclosureGroup(isExpanded: $memoryExpanded) {
+                    VStack(alignment: .leading, spacing: 12) {
+                        Toggle(isOn: $memoryEnabled) {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Enable Memory System")
+                                    .font(.system(size: 12, weight: .medium))
+                                    .foregroundStyle(.white.opacity(0.7))
+                                Text("When OFF, no memories are stored or retrieved. Existing memories are preserved but inactive.")
+                                    .font(.system(size: 10))
+                                    .foregroundStyle(.white.opacity(0.25))
                             }
                         }
-                        .font(.system(size: 10, weight: .medium))
-                        .buttonStyle(.bordered)
-                        .controlSize(.mini)
-                    } else {
-                        Text("Default: 4200")
-                            .font(.system(size: 10))
-                            .foregroundStyle(.white.opacity(0.2))
-                    }
-                    Spacer()
-                }
-                Toggle(isOn: $launchAtLogin) {
-                    Text("Launch at login")
-                        .font(.system(size: 12))
-                        .foregroundStyle(.white.opacity(0.6))
-                }
-                .toggleStyle(.switch)
-                .controlSize(.small)
-                .onChange(of: launchAtLogin) { enabled in
-                    LaunchAtLogin.setEnabled(enabled)
-                }
-
-                // Cloud API Keys
-                SectionHeader(title: "CLOUD API KEYS")
-                Text("Optional — for routing to cloud models through Torbo Base")
-                    .font(.system(size: 11))
-                    .foregroundStyle(.white.opacity(0.3))
-
-                ForEach(CloudProvider.allCases, id: \.self) { provider in
-                    HStack(spacing: 8) {
-                        Text(provider.rawValue)
-                            .font(.system(size: 12, weight: .medium))
-                            .foregroundStyle(.white.opacity(0.6))
-                            .frame(width: 140, alignment: .leading)
-                        SecureField("API Key", text: cloudKeyBinding(for: provider))
-                            .textFieldStyle(.plain)
-                            .font(.system(size: 11, design: .monospaced))
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 4)
-                            .background(Color.white.opacity(0.06))
-                            .cornerRadius(4)
-                    }
-                }
-
-                // Voice / Image API Keys
-                SectionHeader(title: "VOICE & IMAGE")
-                Text("For text-to-speech (ElevenLabs preferred) and image generation (DALL-E via OpenAI)")
-                    .font(.system(size: 11))
-                    .foregroundStyle(.white.opacity(0.3))
-
-                HStack(spacing: 8) {
-                    Text("ElevenLabs")
-                        .font(.system(size: 12, weight: .medium))
-                        .foregroundStyle(.white.opacity(0.6))
-                        .frame(width: 140, alignment: .leading)
-                    SecureField("API Key", text: elevenlabsKeyBinding)
-                        .textFieldStyle(.plain)
-                        .font(.system(size: 11, design: .monospaced))
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 4)
-                        .background(Color.white.opacity(0.06))
-                        .cornerRadius(4)
-                }
-                Text("TTS: Uses ElevenLabs if configured, falls back to OpenAI. STT: Uses OpenAI Whisper. Images: Uses OpenAI DALL-E.")
-                    .font(.system(size: 10))
-                    .foregroundStyle(.white.opacity(0.2))
-
-                // Telegram
-                SectionHeader(title: "TELEGRAM INTEGRATION")
-                Text("Forward conversations and notifications to Telegram")
-                    .font(.system(size: 11))
-                    .foregroundStyle(.white.opacity(0.3))
-
-                Toggle("Enable Telegram", isOn: telegramEnabledBinding)
-                    .font(.system(size: 12))
-                    .foregroundStyle(.white.opacity(0.6))
-
-                if state.telegramConfig.enabled {
-                    HStack(spacing: 8) {
-                        Text("Bot Token:")
-                            .font(.system(size: 12))
-                            .foregroundStyle(.white.opacity(0.5))
-                            .frame(width: 80, alignment: .leading)
-                        SecureField("token", text: telegramTokenBinding)
-                            .textFieldStyle(.plain)
-                            .font(.system(size: 11, design: .monospaced))
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 4)
-                            .background(Color.white.opacity(0.06))
-                            .cornerRadius(4)
-                    }
-                    HStack(spacing: 8) {
-                        Text("Chat ID:")
-                            .font(.system(size: 12))
-                            .foregroundStyle(.white.opacity(0.5))
-                            .frame(width: 80, alignment: .leading)
-                        TextField("chat id", text: telegramChatBinding)
-                            .textFieldStyle(.plain)
-                            .font(.system(size: 11, design: .monospaced))
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 4)
-                            .background(Color.white.opacity(0.06))
-                            .cornerRadius(4)
-                    }
-                }
-
-                // Discord
-                SectionHeader(title: "DISCORD")
-                channelConfigRow(label: "Bot Token", value: Binding(
-                    get: { state.discordBotToken ?? "" },
-                    set: { state.discordBotToken = $0.isEmpty ? nil : $0 }
-                ), secure: true)
-                channelConfigRow(label: "Channel ID", value: Binding(
-                    get: { state.discordChannelID ?? "" },
-                    set: { state.discordChannelID = $0.isEmpty ? nil : $0 }
-                ))
-
-                // Slack
-                SectionHeader(title: "SLACK")
-                channelConfigRow(label: "Bot Token", value: Binding(
-                    get: { state.slackBotToken ?? "" },
-                    set: { state.slackBotToken = $0.isEmpty ? nil : $0 }
-                ), secure: true)
-                channelConfigRow(label: "Channel ID", value: Binding(
-                    get: { state.slackChannelID ?? "" },
-                    set: { state.slackChannelID = $0.isEmpty ? nil : $0 }
-                ))
-
-                // WhatsApp
-                SectionHeader(title: "WHATSAPP")
-                Text("WhatsApp Business Cloud API")
-                    .font(.system(size: 11))
-                    .foregroundStyle(.white.opacity(0.3))
-                channelConfigRow(label: "Access Token", value: Binding(
-                    get: { state.whatsappAccessToken ?? "" },
-                    set: { state.whatsappAccessToken = $0.isEmpty ? nil : $0 }
-                ), secure: true)
-                channelConfigRow(label: "Phone # ID", value: Binding(
-                    get: { state.whatsappPhoneNumberID ?? "" },
-                    set: { state.whatsappPhoneNumberID = $0.isEmpty ? nil : $0 }
-                ))
-                channelConfigRow(label: "Verify Token", value: Binding(
-                    get: { state.whatsappVerifyToken ?? "" },
-                    set: { state.whatsappVerifyToken = $0.isEmpty ? nil : $0 }
-                ))
-
-                // Signal
-                SectionHeader(title: "SIGNAL")
-                Text("Requires signal-cli REST API running locally")
-                    .font(.system(size: 11))
-                    .foregroundStyle(.white.opacity(0.3))
-                channelConfigRow(label: "Phone #", value: Binding(
-                    get: { state.signalPhoneNumber ?? "" },
-                    set: { state.signalPhoneNumber = $0.isEmpty ? nil : $0 }
-                ))
-                channelConfigRow(label: "API URL", value: Binding(
-                    get: { state.signalAPIURL ?? "" },
-                    set: { state.signalAPIURL = $0.isEmpty ? nil : $0 }
-                ))
-
-                // iMessage (macOS only)
-                SectionHeader(title: "IMESSAGE")
-                Text("Uses AppleScript — macOS only, no config needed")
-                    .font(.system(size: 11))
-                    .foregroundStyle(.white.opacity(0.3))
-
-                // Sandbox paths management
-                SectionHeader(title: "SANDBOX PATHS")
-                VStack(spacing: 2) {
-                    ForEach(AppConfig.sandboxPaths, id: \.self) { path in
-                        HStack {
-                            Image(systemName: "folder").font(.system(size: 10)).foregroundStyle(.cyan.opacity(0.4))
-                            Text(path).font(.system(size: 11, design: .monospaced)).foregroundStyle(.white.opacity(0.6))
-                            Spacer()
-                            Button {
-                                var paths = AppConfig.sandboxPaths
-                                paths.removeAll(where: { $0 == path })
-                                AppConfig.sandboxPaths = paths
-                            } label: {
-                                Image(systemName: "minus.circle").font(.system(size: 10)).foregroundStyle(.red.opacity(0.5))
-                            }
-                            .buttonStyle(.plain)
+                        .toggleStyle(.switch)
+                        .controlSize(.small)
+                        .onChange(of: memoryEnabled) { enabled in
+                            AppConfig.memoryEnabled = enabled
                         }
-                        .padding(.horizontal, 8).padding(.vertical, 3)
-                        .background(Color.white.opacity(0.02)).cornerRadius(4)
-                    }
-                }
-                HStack {
-                    TextField("Add path...", text: $newPath)
-                        .textFieldStyle(.plain)
-                        .font(.system(size: 11, design: .monospaced))
-                        .padding(.horizontal, 8).padding(.vertical, 4)
-                        .background(Color.white.opacity(0.06)).cornerRadius(4)
-                    Button {
-                        guard !newPath.isEmpty else { return }
-                        var paths = AppConfig.sandboxPaths
-                        paths.append(newPath)
-                        AppConfig.sandboxPaths = paths
-                        newPath = ""
-                    } label: {
-                        Image(systemName: "plus.circle").font(.system(size: 12))
-                    }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(.cyan.opacity(0.6))
-                }
 
-                // CORS Allowed Origins
-                SectionHeader(title: "CORS ALLOWED ORIGINS")
-                Text("Origins allowed to make cross-origin requests. Sensitive endpoints (/exec, /v1/fetch, /v1/browser) never include CORS headers.")
-                    .font(.system(size: 10))
-                    .foregroundStyle(.white.opacity(0.2))
-                VStack(spacing: 2) {
-                    ForEach(AppConfig.allowedCORSOrigins, id: \.self) { origin in
-                        HStack {
-                            Image(systemName: "network").font(.system(size: 10)).foregroundStyle(.cyan.opacity(0.4))
-                            Text(origin).font(.system(size: 11, design: .monospaced)).foregroundStyle(.white.opacity(0.6))
-                            Spacer()
-                            Button {
-                                var origins = AppConfig.allowedCORSOrigins
-                                origins.removeAll(where: { $0 == origin })
-                                AppConfig.allowedCORSOrigins = origins
-                            } label: {
-                                Image(systemName: "minus.circle").font(.system(size: 10)).foregroundStyle(.red.opacity(0.5))
-                            }
-                            .buttonStyle(.plain)
-                        }
-                        .padding(.horizontal, 8).padding(.vertical, 3)
-                        .background(Color.white.opacity(0.02)).cornerRadius(4)
-                    }
-                }
-                HStack {
-                    TextField("Add origin (e.g. http://localhost:3000)...", text: $newOrigin)
-                        .textFieldStyle(.plain)
-                        .font(.system(size: 11, design: .monospaced))
-                        .padding(.horizontal, 8).padding(.vertical, 4)
-                        .background(Color.white.opacity(0.06)).cornerRadius(4)
-                    Button {
-                        guard !newOrigin.isEmpty else { return }
-                        var origins = AppConfig.allowedCORSOrigins
-                        if !origins.contains(newOrigin) { origins.append(newOrigin) }
-                        AppConfig.allowedCORSOrigins = origins
-                        newOrigin = ""
-                    } label: {
-                        Image(systemName: "plus.circle").font(.system(size: 12))
-                    }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(.cyan.opacity(0.6))
-                }
+                        if memoryEnabled {
+                            let totalMemories = memoryStats["totalMemories"] as? Int ?? 0
+                            let categories = memoryStats["categories"] as? [String: Int] ?? [:]
 
-                // Allowed Commands (Execution Allowlist)
-                SectionHeader(title: "ALLOWED COMMANDS")
-                Text("Commands allowed for sandboxed execution (/exec). Full access (/exec/shell) is unrestricted.")
-                    .font(.system(size: 10))
-                    .foregroundStyle(.white.opacity(0.2))
-                VStack(spacing: 2) {
-                    let commands = AppConfig.allowedCommands
-                    // Show in a compact wrapped layout
-                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 80), spacing: 4)], spacing: 4) {
-                        ForEach(commands, id: \.self) { cmd in
-                            HStack(spacing: 4) {
-                                Text(cmd).font(.system(size: 10, design: .monospaced)).foregroundStyle(.white.opacity(0.6))
-                                Button {
-                                    var cmds = AppConfig.allowedCommands
-                                    cmds.removeAll(where: { $0 == cmd })
-                                    AppConfig.allowedCommands = cmds
-                                } label: {
-                                    Image(systemName: "xmark").font(.system(size: 7)).foregroundStyle(.red.opacity(0.5))
+                            HStack(spacing: 16) {
+                                VStack(spacing: 2) {
+                                    Text("\(totalMemories)")
+                                        .font(.system(size: 18, weight: .bold, design: .monospaced))
+                                        .foregroundStyle(.cyan)
+                                    Text("Total Scrolls")
+                                        .font(.system(size: 9))
+                                        .foregroundStyle(.white.opacity(0.3))
                                 }
-                                .buttonStyle(.plain)
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 8)
+                                .background(Color.cyan.opacity(0.06))
+                                .cornerRadius(6)
+
+                                VStack(spacing: 2) {
+                                    Text("\(categories.count)")
+                                        .font(.system(size: 18, weight: .bold, design: .monospaced))
+                                        .foregroundStyle(.purple)
+                                    Text("Categories")
+                                        .font(.system(size: 9))
+                                        .foregroundStyle(.white.opacity(0.3))
+                                }
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 8)
+                                .background(Color.purple.opacity(0.06))
+                                .cornerRadius(6)
                             }
-                            .padding(.horizontal, 6).padding(.vertical, 3)
-                            .background(Color.white.opacity(0.04)).cornerRadius(4)
+
+                            if !categories.isEmpty {
+                                VStack(alignment: .leading, spacing: 3) {
+                                    ForEach(categories.sorted(by: { $0.value > $1.value }), id: \.key) { cat, count in
+                                        HStack(spacing: 6) {
+                                            Text(cat)
+                                                .font(.system(size: 10, weight: .medium))
+                                                .foregroundStyle(.white.opacity(0.5))
+                                            Spacer()
+                                            Text("\(count)")
+                                                .font(.system(size: 10, design: .monospaced))
+                                                .foregroundStyle(.white.opacity(0.3))
+                                        }
+                                        .padding(.horizontal, 8).padding(.vertical, 2)
+                                    }
+                                }
+                                .padding(8)
+                                .background(Color.white.opacity(0.02))
+                                .cornerRadius(6)
+                            }
+
+                            Text("LoA (Library of Alexandria) automatically extracts, indexes, and retrieves memories from conversations. Memories are stored locally in SQLite with vector embeddings.")
+                                .font(.system(size: 10))
+                                .foregroundStyle(.white.opacity(0.2))
                         }
                     }
+                    .padding(.top, 8)
+                } label: {
+                    Label("MEMORY (LIBRARY OF ALEXANDRIA)", systemImage: "brain.head.profile")
+                        .font(.system(size: 10, weight: .bold, design: .monospaced))
+                        .foregroundStyle(.cyan.opacity(0.6))
                 }
-                HStack {
-                    TextField("Add command...", text: $newCommand)
-                        .textFieldStyle(.plain)
-                        .font(.system(size: 11, design: .monospaced))
-                        .padding(.horizontal, 8).padding(.vertical, 4)
-                        .background(Color.white.opacity(0.06)).cornerRadius(4)
-                    Button {
-                        guard !newCommand.isEmpty else { return }
-                        var cmds = AppConfig.allowedCommands
-                        if !cmds.contains(newCommand) { cmds.append(newCommand) }
-                        AppConfig.allowedCommands = cmds
-                        newCommand = ""
-                    } label: {
-                        Image(systemName: "plus.circle").font(.system(size: 12))
-                    }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(.cyan.opacity(0.6))
-                }
+                .accentColor(.white.opacity(0.3))
 
-                // SSRF Protection
-                SectionHeader(title: "SSRF PROTECTION")
-                Toggle(isOn: Binding(
-                    get: { AppConfig.ssrfProtectionEnabled },
-                    set: { AppConfig.ssrfProtectionEnabled = $0 }
-                )) {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Block requests to private/internal IPs")
-                            .font(.system(size: 12))
-                            .foregroundStyle(.white.opacity(0.6))
-                        Text("Prevents /v1/fetch from accessing localhost, LAN, and cloud metadata endpoints. Disable only if you need to fetch from local services.")
-                            .font(.system(size: 10))
-                            .foregroundStyle(.white.opacity(0.2))
-                    }
-                }
-                .toggleStyle(.switch)
-                .controlSize(.small)
-
-                // System Prompt
-                SectionHeader(title: "SYSTEM PROMPT")
-                VStack(alignment: .leading, spacing: 8) {
-                    Toggle(isOn: $state.systemPromptEnabled) {
-                        Text("Inject system prompt into all conversations")
-                            .font(.system(size: 12))
-                            .foregroundStyle(.white.opacity(0.6))
-                    }
-                    .toggleStyle(.switch)
-                    .controlSize(.small)
-
-                    if state.systemPromptEnabled {
-                        TextEditor(text: $state.systemPrompt)
-                            .font(.system(size: 11, design: .monospaced))
-                            .foregroundStyle(.white.opacity(0.8))
-                            .scrollContentBackground(.hidden)
-                            .padding(8)
-                            .frame(minHeight: 80, maxHeight: 160)
-                            .background(Color.white.opacity(0.04))
-                            .cornerRadius(6)
-                            .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.white.opacity(0.08), lineWidth: 1))
-                            .overlay(alignment: .topLeading) {
-                                if state.systemPrompt.isEmpty {
-                                    Text("Enter a system prompt that will be prepended to every conversation...")
-                                        .font(.system(size: 11, design: .monospaced))
-                                        .foregroundStyle(.white.opacity(0.2))
-                                        .padding(12)
-                                        .allowsHitTesting(false)
+                // MARK: Server
+                DisclosureGroup(isExpanded: $serverExpanded) {
+                    VStack(alignment: .leading, spacing: 10) {
+                        HStack(spacing: 8) {
+                            Text("Port:")
+                                .font(.system(size: 12))
+                                .foregroundStyle(.white.opacity(0.5))
+                            TextField("", text: $portText)
+                                .textFieldStyle(.plain)
+                                .font(.system(size: 12, weight: .medium, design: .monospaced))
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 4)
+                                .background(Color.white.opacity(0.06))
+                                .cornerRadius(4)
+                                .frame(width: 70)
+                                .onSubmit { applyPort() }
+                            if portNeedsRestart {
+                                HStack(spacing: 4) {
+                                    Image(systemName: "arrow.triangle.2.circlepath")
+                                        .font(.system(size: 9))
+                                    Text("Restart to apply")
+                                        .font(.system(size: 10))
                                 }
-                            }
-
-                        // Preset buttons
-                        HStack(spacing: 6) {
-                            Text("Presets:")
-                                .font(.system(size: 10))
-                                .foregroundStyle(.white.opacity(0.3))
-                            ForEach(systemPromptPresets, id: \.0) { preset in
-                                Button(preset.0) {
-                                    state.systemPrompt = preset.1
+                                .foregroundStyle(.orange.opacity(0.7))
+                                Button("Restart Now") {
+                                    Task {
+                                        await GatewayServer.shared.stop()
+                                        state.serverPort = AppConfig.serverPort
+                                        await GatewayServer.shared.start(appState: state)
+                                        portNeedsRestart = false
+                                    }
                                 }
                                 .font(.system(size: 10, weight: .medium))
                                 .buttonStyle(.bordered)
                                 .controlSize(.mini)
+                            } else {
+                                Text("Default: 4200")
+                                    .font(.system(size: 10))
+                                    .foregroundStyle(.white.opacity(0.2))
+                            }
+                            Spacer()
+                        }
+                        Toggle(isOn: $launchAtLogin) {
+                            Text("Launch at login")
+                                .font(.system(size: 12))
+                                .foregroundStyle(.white.opacity(0.6))
+                        }
+                        .toggleStyle(.switch)
+                        .controlSize(.small)
+                        .onChange(of: launchAtLogin) { enabled in
+                            LaunchAtLogin.setEnabled(enabled)
+                        }
+                    }
+                    .padding(.top, 8)
+                } label: {
+                    Label("SERVER", systemImage: "server.rack")
+                        .font(.system(size: 10, weight: .bold, design: .monospaced))
+                        .foregroundStyle(.white.opacity(0.3))
+                }
+                .accentColor(.white.opacity(0.3))
+
+                // MARK: Cloud API Keys
+                DisclosureGroup(isExpanded: $apiKeysExpanded) {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Optional — for routing to cloud models through Torbo Base")
+                            .font(.system(size: 11))
+                            .foregroundStyle(.white.opacity(0.3))
+                        ForEach(CloudProvider.allCases, id: \.self) { provider in
+                            HStack(spacing: 8) {
+                                Text(provider.rawValue)
+                                    .font(.system(size: 12, weight: .medium))
+                                    .foregroundStyle(.white.opacity(0.6))
+                                    .frame(width: 140, alignment: .leading)
+                                SecureField("API Key", text: cloudKeyBinding(for: provider))
+                                    .textFieldStyle(.plain)
+                                    .font(.system(size: 11, design: .monospaced))
+                                    .padding(.horizontal, 8)
+                                    .padding(.vertical, 4)
+                                    .background(Color.white.opacity(0.06))
+                                    .cornerRadius(4)
                             }
                         }
                     }
+                    .padding(.top, 8)
+                } label: {
+                    Label("CLOUD API KEYS", systemImage: "key.fill")
+                        .font(.system(size: 10, weight: .bold, design: .monospaced))
+                        .foregroundStyle(.white.opacity(0.3))
                 }
+                .accentColor(.white.opacity(0.3))
 
-                Divider().overlay(Color.white.opacity(0.06))
+                // MARK: Voice & Image
+                DisclosureGroup(isExpanded: $voiceExpanded) {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("For text-to-speech (ElevenLabs preferred) and image generation (DALL-E via OpenAI)")
+                            .font(.system(size: 11))
+                            .foregroundStyle(.white.opacity(0.3))
+                        HStack(spacing: 8) {
+                            Text("ElevenLabs")
+                                .font(.system(size: 12, weight: .medium))
+                                .foregroundStyle(.white.opacity(0.6))
+                                .frame(width: 140, alignment: .leading)
+                            SecureField("API Key", text: elevenlabsKeyBinding)
+                                .textFieldStyle(.plain)
+                                .font(.system(size: 11, design: .monospaced))
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 4)
+                                .background(Color.white.opacity(0.06))
+                                .cornerRadius(4)
+                        }
+                        Text("TTS: ElevenLabs if configured, falls back to OpenAI. STT: OpenAI Whisper. Images: OpenAI DALL-E.")
+                            .font(.system(size: 10))
+                            .foregroundStyle(.white.opacity(0.2))
+                    }
+                    .padding(.top, 8)
+                } label: {
+                    Label("VOICE & IMAGE", systemImage: "waveform")
+                        .font(.system(size: 10, weight: .bold, design: .monospaced))
+                        .foregroundStyle(.white.opacity(0.3))
+                }
+                .accentColor(.white.opacity(0.3))
 
-                // Conversation Storage
-                SectionHeader(title: "CONVERSATION STORAGE")
-                HStack(spacing: 12) {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("\(state.recentMessages.count) messages in memory")
+                // MARK: Messaging Integrations
+                DisclosureGroup(isExpanded: $telegramExpanded) {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Toggle("Enable Telegram", isOn: telegramEnabledBinding)
                             .font(.system(size: 12))
                             .foregroundStyle(.white.opacity(0.6))
-                        Text(storageSize)
-                            .font(.system(size: 10, design: .monospaced))
-                            .foregroundStyle(.white.opacity(0.3))
-                    }
-                    Spacer()
-                    Button {
-                        Task {
-                            if let url = await ConversationStore.shared.exportConversations() {
-                                NSWorkspace.shared.selectFile(url.path, inFileViewerRootedAtPath: url.deletingLastPathComponent().path)
+                        if state.telegramConfig.enabled {
+                            HStack(spacing: 8) {
+                                Text("Bot Token:")
+                                    .font(.system(size: 12))
+                                    .foregroundStyle(.white.opacity(0.5))
+                                    .frame(width: 80, alignment: .leading)
+                                SecureField("token", text: telegramTokenBinding)
+                                    .textFieldStyle(.plain)
+                                    .font(.system(size: 11, design: .monospaced))
+                                    .padding(.horizontal, 8).padding(.vertical, 4)
+                                    .background(Color.white.opacity(0.06)).cornerRadius(4)
+                            }
+                            HStack(spacing: 8) {
+                                Text("Chat ID:")
+                                    .font(.system(size: 12))
+                                    .foregroundStyle(.white.opacity(0.5))
+                                    .frame(width: 80, alignment: .leading)
+                                TextField("chat id", text: telegramChatBinding)
+                                    .textFieldStyle(.plain)
+                                    .font(.system(size: 11, design: .monospaced))
+                                    .padding(.horizontal, 8).padding(.vertical, 4)
+                                    .background(Color.white.opacity(0.06)).cornerRadius(4)
                             }
                         }
-                    } label: {
-                        Label("Export", systemImage: "square.and.arrow.up")
-                            .font(.system(size: 11, weight: .medium))
                     }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
-
-                    Button {
-                        showClearConfirm = true
-                    } label: {
-                        Label("Clear All", systemImage: "trash")
-                            .font(.system(size: 11, weight: .medium))
-                    }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
-                    .foregroundStyle(.red.opacity(0.7))
+                    .padding(.top, 8)
+                } label: {
+                    Label("TELEGRAM", systemImage: "paperplane.fill")
+                        .font(.system(size: 10, weight: .bold, design: .monospaced))
+                        .foregroundStyle(.white.opacity(0.3))
                 }
+                .accentColor(.white.opacity(0.3))
+
+                DisclosureGroup(isExpanded: $discordExpanded) {
+                    VStack(alignment: .leading, spacing: 8) {
+                        channelConfigRow(label: "Bot Token", value: Binding(
+                            get: { state.discordBotToken ?? "" },
+                            set: { state.discordBotToken = $0.isEmpty ? nil : $0 }
+                        ), secure: true)
+                        channelConfigRow(label: "Channel ID", value: Binding(
+                            get: { state.discordChannelID ?? "" },
+                            set: { state.discordChannelID = $0.isEmpty ? nil : $0 }
+                        ))
+                    }
+                    .padding(.top, 8)
+                } label: {
+                    Label("DISCORD", systemImage: "bubble.left.and.bubble.right.fill")
+                        .font(.system(size: 10, weight: .bold, design: .monospaced))
+                        .foregroundStyle(.white.opacity(0.3))
+                }
+                .accentColor(.white.opacity(0.3))
+
+                DisclosureGroup(isExpanded: $slackExpanded) {
+                    VStack(alignment: .leading, spacing: 8) {
+                        channelConfigRow(label: "Bot Token", value: Binding(
+                            get: { state.slackBotToken ?? "" },
+                            set: { state.slackBotToken = $0.isEmpty ? nil : $0 }
+                        ), secure: true)
+                        channelConfigRow(label: "Channel ID", value: Binding(
+                            get: { state.slackChannelID ?? "" },
+                            set: { state.slackChannelID = $0.isEmpty ? nil : $0 }
+                        ))
+                    }
+                    .padding(.top, 8)
+                } label: {
+                    Label("SLACK", systemImage: "number")
+                        .font(.system(size: 10, weight: .bold, design: .monospaced))
+                        .foregroundStyle(.white.opacity(0.3))
+                }
+                .accentColor(.white.opacity(0.3))
+
+                DisclosureGroup(isExpanded: $whatsappExpanded) {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("WhatsApp Business Cloud API")
+                            .font(.system(size: 11))
+                            .foregroundStyle(.white.opacity(0.3))
+                        channelConfigRow(label: "Access Token", value: Binding(
+                            get: { state.whatsappAccessToken ?? "" },
+                            set: { state.whatsappAccessToken = $0.isEmpty ? nil : $0 }
+                        ), secure: true)
+                        channelConfigRow(label: "Phone # ID", value: Binding(
+                            get: { state.whatsappPhoneNumberID ?? "" },
+                            set: { state.whatsappPhoneNumberID = $0.isEmpty ? nil : $0 }
+                        ))
+                        channelConfigRow(label: "Verify Token", value: Binding(
+                            get: { state.whatsappVerifyToken ?? "" },
+                            set: { state.whatsappVerifyToken = $0.isEmpty ? nil : $0 }
+                        ))
+                    }
+                    .padding(.top, 8)
+                } label: {
+                    Label("WHATSAPP", systemImage: "phone.fill")
+                        .font(.system(size: 10, weight: .bold, design: .monospaced))
+                        .foregroundStyle(.white.opacity(0.3))
+                }
+                .accentColor(.white.opacity(0.3))
+
+                DisclosureGroup(isExpanded: $signalExpanded) {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Requires signal-cli REST API running locally")
+                            .font(.system(size: 11))
+                            .foregroundStyle(.white.opacity(0.3))
+                        channelConfigRow(label: "Phone #", value: Binding(
+                            get: { state.signalPhoneNumber ?? "" },
+                            set: { state.signalPhoneNumber = $0.isEmpty ? nil : $0 }
+                        ))
+                        channelConfigRow(label: "API URL", value: Binding(
+                            get: { state.signalAPIURL ?? "" },
+                            set: { state.signalAPIURL = $0.isEmpty ? nil : $0 }
+                        ))
+                    }
+                    .padding(.top, 8)
+                } label: {
+                    Label("SIGNAL", systemImage: "lock.shield.fill")
+                        .font(.system(size: 10, weight: .bold, design: .monospaced))
+                        .foregroundStyle(.white.opacity(0.3))
+                }
+                .accentColor(.white.opacity(0.3))
+
+                // MARK: Sandbox & Security
+                DisclosureGroup(isExpanded: $sandboxExpanded) {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Directories agents can read/write. This is the single source of truth for all file access scoping.")
+                            .font(.system(size: 10))
+                            .foregroundStyle(.white.opacity(0.25))
+                        VStack(spacing: 2) {
+                            ForEach(AppConfig.sandboxPaths, id: \.self) { path in
+                                HStack {
+                                    Image(systemName: "folder").font(.system(size: 10)).foregroundStyle(.cyan.opacity(0.4))
+                                    Text(path).font(.system(size: 11, design: .monospaced)).foregroundStyle(.white.opacity(0.6))
+                                    Spacer()
+                                    Button {
+                                        var paths = AppConfig.sandboxPaths
+                                        paths.removeAll(where: { $0 == path })
+                                        AppConfig.sandboxPaths = paths
+                                    } label: {
+                                        Image(systemName: "minus.circle").font(.system(size: 10)).foregroundStyle(.red.opacity(0.5))
+                                    }
+                                    .buttonStyle(.plain)
+                                }
+                                .padding(.horizontal, 8).padding(.vertical, 3)
+                                .background(Color.white.opacity(0.02)).cornerRadius(4)
+                            }
+                        }
+                        HStack {
+                            TextField("Add path...", text: $newPath)
+                                .textFieldStyle(.plain)
+                                .font(.system(size: 11, design: .monospaced))
+                                .padding(.horizontal, 8).padding(.vertical, 4)
+                                .background(Color.white.opacity(0.06)).cornerRadius(4)
+                            Button {
+                                guard !newPath.isEmpty else { return }
+                                var paths = AppConfig.sandboxPaths
+                                paths.append(newPath)
+                                AppConfig.sandboxPaths = paths
+                                newPath = ""
+                            } label: {
+                                Image(systemName: "plus.circle").font(.system(size: 12))
+                            }
+                            .buttonStyle(.plain)
+                            .foregroundStyle(.cyan.opacity(0.6))
+                        }
+                    }
+                    .padding(.top, 8)
+                } label: {
+                    Label("SANDBOX PATHS", systemImage: "folder.badge.gearshape")
+                        .font(.system(size: 10, weight: .bold, design: .monospaced))
+                        .foregroundStyle(.white.opacity(0.3))
+                }
+                .accentColor(.white.opacity(0.3))
+
+                DisclosureGroup(isExpanded: $corsExpanded) {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Origins allowed to make cross-origin requests. Sensitive endpoints (/exec, /v1/fetch, /v1/browser) never include CORS headers.")
+                            .font(.system(size: 10))
+                            .foregroundStyle(.white.opacity(0.2))
+                        VStack(spacing: 2) {
+                            ForEach(AppConfig.allowedCORSOrigins, id: \.self) { origin in
+                                HStack {
+                                    Image(systemName: "network").font(.system(size: 10)).foregroundStyle(.cyan.opacity(0.4))
+                                    Text(origin).font(.system(size: 11, design: .monospaced)).foregroundStyle(.white.opacity(0.6))
+                                    Spacer()
+                                    Button {
+                                        var origins = AppConfig.allowedCORSOrigins
+                                        origins.removeAll(where: { $0 == origin })
+                                        AppConfig.allowedCORSOrigins = origins
+                                    } label: {
+                                        Image(systemName: "minus.circle").font(.system(size: 10)).foregroundStyle(.red.opacity(0.5))
+                                    }
+                                    .buttonStyle(.plain)
+                                }
+                                .padding(.horizontal, 8).padding(.vertical, 3)
+                                .background(Color.white.opacity(0.02)).cornerRadius(4)
+                            }
+                        }
+                        HStack {
+                            TextField("Add origin (e.g. http://localhost:3000)...", text: $newOrigin)
+                                .textFieldStyle(.plain)
+                                .font(.system(size: 11, design: .monospaced))
+                                .padding(.horizontal, 8).padding(.vertical, 4)
+                                .background(Color.white.opacity(0.06)).cornerRadius(4)
+                            Button {
+                                guard !newOrigin.isEmpty else { return }
+                                var origins = AppConfig.allowedCORSOrigins
+                                if !origins.contains(newOrigin) { origins.append(newOrigin) }
+                                AppConfig.allowedCORSOrigins = origins
+                                newOrigin = ""
+                            } label: {
+                                Image(systemName: "plus.circle").font(.system(size: 12))
+                            }
+                            .buttonStyle(.plain)
+                            .foregroundStyle(.cyan.opacity(0.6))
+                        }
+                    }
+                    .padding(.top, 8)
+                } label: {
+                    Label("CORS ALLOWED ORIGINS", systemImage: "globe")
+                        .font(.system(size: 10, weight: .bold, design: .monospaced))
+                        .foregroundStyle(.white.opacity(0.3))
+                }
+                .accentColor(.white.opacity(0.3))
+
+                DisclosureGroup(isExpanded: $commandsExpanded) {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Commands allowed for sandboxed execution (/exec). Full access (/exec/shell) is unrestricted.")
+                            .font(.system(size: 10))
+                            .foregroundStyle(.white.opacity(0.2))
+                        VStack(spacing: 2) {
+                            let commands = AppConfig.allowedCommands
+                            LazyVGrid(columns: [GridItem(.adaptive(minimum: 80), spacing: 4)], spacing: 4) {
+                                ForEach(commands, id: \.self) { cmd in
+                                    HStack(spacing: 4) {
+                                        Text(cmd).font(.system(size: 10, design: .monospaced)).foregroundStyle(.white.opacity(0.6))
+                                        Button {
+                                            var cmds = AppConfig.allowedCommands
+                                            cmds.removeAll(where: { $0 == cmd })
+                                            AppConfig.allowedCommands = cmds
+                                        } label: {
+                                            Image(systemName: "xmark").font(.system(size: 7)).foregroundStyle(.red.opacity(0.5))
+                                        }
+                                        .buttonStyle(.plain)
+                                    }
+                                    .padding(.horizontal, 6).padding(.vertical, 3)
+                                    .background(Color.white.opacity(0.04)).cornerRadius(4)
+                                }
+                            }
+                        }
+                        HStack {
+                            TextField("Add command...", text: $newCommand)
+                                .textFieldStyle(.plain)
+                                .font(.system(size: 11, design: .monospaced))
+                                .padding(.horizontal, 8).padding(.vertical, 4)
+                                .background(Color.white.opacity(0.06)).cornerRadius(4)
+                            Button {
+                                guard !newCommand.isEmpty else { return }
+                                var cmds = AppConfig.allowedCommands
+                                if !cmds.contains(newCommand) { cmds.append(newCommand) }
+                                AppConfig.allowedCommands = cmds
+                                newCommand = ""
+                            } label: {
+                                Image(systemName: "plus.circle").font(.system(size: 12))
+                            }
+                            .buttonStyle(.plain)
+                            .foregroundStyle(.cyan.opacity(0.6))
+                        }
+                    }
+                    .padding(.top, 8)
+                } label: {
+                    Label("ALLOWED COMMANDS", systemImage: "terminal.fill")
+                        .font(.system(size: 10, weight: .bold, design: .monospaced))
+                        .foregroundStyle(.white.opacity(0.3))
+                }
+                .accentColor(.white.opacity(0.3))
+
+                DisclosureGroup(isExpanded: $ssrfExpanded) {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Toggle(isOn: Binding(
+                            get: { AppConfig.ssrfProtectionEnabled },
+                            set: { AppConfig.ssrfProtectionEnabled = $0 }
+                        )) {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Block requests to private/internal IPs")
+                                    .font(.system(size: 12))
+                                    .foregroundStyle(.white.opacity(0.6))
+                                Text("Prevents /v1/fetch from accessing localhost, LAN, and cloud metadata endpoints.")
+                                    .font(.system(size: 10))
+                                    .foregroundStyle(.white.opacity(0.2))
+                            }
+                        }
+                        .toggleStyle(.switch)
+                        .controlSize(.small)
+                    }
+                    .padding(.top, 8)
+                } label: {
+                    Label("SSRF PROTECTION", systemImage: "shield.lefthalf.filled")
+                        .font(.system(size: 10, weight: .bold, design: .monospaced))
+                        .foregroundStyle(.white.opacity(0.3))
+                }
+                .accentColor(.white.opacity(0.3))
+
+                // MARK: System Prompt
+                DisclosureGroup(isExpanded: $systemPromptExpanded) {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Toggle(isOn: $state.systemPromptEnabled) {
+                            Text("Inject system prompt into all conversations")
+                                .font(.system(size: 12))
+                                .foregroundStyle(.white.opacity(0.6))
+                        }
+                        .toggleStyle(.switch)
+                        .controlSize(.small)
+
+                        if state.systemPromptEnabled {
+                            TextEditor(text: $state.systemPrompt)
+                                .font(.system(size: 11, design: .monospaced))
+                                .foregroundStyle(.white.opacity(0.8))
+                                .scrollContentBackground(.hidden)
+                                .padding(8)
+                                .frame(minHeight: 80, maxHeight: 160)
+                                .background(Color.white.opacity(0.04))
+                                .cornerRadius(6)
+                                .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.white.opacity(0.08), lineWidth: 1))
+                                .overlay(alignment: .topLeading) {
+                                    if state.systemPrompt.isEmpty {
+                                        Text("Enter a system prompt that will be prepended to every conversation...")
+                                            .font(.system(size: 11, design: .monospaced))
+                                            .foregroundStyle(.white.opacity(0.2))
+                                            .padding(12)
+                                            .allowsHitTesting(false)
+                                    }
+                                }
+
+                            HStack(spacing: 6) {
+                                Text("Presets:")
+                                    .font(.system(size: 10))
+                                    .foregroundStyle(.white.opacity(0.3))
+                                ForEach(systemPromptPresets, id: \.0) { preset in
+                                    Button(preset.0) {
+                                        state.systemPrompt = preset.1
+                                    }
+                                    .font(.system(size: 10, weight: .medium))
+                                    .buttonStyle(.bordered)
+                                    .controlSize(.mini)
+                                }
+                            }
+                        }
+                    }
+                    .padding(.top, 8)
+                } label: {
+                    Label("SYSTEM PROMPT", systemImage: "text.bubble.fill")
+                        .font(.system(size: 10, weight: .bold, design: .monospaced))
+                        .foregroundStyle(.white.opacity(0.3))
+                }
+                .accentColor(.white.opacity(0.3))
+
+                // MARK: Conversation Storage
+                DisclosureGroup(isExpanded: $conversationExpanded) {
+                    VStack(alignment: .leading, spacing: 10) {
+                        Text("Torbo Base keeps the last 200 messages in memory for fast access. Full history is persisted to disk and can be exported or cleared. Messages are stored locally — never sent to any external service.")
+                            .font(.system(size: 10))
+                            .foregroundStyle(.white.opacity(0.25))
+
+                        HStack(spacing: 12) {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text("\(state.recentMessages.count) messages in memory")
+                                    .font(.system(size: 12))
+                                    .foregroundStyle(.white.opacity(0.6))
+                                Text(storageSize)
+                                    .font(.system(size: 10, design: .monospaced))
+                                    .foregroundStyle(.white.opacity(0.3))
+                            }
+                            Spacer()
+                            Button {
+                                Task {
+                                    if let url = await ConversationStore.shared.exportConversations() {
+                                        NSWorkspace.shared.selectFile(url.path, inFileViewerRootedAtPath: url.deletingLastPathComponent().path)
+                                    }
+                                }
+                            } label: {
+                                Label("Export", systemImage: "square.and.arrow.up")
+                                    .font(.system(size: 11, weight: .medium))
+                            }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+
+                            Button {
+                                showClearConfirm = true
+                            } label: {
+                                Label("Clear All", systemImage: "trash")
+                                    .font(.system(size: 11, weight: .medium))
+                            }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+                            .foregroundStyle(.red.opacity(0.7))
+                        }
+                    }
+                    .padding(.top, 8)
+                } label: {
+                    Label("CONVERSATION STORAGE", systemImage: "bubble.left.and.text.bubble.right.fill")
+                        .font(.system(size: 10, weight: .bold, design: .monospaced))
+                        .foregroundStyle(.white.opacity(0.3))
+                }
+                .accentColor(.white.opacity(0.3))
                 .alert("Clear All Conversations?", isPresented: $showClearConfirm) {
                     Button("Cancel", role: .cancel) {}
                     Button("Clear", role: .destructive) {
@@ -1545,7 +1751,7 @@ struct SettingsView: View {
                     Text("This permanently deletes all stored conversation history. This cannot be undone.")
                 }
 
-                // Legal
+                // MARK: About
                 SectionHeader(title: "ABOUT")
                 Text(Legal.aboutText)
                     .font(.system(size: 11, design: .monospaced))
@@ -1557,6 +1763,7 @@ struct SettingsView: View {
         }
         .task {
             storageSize = "On disk: " + (await ConversationStore.shared.storageSizeFormatted())
+            memoryStats = await MemoryRouter.shared.getStats()
         }
     }
 
