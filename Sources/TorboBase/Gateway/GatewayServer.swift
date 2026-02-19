@@ -2304,7 +2304,7 @@ actor GatewayServer {
 
     /// Default fallback models per provider
     private let fallbackModels: [String: String] = [
-        "ANTHROPIC": "claude-sonnet-4-20250514",
+        "ANTHROPIC": "claude-sonnet-4-6-20260217",
         "OPENAI": "gpt-4o",
         "GOOGLE": "gemini-2.0-flash",
         "XAI": "grok-3"
@@ -2745,6 +2745,7 @@ actor GatewayServer {
                 // Add cloud models if keys are configured
                 let keys = await MainActor.run { AppState.shared.cloudAPIKeys }
                 if let k = keys["ANTHROPIC_API_KEY"], !k.isEmpty {
+                    list.append(["id": "claude-sonnet-4-6-20260217", "object": "model", "owned_by": "anthropic"])
                     list.append(["id": "claude-sonnet-4-5-20250929", "object": "model", "owned_by": "anthropic"])
                     list.append(["id": "claude-haiku-4-5-20251001", "object": "model", "owned_by": "anthropic"])
                 }
