@@ -19,6 +19,20 @@ struct AgentsView: View {
     @State private var importError: String?
     @State private var showImportError = false
 
+    // Section expansion (all collapsed by default)
+    @State private var permissionsExpanded = false
+    @State private var voiceExpanded = false
+    @State private var capabilitiesExpanded = false
+    @State private var personalityExpanded = false
+    @State private var activityExpanded = false
+
+    // Per-agent task data
+    @State private var agentTasks: [TaskQueue.AgentTask] = []
+    @State private var agentActiveTasks: [String] = []
+
+    // Auto-save debounce
+    @State private var saveTask: Task<Void, Never>?
+
     // Create agent form
     @State private var newAgentName = ""
     @State private var newAgentRole = "AI assistant"
@@ -141,6 +155,10 @@ struct AgentsView: View {
         return Button {
             selectedAgentID = agent.id
             editConfig = agent
+            Task {
+                agentTasks = await TaskQueue.shared.tasksForAgent(agent.id)
+                agentActiveTasks = await ParallelExecutor.shared.activeTaskIDs
+            }
         } label: {
             HStack(spacing: 10) {
                 // Avatar circle
@@ -203,9 +221,21 @@ struct AgentsView: View {
                 // Header
                 HStack(alignment: .center) {
                     VStack(alignment: .leading, spacing: 4) {
-                        Text(editConfig.name)
-                            .font(.system(size: 24, weight: .bold))
-                            .foregroundStyle(.white)
+                        HStack(spacing: 10) {
+                            Text(editConfig.name)
+                                .font(.system(size: 24, weight: .bold))
+                                .foregroundStyle(.white)
+                            // Status indicator
+                            let isActive = agentActiveTasks.contains(where: { $0.hasPrefix(editConfig.id) })
+                            Circle()
+                                .fill(isActive ? Color.green : Color.white.opacity(0.15))
+                                .frame(width: 8, height: 8)
+                            if isActive {
+                                Text("ACTIVE")
+                                    .font(.system(size: 8, weight: .bold, design: .monospaced))
+                                    .foregroundStyle(.green.opacity(0.7))
+                            }
+                        }
                         Text(editConfig.isBuiltIn ? "Built-in agent — cannot be deleted" : "Custom agent — id: \(editConfig.id)")
                             .font(.system(size: 13))
                             .foregroundStyle(.white.opacity(0.4))
@@ -246,9 +276,77 @@ struct AgentsView: View {
                 .padding(.top, 32)
                 .padding(.bottom, 24)
 
-                VStack(spacing: 24) {
-                    // MARK: - Permissions Section
-                    sectionCard(title: "Permissions", icon: "lock.shield") {
+                VStack(spacing: 16) {
+
+                    // MARK: - Activity & Tasks
+                    sectionCard(title: "Activity", icon: "chart.bar.fill", isExpanded: $activityExpanded) {
+                        let pending = agentTasks.filter { $0.status == .pending }
+                        let running = agentTasks.filter { $0.status == .inProgress }
+                        let completed = agentTasks.filter { $0.status == .completed }
+                        let failed = agentTasks.filter { $0.status == .failed }
+
+                        HStack(spacing: 12) {
+                            agentStatPill(value: "\(running.count)", label: "Running", color: .green)
+                            agentStatPill(value: "\(pending.count)", label: "Queued", color: .cyan)
+                            agentStatPill(value: "\(completed.count)", label: "Done", color: .white.opacity(0.4))
+                            agentStatPill(value: "\(failed.count)", label: "Failed", color: failed.isEmpty ? .white.opacity(0.2) : .red)
+                        }
+
+                        if !running.isEmpty {
+                            VStack(alignment: .leading, spacing: 4) {
+                                ForEach(running, id: \.id) { task in
+                                    HStack(spacing: 8) {
+                                        ProgressView()
+                                            .scaleEffect(0.6)
+                                        Text(task.title)
+                                            .font(.system(size: 11, weight: .medium))
+                                            .foregroundStyle(.white.opacity(0.7))
+                                            .lineLimit(1)
+                                        Spacer()
+                                        if let started = task.startedAt {
+                                            Text(relativeTime(started))
+                                                .font(.system(size: 9, design: .monospaced))
+                                                .foregroundStyle(.white.opacity(0.2))
+                                        }
+                                    }
+                                    .padding(.horizontal, 10).padding(.vertical, 4)
+                                    .background(Color.green.opacity(0.04))
+                                    .cornerRadius(4)
+                                }
+                            }
+                        }
+
+                        if !pending.isEmpty {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("QUEUED")
+                                    .font(.system(size: 9, weight: .bold, design: .monospaced))
+                                    .foregroundStyle(.white.opacity(0.2))
+                                ForEach(pending.prefix(5), id: \.id) { task in
+                                    HStack(spacing: 6) {
+                                        Circle().fill(Color.cyan.opacity(0.3)).frame(width: 4, height: 4)
+                                        Text(task.title)
+                                            .font(.system(size: 10))
+                                            .foregroundStyle(.white.opacity(0.4))
+                                            .lineLimit(1)
+                                    }
+                                }
+                                if pending.count > 5 {
+                                    Text("+ \(pending.count - 5) more")
+                                        .font(.system(size: 9))
+                                        .foregroundStyle(.white.opacity(0.2))
+                                }
+                            }
+                        }
+
+                        if agentTasks.isEmpty {
+                            Text("No tasks assigned to this agent")
+                                .font(.system(size: 11))
+                                .foregroundStyle(.white.opacity(0.2))
+                        }
+                    }
+
+                    // MARK: - Permissions (expanded by default is useful — but user asked collapsed)
+                    sectionCard(title: "Permissions", icon: "lock.shield", isExpanded: $permissionsExpanded) {
                         fieldRow(label: "Access Level") {
                             Picker("", selection: $editConfig.accessLevel) {
                                 Text("OFF (0)").tag(0)
@@ -260,9 +358,6 @@ struct AgentsView: View {
                             }
                             .pickerStyle(.segmented)
                         }
-                            .onChange(of: editConfig.accessLevel) { _ in
-                                Task { await saveConfig() }
-                            }
                         fieldRow(label: "Directory Scopes (one per line, empty = unrestricted)") {
                             TextEditor(text: Binding(
                                 get: { editConfig.directoryScopes.joined(separator: "\n") },
@@ -277,8 +372,32 @@ struct AgentsView: View {
                         }
                     }
 
-                    // MARK: - Capabilities Section
-                    sectionCard(title: "Capabilities", icon: "cpu") {
+                    // MARK: - Voice (below Permissions per spec)
+                    sectionCard(title: "Voice", icon: "waveform", isExpanded: $voiceExpanded) {
+                        fieldRow(label: "ElevenLabs Voice ID") {
+                            TextField("Voice ID or leave empty", text: $editConfig.elevenLabsVoiceID)
+                                .textFieldStyle(.plain)
+                                .font(.system(size: 14))
+                                .padding(8)
+                                .background(Color.white.opacity(0.04))
+                                .clipShape(RoundedRectangle(cornerRadius: 6))
+                        }
+                        fieldRow(label: "Fallback TTS Voice") {
+                            Picker("", selection: $editConfig.fallbackTTSVoice) {
+                                Text("alloy").tag("alloy")
+                                Text("echo").tag("echo")
+                                Text("fable").tag("fable")
+                                Text("onyx").tag("onyx")
+                                Text("nova").tag("nova")
+                                Text("shimmer").tag("shimmer")
+                            }
+                            .pickerStyle(.segmented)
+                            .frame(maxWidth: 400)
+                        }
+                    }
+
+                    // MARK: - Capabilities (collapsed)
+                    sectionCard(title: "Capabilities", icon: "cpu", isExpanded: $capabilitiesExpanded) {
                         let agentLevel = AccessLevel(rawValue: editConfig.accessLevel) ?? .chatOnly
                         let globalCaps = AppState.shared.globalCapabilities
                         ForEach(CapabilityCategory.allCases, id: \.self) { category in
@@ -345,7 +464,6 @@ struct AgentsView: View {
                                             }
                                         }
                                     }
-                                    // Expanded tool detail list
                                     if isExpanded {
                                         VStack(alignment: .leading, spacing: 3) {
                                             ForEach(platformTools, id: \.toolName) { tool in
@@ -370,54 +488,18 @@ struct AgentsView: View {
                                 }
                             }
                         }
-                        HStack(spacing: 6) {
-                            Image(systemName: "info.circle")
-                                .font(.system(size: 10))
-                                .foregroundStyle(.white.opacity(0.2))
-                            Text("Click a category to see its tools. Toggle to enable/disable.")
-                                .font(.system(size: 10))
-                                .foregroundStyle(.white.opacity(0.2))
-                        }
-                        .padding(.top, 4)
                     }
 
-                    // MARK: - Identity Section
-                    sectionCard(title: "Identity", icon: "person.crop.circle") {
-                        fieldRow(label: "Name") {
-                            TextField("Agent name", text: $editConfig.name)
-                                .textFieldStyle(.plain)
-                                .font(.system(size: 14))
-                                .padding(8)
-                                .background(Color.white.opacity(0.04))
-                                .clipShape(RoundedRectangle(cornerRadius: 6))
-                        }
-                        fieldRow(label: "Pronouns") {
-                            Picker("", selection: $editConfig.pronouns) {
-                                Text("she/her").tag("she/her")
-                                Text("he/him").tag("he/him")
-                                Text("they/them").tag("they/them")
-                            }
-                            .pickerStyle(.segmented)
-                            .frame(maxWidth: 300)
-                        }
-                        fieldRow(label: "Role") {
-                            TextField("AI assistant, Senior engineer, Research partner...", text: $editConfig.role)
-                                .textFieldStyle(.plain)
-                                .font(.system(size: 14))
-                                .padding(8)
-                                .background(Color.white.opacity(0.04))
-                                .clipShape(RoundedRectangle(cornerRadius: 6))
-                        }
-                    }
-
-                    // MARK: - Personality Section
-                    sectionCard(title: "Personality", icon: "theatermasks") {
+                    // MARK: - Personality (merged: identity + personality + values + knowledge)
+                    sectionCard(title: "Personality & Identity", icon: "theatermasks", isExpanded: $personalityExpanded) {
+                        // Personality preset pills
                         HStack(spacing: 8) {
                             ForEach(AgentConfig.presets, id: \.id) { preset in
                                 Button(preset.label) {
                                     editConfig.voiceTone = preset.voiceTone
                                     editConfig.coreValues = preset.coreValues
                                     editConfig.personalityPreset = preset.id
+                                    debouncedSave()
                                 }
                                 .buttonStyle(.plain)
                                 .font(.system(size: 11, weight: editConfig.personalityPreset == preset.id ? .bold : .medium))
@@ -428,26 +510,48 @@ struct AgentsView: View {
                                 .clipShape(RoundedRectangle(cornerRadius: 6))
                             }
                         }
-                        .padding(.bottom, 8)
+                        .padding(.bottom, 4)
 
-                        fieldRow(label: "Voice & Tone") {
-                            TextEditor(text: $editConfig.voiceTone)
-                                .font(.system(size: 13))
-                                .scrollContentBackground(.hidden)
-                                .frame(minHeight: 60)
+                        fieldRow(label: "Name") {
+                            TextField("Agent name", text: $editConfig.name)
+                                .textFieldStyle(.plain)
+                                .font(.system(size: 14))
                                 .padding(8)
                                 .background(Color.white.opacity(0.04))
                                 .clipShape(RoundedRectangle(cornerRadius: 6))
                         }
-                    }
-
-                    // MARK: - Values & Boundaries
-                    sectionCard(title: "Values & Boundaries", icon: "shield.lefthalf.filled") {
+                        HStack(spacing: 16) {
+                            fieldRow(label: "Pronouns") {
+                                Picker("", selection: $editConfig.pronouns) {
+                                    Text("she/her").tag("she/her")
+                                    Text("he/him").tag("he/him")
+                                    Text("they/them").tag("they/them")
+                                }
+                                .pickerStyle(.segmented)
+                            }
+                            fieldRow(label: "Role") {
+                                TextField("AI assistant, Engineer...", text: $editConfig.role)
+                                    .textFieldStyle(.plain)
+                                    .font(.system(size: 14))
+                                    .padding(8)
+                                    .background(Color.white.opacity(0.04))
+                                    .clipShape(RoundedRectangle(cornerRadius: 6))
+                            }
+                        }
+                        fieldRow(label: "Voice & Tone") {
+                            TextEditor(text: $editConfig.voiceTone)
+                                .font(.system(size: 13))
+                                .scrollContentBackground(.hidden)
+                                .frame(minHeight: 50)
+                                .padding(8)
+                                .background(Color.white.opacity(0.04))
+                                .clipShape(RoundedRectangle(cornerRadius: 6))
+                        }
                         fieldRow(label: "Core Values") {
                             TextEditor(text: $editConfig.coreValues)
                                 .font(.system(size: 13))
                                 .scrollContentBackground(.hidden)
-                                .frame(minHeight: 60)
+                                .frame(minHeight: 50)
                                 .padding(8)
                                 .background(Color.white.opacity(0.04))
                                 .clipShape(RoundedRectangle(cornerRadius: 6))
@@ -456,7 +560,7 @@ struct AgentsView: View {
                             TextEditor(text: $editConfig.topicsToAvoid)
                                 .font(.system(size: 13))
                                 .scrollContentBackground(.hidden)
-                                .frame(minHeight: 40)
+                                .frame(minHeight: 30)
                                 .padding(8)
                                 .background(Color.white.opacity(0.04))
                                 .clipShape(RoundedRectangle(cornerRadius: 6))
@@ -465,70 +569,70 @@ struct AgentsView: View {
                             TextEditor(text: $editConfig.customInstructions)
                                 .font(.system(size: 13))
                                 .scrollContentBackground(.hidden)
+                                .frame(minHeight: 50)
+                                .padding(8)
+                                .background(Color.white.opacity(0.04))
+                                .clipShape(RoundedRectangle(cornerRadius: 6))
+                        }
+                        fieldRow(label: "Background Knowledge") {
+                            TextEditor(text: $editConfig.backgroundKnowledge)
+                                .font(.system(size: 13))
+                                .scrollContentBackground(.hidden)
                                 .frame(minHeight: 60)
                                 .padding(8)
                                 .background(Color.white.opacity(0.04))
                                 .clipShape(RoundedRectangle(cornerRadius: 6))
                         }
                     }
-
-                    // MARK: - Knowledge & Context
-                    sectionCard(title: "Knowledge & Context", icon: "brain") {
-                        fieldRow(label: "Background Knowledge") {
-                            TextEditor(text: $editConfig.backgroundKnowledge)
-                                .font(.system(size: 13))
-                                .scrollContentBackground(.hidden)
-                                .frame(minHeight: 80)
-                                .padding(8)
-                                .background(Color.white.opacity(0.04))
-                                .clipShape(RoundedRectangle(cornerRadius: 6))
-                        }
-                    }
-
-                    // MARK: - Voice (TTS)
-                    sectionCard(title: "Voice", icon: "waveform") {
-                        fieldRow(label: "ElevenLabs Voice ID") {
-                            TextField("Voice ID or leave empty", text: $editConfig.elevenLabsVoiceID)
-                                .textFieldStyle(.plain)
-                                .font(.system(size: 14))
-                                .padding(8)
-                                .background(Color.white.opacity(0.04))
-                                .clipShape(RoundedRectangle(cornerRadius: 6))
-                        }
-                        fieldRow(label: "Fallback TTS Voice") {
-                            Picker("", selection: $editConfig.fallbackTTSVoice) {
-                                Text("alloy").tag("alloy")
-                                Text("echo").tag("echo")
-                                Text("fable").tag("fable")
-                                Text("onyx").tag("onyx")
-                                Text("nova").tag("nova")
-                                Text("shimmer").tag("shimmer")
-                            }
-                            .pickerStyle(.segmented)
-                            .frame(maxWidth: 400)
-                        }
-                    }
-
-                    // Save button
-                    HStack {
-                        Spacer()
-                        Button("Save Changes") {
-                            Task { await saveConfig() }
-                        }
-                        .buttonStyle(.plain)
-                        .font(.system(size: 13, weight: .bold))
-                        .foregroundStyle(.black)
-                        .padding(.horizontal, 24)
-                        .padding(.vertical, 10)
-                        .background(Color.cyan)
-                        .clipShape(RoundedRectangle(cornerRadius: 8))
-                    }
-                    .padding(.top, 8)
                 }
                 .padding(.horizontal, 32)
                 .padding(.bottom, 32)
             }
         }
+        .onChange(of: editConfig.accessLevel) { _ in debouncedSave() }
+        .onChange(of: editConfig.name) { _ in debouncedSave() }
+        .onChange(of: editConfig.role) { _ in debouncedSave() }
+        .onChange(of: editConfig.pronouns) { _ in debouncedSave() }
+        .onChange(of: editConfig.voiceTone) { _ in debouncedSave() }
+        .onChange(of: editConfig.coreValues) { _ in debouncedSave() }
+        .onChange(of: editConfig.topicsToAvoid) { _ in debouncedSave() }
+        .onChange(of: editConfig.customInstructions) { _ in debouncedSave() }
+        .onChange(of: editConfig.backgroundKnowledge) { _ in debouncedSave() }
+        .onChange(of: editConfig.elevenLabsVoiceID) { _ in debouncedSave() }
+        .onChange(of: editConfig.fallbackTTSVoice) { _ in debouncedSave() }
+        .onChange(of: editConfig.personalityPreset) { _ in debouncedSave() }
+    }
+
+    private func debouncedSave() {
+        saveTask?.cancel()
+        saveTask = Task {
+            try? await Task.sleep(nanoseconds: 600_000_000)
+            guard !Task.isCancelled else { return }
+            await saveConfig()
+        }
+    }
+
+    private func relativeTime(_ date: Date) -> String {
+        let s = Int(Date().timeIntervalSince(date))
+        if s < 60 { return "\(s)s ago" }
+        if s < 3600 { return "\(s / 60)m ago" }
+        return "\(s / 3600)h ago"
+    }
+
+    @ViewBuilder
+    private func agentStatPill(value: String, label: String, color: Color) -> some View {
+        VStack(spacing: 2) {
+            Text(value)
+                .font(.system(size: 16, weight: .bold, design: .monospaced))
+                .foregroundStyle(color)
+            Text(label)
+                .font(.system(size: 8, weight: .medium))
+                .foregroundStyle(.white.opacity(0.3))
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 8)
+        .background(color.opacity(0.04))
+        .cornerRadius(6)
     }
 
     // MARK: - Create Agent Sheet
@@ -603,6 +707,11 @@ struct AgentsView: View {
         if let first = agents.first(where: { $0.id == selectedAgentID }) ?? agents.first {
             selectedAgentID = first.id
             editConfig = first
+        }
+        // Load per-agent task data
+        if let id = selectedAgentID {
+            agentTasks = await TaskQueue.shared.tasksForAgent(id)
+            agentActiveTasks = await ParallelExecutor.shared.activeTaskIDs
         }
         isLoading = false
     }
@@ -706,20 +815,25 @@ struct AgentsView: View {
     // MARK: - UI Helpers
 
     @ViewBuilder
-    private func sectionCard(title: String, icon: String, @ViewBuilder content: () -> some View) -> some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack(spacing: 8) {
-                Image(systemName: icon)
-                    .font(.system(size: 12))
-                    .foregroundStyle(.cyan)
-                Text(title.uppercased())
-                    .font(.system(size: 12, weight: .bold, design: .monospaced))
-                    .foregroundStyle(.cyan)
-                    .tracking(1)
+    private func sectionCard<C: View>(title: String, icon: String, isExpanded: Binding<Bool>, @ViewBuilder content: @escaping () -> C) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            DisclosureGroup(isExpanded: isExpanded) {
+                VStack(alignment: .leading, spacing: 12) {
+                    content()
+                }
+                .padding(.top, 12)
+            } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: icon)
+                        .font(.system(size: 12))
+                        .foregroundStyle(.cyan)
+                    Text(title.uppercased())
+                        .font(.system(size: 12, weight: .bold, design: .monospaced))
+                        .foregroundStyle(.cyan)
+                        .tracking(1)
+                }
             }
-            .padding(.bottom, 4)
-
-            content()
+            .accentColor(.white.opacity(0.3))
         }
         .padding(20)
         .background(Color.white.opacity(0.02))
