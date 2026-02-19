@@ -2745,6 +2745,7 @@ actor GatewayServer {
                 // Add cloud models if keys are configured
                 let keys = await MainActor.run { AppState.shared.cloudAPIKeys }
                 if let k = keys["ANTHROPIC_API_KEY"], !k.isEmpty {
+                    list.append(["id": "claude-opus-4-6", "object": "model", "owned_by": "anthropic"])
                     list.append(["id": "claude-sonnet-4-6-20260217", "object": "model", "owned_by": "anthropic"])
                     list.append(["id": "claude-sonnet-4-5-20250929", "object": "model", "owned_by": "anthropic"])
                     list.append(["id": "claude-haiku-4-5-20251001", "object": "model", "owned_by": "anthropic"])

@@ -1042,9 +1042,14 @@ enum WebChatHTML {
         // Remember current agent's model
         agentModelMap[currentAgentID] = modelEl.value;
         currentAgentID = agentSelectEl.value;
-        // Restore this agent's model (if previously set)
-        if (agentModelMap[currentAgentID] && modelEl.querySelector('option[value="' + CSS.escape(agentModelMap[currentAgentID]) + '"]')) {
-            modelEl.value = agentModelMap[currentAgentID];
+        // Restore this agent's model if previously set AND still available in dropdown
+        const savedModel = agentModelMap[currentAgentID];
+        if (savedModel && modelEl.querySelector('option[value="' + CSS.escape(savedModel) + '"]')) {
+            modelEl.value = savedModel;
+        } else {
+            // No saved model or model no longer available — reset to first option
+            delete agentModelMap[currentAgentID];
+            if (modelEl.options.length > 0) modelEl.value = modelEl.options[0].value;
         }
         conversationHistory = [];
         messagesEl.innerHTML = '';
@@ -1210,15 +1215,31 @@ enum WebChatHTML {
             }
             const data = await res.json();
             modelEl.innerHTML = '';
-            (data.data || []).forEach(m => {
+            const models = data.data || [];
+            // Deduplicate by model id (Ollama can list same model multiple times)
+            const seen = new Set();
+            // Group: cloud first (alphabetical), then local
+            const cloud = models.filter(m => m.owned_by !== 'local');
+            const local = models.filter(m => m.owned_by === 'local');
+            [...cloud, ...local].forEach(m => {
+                if (seen.has(m.id)) return;
+                seen.add(m.id);
                 const opt = document.createElement('option');
-                opt.value = m.id; opt.textContent = m.id;
+                opt.value = m.id;
+                opt.textContent = m.owned_by !== 'local' ? m.id + ' ☁' : m.id;
                 modelEl.appendChild(opt);
             });
             if (modelEl.options.length === 0) {
                 statusEl.textContent = 'No models';
                 statusEl.style.color = '#ffaa00';
             } else {
+                // Restore saved model for current agent, or use first option
+                const saved = agentModelMap[currentAgentID];
+                if (saved && modelEl.querySelector('option[value="' + CSS.escape(saved) + '"]')) {
+                    modelEl.value = saved;
+                } else {
+                    modelEl.value = modelEl.options[0].value;
+                }
                 statusEl.textContent = 'Connected';
                 statusEl.style.color = '#00e5ff';
             }
@@ -1297,7 +1318,8 @@ enum WebChatHTML {
         const div = document.createElement('div');
         div.className = 'message assistant';
         const time = new Date().toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'});
-        div.innerHTML = `<div class="bubble streaming"><span class="cursor">\\u2588</span></div><div class="meta">${modelEl.value} \\u00b7 ${time}</div>`;
+        const displayModel = agentModelMap[currentAgentID] || modelEl.value;
+        div.innerHTML = `<div class="bubble streaming"><span class="cursor">\\u2588</span></div><div class="meta">${displayModel} \\u00b7 ${time}</div>`;
         messagesEl.appendChild(div);
         const bubble = div.querySelector('.bubble');
         messagesEl.scrollTop = messagesEl.scrollHeight;
@@ -1355,7 +1377,13 @@ enum WebChatHTML {
     let activeAbortControllers = new Set();
 
     async function streamToAgent(agentID, messages, bubble, overrideModel) {
-        const useModel = overrideModel || agentModelMap[agentID] || modelEl.value;
+        // Resolve model: override > per-agent saved > dropdown. Validate it exists in dropdown.
+        let useModel = overrideModel || agentModelMap[agentID] || modelEl.value;
+        if (useModel && !modelEl.querySelector('option[value="' + CSS.escape(useModel) + '"]')) {
+            // Stale model — fall back to current dropdown value
+            delete agentModelMap[agentID];
+            useModel = modelEl.value;
+        }
         let fullContent = '';
         const controller = new AbortController();
         activeAbortControllers.add(controller);
