@@ -1464,6 +1464,13 @@ actor GatewayServer {
                 body["tool_choice"] = "auto"
                 toolNames = extractToolNames(from: tools)
             }
+        } else {
+            // Client provided tools (e.g. native iOS tools) — ensure tool_choice is set
+            if body["tool_choice"] == nil {
+                body["tool_choice"] = "auto"
+            }
+            let clientToolNames = extractToolNames(from: body["tools"] as? [[String: Any]] ?? [])
+            TorboLog.info("Client provided \(clientToolNames.count) tools: \(clientToolNames.joined(separator: ", "))", subsystem: "Gateway")
         }
 
         // Enrich with agent identity + memory (identity skipped if client provided system prompt)
@@ -1745,6 +1752,10 @@ actor GatewayServer {
             }
             var streamBody = body
             streamBody["stream"] = true
+            if let tools = streamBody["tools"] as? [[String: Any]] {
+                let names = tools.compactMap { ($0["function"] as? [String: Any])?["name"] as? String }
+                TorboLog.info("\(providerName) stream: \(tools.count) tools → \(names.joined(separator: ", ")), tool_choice=\(streamBody["tool_choice"] ?? "nil")", subsystem: "Gateway")
+            }
             var req = URLRequest(url: url)
             req.httpMethod = "POST"
             req.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -1809,7 +1820,10 @@ actor GatewayServer {
             ]
             if let sys = systemPrompt { anthropicBody["system"] = sys }
             if let tools = body["tools"] as? [[String: Any]] {
-                anthropicBody["tools"] = convertToolsToAnthropic(tools)
+                let converted = convertToolsToAnthropic(tools)
+                anthropicBody["tools"] = converted
+                let toolNames = converted.compactMap { $0["name"] as? String }
+                TorboLog.info("Anthropic stream: \(converted.count) tools → \(toolNames.joined(separator: ", "))", subsystem: "Gateway")
             }
             if let tc = body["tool_choice"] as? String, tc == "auto" {
                 anthropicBody["tool_choice"] = ["type": "auto"]
@@ -1820,6 +1834,7 @@ actor GatewayServer {
                 default: break
                 }
             }
+            TorboLog.info("Anthropic stream: tool_choice=\(anthropicBody["tool_choice"] ?? "nil"), messages=\(anthropicMessages.count), model=\(model)", subsystem: "Gateway")
 
             var req = URLRequest(url: url)
             req.httpMethod = "POST"
@@ -2135,6 +2150,13 @@ actor GatewayServer {
                 body["tool_choice"] = "auto"
                 toolNames = extractToolNames(from: tools)
             }
+        } else {
+            // Client provided tools (e.g. native iOS tools) — ensure tool_choice is set
+            if body["tool_choice"] == nil {
+                body["tool_choice"] = "auto"
+            }
+            let clientToolNames = extractToolNames(from: body["tools"] as? [[String: Any]] ?? [])
+            TorboLog.info("Client provided \(clientToolNames.count) tools (non-streaming): \(clientToolNames.joined(separator: ", "))", subsystem: "Gateway")
         }
 
         // Enrich with agent identity + memory (identity skipped if client provided system prompt)
@@ -2392,7 +2414,10 @@ actor GatewayServer {
         if let sys = systemPrompt { anthropicBody["system"] = sys }
         // Pass through tools if present
         if let tools = body["tools"] as? [[String: Any]] {
-            anthropicBody["tools"] = convertToolsToAnthropic(tools)
+            let converted = convertToolsToAnthropic(tools)
+            anthropicBody["tools"] = converted
+            let toolNames = converted.compactMap { $0["name"] as? String }
+            TorboLog.info("Anthropic non-stream: \(converted.count) tools → \(toolNames.joined(separator: ", "))", subsystem: "Gateway")
         }
         if let toolChoice = body["tool_choice"] as? [String: Any] {
             // Convert OpenAI tool_choice to Anthropic format
