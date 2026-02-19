@@ -165,7 +165,7 @@ struct RainbowAccessSlider: View {
                     .blur(radius: 2)
                     .padding(.horizontal, 14)
 
-                // Sharper overlay track for clarity
+                // Sharper overlay track for clarity — also the click target
                 RoundedRectangle(cornerRadius: 4)
                     .fill(
                         LinearGradient(
@@ -183,6 +183,11 @@ struct RainbowAccessSlider: View {
                     )
                     .frame(height: 4)
                     .padding(.horizontal, 14)
+                    .contentShape(Rectangle().inset(by: -12))
+                    .onTapGesture { location in
+                        let newLevel = levelFromPosition(location.x + 14, width: w)
+                        selectLevel(newLevel.rawValue)
+                    }
 
                 // Level tick marks
                 ForEach(0..<6, id: \.self) { i in

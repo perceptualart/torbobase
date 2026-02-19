@@ -374,6 +374,17 @@ protocol _TorboObservable: AnyObject {}
 
 final class AppState: _TorboObservable {
     static let shared = AppState()
+    let appStartedAt = Date()
+
+    /// Human-readable uptime string
+    var uptimeString: String {
+        let elapsed = Int(Date().timeIntervalSince(appStartedAt))
+        if elapsed < 60 { return "\(elapsed)s" }
+        if elapsed < 3600 { return "\(elapsed / 60)m" }
+        let h = elapsed / 3600
+        let m = (elapsed % 3600) / 60
+        return "\(h)h \(m)m"
+    }
 
     /// Helper: notify Combine subscribers that a property will change (no-op on Linux).
     private func willChangeUI() {

@@ -123,6 +123,7 @@ struct DashboardView: View {
 struct HomeView: View {
     @EnvironmentObject private var state: AppState
     @ObservedObject private var pairing = PairingManager.shared
+    @State private var auditExpanded = false
 
     var body: some View {
 
@@ -259,18 +260,24 @@ struct HomeView: View {
 
                 Divider().overlay(Color.white.opacity(0.06)).padding(.horizontal, 24)
 
-                // Audit log
+                // User Account Info
                 VStack(alignment: .leading, spacing: 8) {
-                    HStack {
-                        SectionHeader(title: "AUDIT LOG")
-                        Spacer()
-                        if !state.auditLog.isEmpty {
-                            Text("\(state.totalRequests) total · \(state.blockedRequests) blocked")
-                                .font(.system(size: 10, design: .monospaced))
-                                .foregroundStyle(.white.opacity(0.2))
-                        }
+                    SectionHeader(title: "ACCOUNT")
+                    HStack(spacing: 16) {
+                        InfoRow(label: "User", value: NSFullUserName().isEmpty ? NSUserName() : NSFullUserName())
+                        InfoRow(label: "Host", value: Host.current().localizedName ?? "Unknown")
                     }
+                    HStack(spacing: 16) {
+                        InfoRow(label: "Agents", value: "\(state.agentAccessLevels.count)")
+                        InfoRow(label: "Uptime", value: state.uptimeString)
+                    }
+                }
+                .padding(.horizontal, 24)
 
+                Divider().overlay(Color.white.opacity(0.06)).padding(.horizontal, 24)
+
+                // Audit log — collapsed by default
+                DisclosureGroup(isExpanded: $auditExpanded) {
                     if state.auditLog.isEmpty {
                         HStack {
                             Spacer()
@@ -291,7 +298,18 @@ struct HomeView: View {
                         }
                         .clipShape(RoundedRectangle(cornerRadius: 8))
                     }
+                } label: {
+                    HStack {
+                        SectionHeader(title: "AUDIT LOG")
+                        Spacer()
+                        if !state.auditLog.isEmpty {
+                            Text("\(state.totalRequests) total · \(state.blockedRequests) blocked")
+                                .font(.system(size: 10, design: .monospaced))
+                                .foregroundStyle(.white.opacity(0.2))
+                        }
+                    }
                 }
+                .tint(.white.opacity(0.3))
                 .padding(.horizontal, 24)
 
                 Spacer(minLength: 16)
@@ -406,7 +424,7 @@ struct ModelsView: View {
                         Text("Models")
                             .font(.system(size: 22, weight: .bold))
                             .foregroundStyle(.white)
-                        Text("Manage your local LLMs")
+                        Text("Local & cloud LLMs")
                             .font(.system(size: 12))
                             .foregroundStyle(.white.opacity(0.4))
                     }
@@ -478,11 +496,39 @@ struct ModelsView: View {
                     .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.cyan.opacity(0.1), lineWidth: 1))
                 }
 
-                // Installed models
-                if !state.ollamaModels.isEmpty {
-                    SectionHeader(title: "INSTALLED")
+                // Cloud API models
+                if !cloudModels.isEmpty {
+                    SectionHeader(title: "CLOUD MODELS")
                     VStack(spacing: 2) {
-                        ForEach(state.ollamaModels, id: \.self) { model in
+                        ForEach(cloudModels, id: \.0) { model in
+                            HStack(spacing: 10) {
+                                Image(systemName: "cloud.fill")
+                                    .font(.system(size: 12))
+                                    .foregroundStyle(model.2)
+                                VStack(alignment: .leading, spacing: 1) {
+                                    Text(model.0)
+                                        .font(.system(size: 12, weight: .medium, design: .monospaced))
+                                        .foregroundStyle(.white.opacity(0.8))
+                                    Text(model.1)
+                                        .font(.system(size: 9))
+                                        .foregroundStyle(.white.opacity(0.3))
+                                }
+                                Spacer()
+                                Circle().fill(Color.green).frame(width: 5, height: 5)
+                            }
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 6)
+                            .background(Color.white.opacity(0.02))
+                            .cornerRadius(6)
+                        }
+                    }
+                }
+
+                // Installed local models (deduplicated)
+                if !uniqueOllamaModels.isEmpty {
+                    SectionHeader(title: "LOCAL MODELS")
+                    VStack(spacing: 2) {
+                        ForEach(uniqueOllamaModels, id: \.self) { model in
                             HStack(spacing: 10) {
                                 Image(systemName: "cube.fill")
                                     .font(.system(size: 14))
@@ -558,6 +604,38 @@ struct ModelsView: View {
         .sheet(isPresented: $showInstallGuide) {
             LLMInstallGuideView()
         }
+    }
+
+    /// Deduplicated local model list
+    private var uniqueOllamaModels: [String] {
+        var seen = Set<String>()
+        return state.ollamaModels.filter { seen.insert($0).inserted }
+    }
+
+    /// Cloud models based on configured API keys
+    private var cloudModels: [(String, String, Color)] {
+        var models: [(String, String, Color)] = []
+        let keys = state.cloudAPIKeys
+        if let k = keys["ANTHROPIC_API_KEY"], !k.isEmpty {
+            models.append(("claude-opus-4-6", "Anthropic", .purple))
+            models.append(("claude-sonnet-4-6-20260217", "Anthropic", .purple))
+            models.append(("claude-sonnet-4-5-20250929", "Anthropic", .purple))
+            models.append(("claude-haiku-4-5-20251001", "Anthropic", .purple))
+        }
+        if let k = keys["OPENAI_API_KEY"], !k.isEmpty {
+            models.append(("gpt-4o", "OpenAI", .green))
+            models.append(("gpt-4o-mini", "OpenAI", .green))
+        }
+        if let k = keys["GOOGLE_API_KEY"], !k.isEmpty {
+            models.append(("gemini-2.5-pro-preview-06-05", "Google", .blue))
+            models.append(("gemini-2.0-flash", "Google", .blue))
+        }
+        if let k = keys["XAI_API_KEY"], !k.isEmpty {
+            models.append(("grok-4-latest", "xAI", .orange))
+            models.append(("grok-3", "xAI", .orange))
+            models.append(("grok-3-fast", "xAI", .orange))
+        }
+        return models
     }
 
     @ViewBuilder
