@@ -29,6 +29,7 @@ struct AgentsView: View {
     // Per-agent task data
     @State private var agentTasks: [TaskQueue.AgentTask] = []
     @State private var agentActiveTasks: [String] = []
+    @State private var previousAgentLevel: Int = 1
 
     // Auto-save debounce
     @State private var saveTask: Task<Void, Never>?
@@ -227,10 +228,15 @@ struct AgentsView: View {
                                 .foregroundStyle(.white)
                             // Status indicator
                             let isActive = agentActiveTasks.contains(where: { $0.hasPrefix(editConfig.id) })
+                            let isOff = editConfig.accessLevel == 0
                             Circle()
-                                .fill(isActive ? Color.green : Color.white.opacity(0.15))
+                                .fill(isOff ? Color.red : (isActive ? Color.green : Color.white.opacity(0.15)))
                                 .frame(width: 8, height: 8)
-                            if isActive {
+                            if isOff {
+                                Text("OFF")
+                                    .font(.system(size: 8, weight: .bold, design: .monospaced))
+                                    .foregroundStyle(.red.opacity(0.7))
+                            } else if isActive {
                                 Text("ACTIVE")
                                     .font(.system(size: 8, weight: .bold, design: .monospaced))
                                     .foregroundStyle(.green.opacity(0.7))
@@ -242,6 +248,39 @@ struct AgentsView: View {
                     }
                     Spacer()
                     HStack(spacing: 8) {
+                        // Per-agent kill switch
+                        Toggle(isOn: Binding(
+                            get: { editConfig.accessLevel > 0 },
+                            set: { enabled in
+                                if enabled {
+                                    // Restore to CHAT (1) as minimum when re-enabling
+                                    editConfig.accessLevel = max(previousAgentLevel, 1)
+                                } else {
+                                    previousAgentLevel = editConfig.accessLevel
+                                    editConfig.accessLevel = 0
+                                    // Cancel all running tasks for this agent
+                                    Task {
+                                        for task in agentTasks where task.status == .inProgress || task.status == .pending {
+                                            await TaskQueue.shared.cancelTask(id: task.id)
+                                            await ParallelExecutor.shared.cancel(taskID: task.id)
+                                        }
+                                        agentTasks = await TaskQueue.shared.tasksForAgent(editConfig.id)
+                                        agentActiveTasks = await ParallelExecutor.shared.activeTaskIDs
+                                    }
+                                }
+                                debouncedSave()
+                            }
+                        )) {
+                            Text(editConfig.accessLevel > 0 ? "Enabled" : "Killed")
+                                .font(.system(size: 10, weight: .bold, design: .monospaced))
+                                .foregroundStyle(editConfig.accessLevel > 0 ? .green.opacity(0.7) : .red.opacity(0.7))
+                        }
+                        .toggleStyle(.switch)
+                        .scaleEffect(0.8)
+                        .tint(.green)
+
+                        Divider().frame(height: 20).background(Color.white.opacity(0.06))
+
                         Button("Export") { exportSelectedAgent() }
                             .buttonStyle(.plain)
                             .font(.system(size: 11, weight: .medium))
@@ -292,30 +331,120 @@ struct AgentsView: View {
                             agentStatPill(value: "\(failed.count)", label: "Failed", color: failed.isEmpty ? .white.opacity(0.2) : .red)
                         }
 
+                        // Task controls
+                        if !running.isEmpty || !pending.isEmpty {
+                            HStack(spacing: 8) {
+                                // Stop all running tasks
+                                Button {
+                                    Task {
+                                        for task in running {
+                                            await ParallelExecutor.shared.cancel(taskID: task.id)
+                                            await TaskQueue.shared.cancelTask(id: task.id)
+                                        }
+                                        agentTasks = await TaskQueue.shared.tasksForAgent(editConfig.id)
+                                        agentActiveTasks = await ParallelExecutor.shared.activeTaskIDs
+                                    }
+                                } label: {
+                                    HStack(spacing: 4) {
+                                        Image(systemName: "stop.fill")
+                                            .font(.system(size: 9))
+                                        Text("Stop")
+                                            .font(.system(size: 10, weight: .medium))
+                                    }
+                                    .foregroundStyle(running.isEmpty ? .white.opacity(0.15) : .red.opacity(0.7))
+                                    .padding(.horizontal, 10)
+                                    .padding(.vertical, 5)
+                                    .background(running.isEmpty ? Color.white.opacity(0.02) : Color.red.opacity(0.06))
+                                    .clipShape(RoundedRectangle(cornerRadius: 5))
+                                }
+                                .buttonStyle(.plain)
+                                .disabled(running.isEmpty)
+
+                                // Clear queued tasks
+                                Button {
+                                    Task {
+                                        for task in pending {
+                                            await TaskQueue.shared.cancelTask(id: task.id)
+                                        }
+                                        agentTasks = await TaskQueue.shared.tasksForAgent(editConfig.id)
+                                    }
+                                } label: {
+                                    HStack(spacing: 4) {
+                                        Image(systemName: "xmark.circle")
+                                            .font(.system(size: 9))
+                                        Text("Clear Queue")
+                                            .font(.system(size: 10, weight: .medium))
+                                    }
+                                    .foregroundStyle(pending.isEmpty ? .white.opacity(0.15) : .orange.opacity(0.7))
+                                    .padding(.horizontal, 10)
+                                    .padding(.vertical, 5)
+                                    .background(pending.isEmpty ? Color.white.opacity(0.02) : Color.orange.opacity(0.06))
+                                    .clipShape(RoundedRectangle(cornerRadius: 5))
+                                }
+                                .buttonStyle(.plain)
+                                .disabled(pending.isEmpty)
+
+                                Spacer()
+                            }
+                        }
+
+                        // Running tasks with progress + cancel
                         if !running.isEmpty {
                             VStack(alignment: .leading, spacing: 4) {
                                 ForEach(running, id: \.id) { task in
-                                    HStack(spacing: 8) {
-                                        ProgressView()
-                                            .scaleEffect(0.6)
-                                        Text(task.title)
-                                            .font(.system(size: 11, weight: .medium))
-                                            .foregroundStyle(.white.opacity(0.7))
-                                            .lineLimit(1)
-                                        Spacer()
+                                    VStack(alignment: .leading, spacing: 4) {
+                                        HStack(spacing: 8) {
+                                            ProgressView()
+                                                .scaleEffect(0.6)
+                                            Text(task.title)
+                                                .font(.system(size: 11, weight: .medium))
+                                                .foregroundStyle(.white.opacity(0.7))
+                                                .lineLimit(1)
+                                            Spacer()
+                                            if let started = task.startedAt {
+                                                Text(relativeTime(started))
+                                                    .font(.system(size: 9, design: .monospaced))
+                                                    .foregroundStyle(.white.opacity(0.2))
+                                            }
+                                            Button {
+                                                Task {
+                                                    await ParallelExecutor.shared.cancel(taskID: task.id)
+                                                    await TaskQueue.shared.cancelTask(id: task.id)
+                                                    agentTasks = await TaskQueue.shared.tasksForAgent(editConfig.id)
+                                                    agentActiveTasks = await ParallelExecutor.shared.activeTaskIDs
+                                                }
+                                            } label: {
+                                                Image(systemName: "xmark")
+                                                    .font(.system(size: 8, weight: .bold))
+                                                    .foregroundStyle(.red.opacity(0.5))
+                                                    .padding(4)
+                                            }
+                                            .buttonStyle(.plain)
+                                        }
+                                        // Elapsed time progress bar
                                         if let started = task.startedAt {
-                                            Text(relativeTime(started))
-                                                .font(.system(size: 9, design: .monospaced))
-                                                .foregroundStyle(.white.opacity(0.2))
+                                            let elapsed = Date().timeIntervalSince(started)
+                                            let fraction = min(elapsed / 120.0, 1.0) // 2-min visual cap
+                                            GeometryReader { geo in
+                                                ZStack(alignment: .leading) {
+                                                    RoundedRectangle(cornerRadius: 2)
+                                                        .fill(Color.white.opacity(0.04))
+                                                    RoundedRectangle(cornerRadius: 2)
+                                                        .fill(Color.green.opacity(0.3))
+                                                        .frame(width: geo.size.width * fraction)
+                                                }
+                                            }
+                                            .frame(height: 3)
                                         }
                                     }
-                                    .padding(.horizontal, 10).padding(.vertical, 4)
+                                    .padding(.horizontal, 10).padding(.vertical, 6)
                                     .background(Color.green.opacity(0.04))
                                     .cornerRadius(4)
                                 }
                             }
                         }
 
+                        // Queued tasks
                         if !pending.isEmpty {
                             VStack(alignment: .leading, spacing: 2) {
                                 Text("QUEUED")
@@ -328,12 +457,50 @@ struct AgentsView: View {
                                             .font(.system(size: 10))
                                             .foregroundStyle(.white.opacity(0.4))
                                             .lineLimit(1)
+                                        Spacer()
+                                        Button {
+                                            Task {
+                                                await TaskQueue.shared.cancelTask(id: task.id)
+                                                agentTasks = await TaskQueue.shared.tasksForAgent(editConfig.id)
+                                            }
+                                        } label: {
+                                            Image(systemName: "xmark")
+                                                .font(.system(size: 7))
+                                                .foregroundStyle(.white.opacity(0.15))
+                                        }
+                                        .buttonStyle(.plain)
                                     }
                                 }
                                 if pending.count > 5 {
                                     Text("+ \(pending.count - 5) more")
                                         .font(.system(size: 9))
                                         .foregroundStyle(.white.opacity(0.2))
+                                }
+                            }
+                        }
+
+                        // Completed task history
+                        if !completed.isEmpty || !failed.isEmpty {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("HISTORY")
+                                    .font(.system(size: 9, weight: .bold, design: .monospaced))
+                                    .foregroundStyle(.white.opacity(0.2))
+                                ForEach((completed + failed).sorted(by: { ($0.completedAt ?? .distantPast) > ($1.completedAt ?? .distantPast) }).prefix(8), id: \.id) { task in
+                                    HStack(spacing: 6) {
+                                        Image(systemName: task.status == .completed ? "checkmark.circle.fill" : "xmark.circle.fill")
+                                            .font(.system(size: 9))
+                                            .foregroundStyle(task.status == .completed ? .green.opacity(0.5) : .red.opacity(0.5))
+                                        Text(task.title)
+                                            .font(.system(size: 10))
+                                            .foregroundStyle(.white.opacity(0.35))
+                                            .lineLimit(1)
+                                        Spacer()
+                                        if let done = task.completedAt {
+                                            Text(relativeTime(done))
+                                                .font(.system(size: 8, design: .monospaced))
+                                                .foregroundStyle(.white.opacity(0.15))
+                                        }
+                                    }
                                 }
                             }
                         }

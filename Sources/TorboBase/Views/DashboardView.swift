@@ -724,6 +724,7 @@ struct ModelsView: View {
 struct SpacesView: View {
     @EnvironmentObject private var state: AppState
     @State private var expandedDays: Set<String> = []
+    @State private var searchText: String = ""
 
     var body: some View {
         ScrollView {
@@ -738,22 +739,52 @@ struct SpacesView: View {
                             .foregroundStyle(.white.opacity(0.4))
                     }
                     Spacer()
-                    Text("\(state.recentMessages.count) messages")
+                    Text("\(filteredMessages.count) messages")
                         .font(.system(size: 11, design: .monospaced))
                         .foregroundStyle(.white.opacity(0.3))
                 }
 
-                if state.recentMessages.isEmpty {
+                // Search bar
+                HStack(spacing: 8) {
+                    Image(systemName: "magnifyingglass")
+                        .font(.system(size: 12))
+                        .foregroundStyle(.white.opacity(0.3))
+                    TextField("Search conversations…", text: $searchText)
+                        .textFieldStyle(.plain)
+                        .font(.system(size: 12))
+                    if !searchText.isEmpty {
+                        Button {
+                            searchText = ""
+                        } label: {
+                            Image(systemName: "xmark.circle.fill")
+                                .font(.system(size: 11))
+                                .foregroundStyle(.white.opacity(0.3))
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .background(Color.white.opacity(0.04))
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8)
+                        .stroke(Color.white.opacity(0.06), lineWidth: 1)
+                )
+
+                if filteredMessages.isEmpty {
                     VStack(spacing: 12) {
-                        Image(systemName: "bubble.left.and.bubble.right")
+                        Image(systemName: searchText.isEmpty ? "bubble.left.and.bubble.right" : "magnifyingglass")
                             .font(.system(size: 36))
                             .foregroundStyle(.white.opacity(0.1))
-                        Text("No conversations yet")
+                        Text(searchText.isEmpty ? "No conversations yet" : "No results for \"\(searchText)\"")
                             .font(.system(size: 13))
                             .foregroundStyle(.white.opacity(0.3))
-                        Text("Messages will appear here when clients connect and chat")
-                            .font(.system(size: 11))
-                            .foregroundStyle(.white.opacity(0.2))
+                        if searchText.isEmpty {
+                            Text("Messages will appear here when clients connect and chat")
+                                .font(.system(size: 11))
+                                .foregroundStyle(.white.opacity(0.2))
+                        }
                     }
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 60)
@@ -761,7 +792,7 @@ struct SpacesView: View {
                     // Group messages by day
                     ForEach(messagesByDay, id: \.0) { day, messages in
                         DisclosureGroup(isExpanded: Binding(
-                            get: { expandedDays.contains(day) },
+                            get: { expandedDays.contains(day) || !searchText.isEmpty },
                             set: { if $0 { expandedDays.insert(day) } else { expandedDays.remove(day) } }
                         )) {
                             VStack(spacing: 4) {
@@ -789,7 +820,7 @@ struct SpacesView: View {
                                             Text(msg.content)
                                                 .font(.system(size: 11))
                                                 .foregroundStyle(.white.opacity(0.6))
-                                                .lineLimit(4)
+                                                .lineLimit(searchText.isEmpty ? 4 : 8)
                                         }
                                     }
                                     .padding(.horizontal, 12)
@@ -819,13 +850,27 @@ struct SpacesView: View {
         }
     }
 
+    /// Messages filtered by search text
+    private var filteredMessages: [ConversationMessage] {
+        let source = state.recentMessages.suffix(100)
+        guard !searchText.trimmingCharacters(in: .whitespaces).isEmpty else {
+            return Array(source)
+        }
+        let query = searchText.lowercased()
+        return source.filter {
+            $0.content.lowercased().contains(query)
+            || $0.role.lowercased().contains(query)
+            || $0.model.lowercased().contains(query)
+        }
+    }
+
     /// Group recent messages by day label (Today, Yesterday, or date)
     private var messagesByDay: [(String, [ConversationMessage])] {
         let cal = Calendar.current
         var groups: [(String, [ConversationMessage])] = []
         var current: (String, [ConversationMessage])? = nil
 
-        for msg in state.recentMessages.suffix(100).reversed() {
+        for msg in filteredMessages.reversed() {
             let dayLabel: String
             if cal.isDateInToday(msg.timestamp) {
                 dayLabel = "Today"
