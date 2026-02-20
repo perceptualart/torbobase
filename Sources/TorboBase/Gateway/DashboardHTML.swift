@@ -38,10 +38,11 @@ body {
     height: 100vh;
 }
 .sidebar-logo {
-    padding: 24px 20px 20px; border-bottom: 1px solid var(--border);
-    display: flex; align-items: center; gap: 12px;
+    padding: 20px 20px 16px; border-bottom: 1px solid var(--border);
+    display: flex; flex-direction: column; align-items: center; gap: 8px;
+    text-align: center;
 }
-.sidebar-logo svg { width: 36px; height: 36px; flex-shrink: 0; }
+.sidebar-logo canvas { width: 144px; height: 144px; flex-shrink: 0; }
 .sidebar-logo h1 {
     font-size: 14px; font-weight: 700; letter-spacing: 2.5px; color: var(--text-bright);
 }
@@ -314,15 +315,9 @@ tr:hover { background: rgba(255,255,255,0.02); }
 <!-- Sidebar -->
 <div class="sidebar">
     <div class="sidebar-logo">
-        <svg viewBox="0 0 36 36" fill="none">
-            <circle cx="18" cy="18" r="16" stroke="#a855f7" stroke-width="2" fill="rgba(168,85,247,0.1)"/>
-            <circle cx="18" cy="18" r="6" fill="#a855f7" opacity="0.8"/>
-            <circle cx="18" cy="18" r="11" stroke="#00e5ff" stroke-width="1" opacity="0.4"/>
-        </svg>
-        <div>
-            <h1>TORBO BASE</h1>
-            <div class="subtitle">Dashboard</div>
-        </div>
+        <canvas id="sidebarOrb" width="288" height="288"></canvas>
+        <h1>TORBO BASE</h1>
+        <div class="subtitle">Dashboard</div>
     </div>
     <div class="sidebar-nav">
         <div class="nav-item active" onclick="switchTab('overview')" data-tab="overview">
@@ -1737,9 +1732,8 @@ function drawOrbLayer(ctx, cx, cy, radius, L, t, intensity) {
     ctx.restore();
 }
 
-function renderHomeOrb() {
-    var canvas = document.getElementById('homeOrb');
-    if (!canvas || currentTab !== 'overview') return;
+function renderOrbCanvas(canvas, intensity) {
+    if (!canvas) return;
     var ctx = canvas.getContext('2d');
     var w = canvas.width, h = canvas.height;
     var cx = w / 2, cy = h / 2;
@@ -1747,12 +1741,19 @@ function renderHomeOrb() {
     var t = performance.now() / 1000;
     ctx.clearRect(0, 0, w, h);
     for (var i = 0; i < orbLayers.length; i++) {
-        drawOrbLayer(ctx, cx, cy, radius, orbLayers[i], t, 0.08);
+        drawOrbLayer(ctx, cx, cy, radius, orbLayers[i], t, intensity);
     }
-    requestAnimationFrame(renderHomeOrb);
 }
 
-requestAnimationFrame(renderHomeOrb);
+function orbAnimLoop() {
+    renderOrbCanvas(document.getElementById('sidebarOrb'), 0.06);
+    if (currentTab === 'overview') {
+        renderOrbCanvas(document.getElementById('homeOrb'), 0.08);
+    }
+    requestAnimationFrame(orbAnimLoop);
+}
+
+requestAnimationFrame(orbAnimLoop);
 
 // --- Init ---
 var isLocal = (location.hostname === 'localhost' || location.hostname === '127.0.0.1' || location.hostname === '::1');
