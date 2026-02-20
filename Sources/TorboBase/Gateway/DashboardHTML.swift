@@ -324,8 +324,14 @@ tr:hover { background: rgba(255,255,255,0.02); }
         <div class="nav-item" onclick="switchTab('library')" data-tab="library">
             <span class="nav-icon">&#9782;</span> Library
         </div>
+        <div class="nav-item" onclick="switchTab('models')" data-tab="models">
+            <span class="nav-icon">&#9881;</span> Models
+        </div>
         <div class="nav-item" onclick="switchTab('logs')" data-tab="logs">
             <span class="nav-icon">&#9776;</span> Logs
+        </div>
+        <div class="nav-item" onclick="switchTab('security')" data-tab="security">
+            <span class="nav-icon">&#9888;</span> Security
         </div>
         <div class="nav-item" onclick="switchTab('settings')" data-tab="settings">
             <span class="nav-icon">&#9881;</span> Arkhe
@@ -341,6 +347,8 @@ tr:hover { background: rgba(255,255,255,0.02); }
             <a href="#" onclick="switchTab('legal');return false;" style="color:var(--text-dim);font-size:9px;text-decoration:none;letter-spacing:0.5px;">Privacy</a>
             <span style="color:var(--text-dim);font-size:9px;margin:0 4px;">&middot;</span>
             <a href="#" onclick="switchTab('legal');return false;" style="color:var(--text-dim);font-size:9px;text-decoration:none;letter-spacing:0.5px;">Principles</a>
+            <span style="color:var(--text-dim);font-size:9px;margin:0 4px;">&middot;</span>
+            <a href="mailto:feedback@torbo.app" style="color:var(--cyan);font-size:9px;text-decoration:none;letter-spacing:0.5px;">Feedback</a>
         </div>
         <span id="versionLabel">TORBO BASE</span>
     </div>
@@ -353,6 +361,16 @@ tr:hover { background: rgba(255,255,255,0.02); }
     <div id="tab-overview" class="tab-panel active">
         <div class="page-title">Overview</div>
         <div id="overviewError" class="error-msg" style="display:none;"></div>
+
+        <!-- Kill Switch -->
+        <div id="killSwitchCard" class="card" style="border:1px solid rgba(255,68,68,0.3);background:rgba(255,68,68,0.06);margin-bottom:20px;display:flex;align-items:center;justify-content:space-between;gap:16px;">
+            <div>
+                <div style="font-weight:700;font-size:14px;color:#ff4444;">Emergency Kill Switch</div>
+                <div style="font-size:12px;color:var(--text-dim);margin-top:4px;">Instantly set access level to OFF — blocks all agent actions</div>
+            </div>
+            <button id="killSwitchBtn" onclick="activateKillSwitch()" style="background:#ff4444;color:#fff;border:none;border-radius:8px;padding:10px 24px;font-weight:700;font-size:13px;cursor:pointer;white-space:nowrap;">LOCK SERVER</button>
+        </div>
+
         <div class="section-label">Server</div>
         <div class="card-grid" id="overviewCards">
             <div class="stat-card">
@@ -682,6 +700,62 @@ tr:hover { background: rgba(255,255,255,0.02); }
         </div>
     </div>
 
+    <!-- Models Tab -->
+    <div id="tab-models" class="tab-panel">
+        <div class="page-title">Models</div>
+        <div id="modelsError" class="error-msg" style="display:none;"></div>
+        <div class="section-label">Ollama Models</div>
+        <div id="modelsGrid" class="card-grid"></div>
+        <div class="card" style="margin-top:16px;">
+            <div style="display:flex;gap:8px;align-items:center;">
+                <input type="text" id="pullModelName" placeholder="Model name (e.g. llama3.2:3b)" style="flex:1;">
+                <button class="btn btn-primary" onclick="pullModel()">Pull Model</button>
+            </div>
+            <div id="pullStatus" style="font-size:12px;color:var(--text-dim);margin-top:8px;"></div>
+        </div>
+        <div class="section-label" style="margin-top:24px;">Cloud Providers</div>
+        <div id="cloudModelsGrid" class="card-grid">
+            <div class="stat-card"><div class="stat-label">Anthropic</div><div class="stat-value" style="font-size:12px;">Claude Opus, Sonnet, Haiku</div></div>
+            <div class="stat-card"><div class="stat-label">OpenAI</div><div class="stat-value" style="font-size:12px;">GPT-4o, o1, o3-mini</div></div>
+            <div class="stat-card"><div class="stat-label">xAI</div><div class="stat-value" style="font-size:12px;">Grok</div></div>
+            <div class="stat-card"><div class="stat-label">Google</div><div class="stat-value" style="font-size:12px;">Gemini 2.0 Flash</div></div>
+        </div>
+    </div>
+
+    <!-- Security Tab -->
+    <div id="tab-security" class="tab-panel">
+        <div class="page-title">Security</div>
+        <div id="securityError" class="error-msg" style="display:none;"></div>
+        <div class="section-label">Threat Summary</div>
+        <div class="card-grid" id="securityCards">
+            <div class="stat-card"><div class="stat-label">Access Level</div><div class="stat-value" id="secAccessLevel">--</div></div>
+            <div class="stat-card"><div class="stat-label">Blocked Requests</div><div class="stat-value" id="secBlocked">--</div></div>
+            <div class="stat-card"><div class="stat-label">Active Connections</div><div class="stat-value" id="secConnections">--</div></div>
+            <div class="stat-card"><div class="stat-label">Rate Limit</div><div class="stat-value" id="secRateLimit">--</div></div>
+        </div>
+        <div class="section-label" style="margin-top:24px;">Recent Security Events</div>
+        <div id="securityEventsArea" class="card" style="max-height:400px;overflow-y:auto;">
+            <div style="color:var(--text-dim);font-size:13px;">Loading security events...</div>
+        </div>
+        <div class="section-label" style="margin-top:24px;">Defense Layers</div>
+        <div class="card">
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:12px;">
+                <div style="padding:6px 10px;background:rgba(0,229,255,0.06);border-radius:6px;">&#9989; Bearer Token Auth</div>
+                <div style="padding:6px 10px;background:rgba(0,229,255,0.06);border-radius:6px;">&#9989; 6-Level Access Control</div>
+                <div style="padding:6px 10px;background:rgba(0,229,255,0.06);border-radius:6px;">&#9989; Path Protection</div>
+                <div style="padding:6px 10px;background:rgba(0,229,255,0.06);border-radius:6px;">&#9989; Shell Injection Detection</div>
+                <div style="padding:6px 10px;background:rgba(0,229,255,0.06);border-radius:6px;">&#9989; AES-256 Encryption at Rest</div>
+                <div style="padding:6px 10px;background:rgba(0,229,255,0.06);border-radius:6px;">&#9989; Localhost-Only Binding</div>
+                <div style="padding:6px 10px;background:rgba(0,229,255,0.06);border-radius:6px;">&#9989; HMAC Webhook Verification</div>
+                <div style="padding:6px 10px;background:rgba(0,229,255,0.06);border-radius:6px;">&#9989; MCP Command Allowlist</div>
+                <div style="padding:6px 10px;background:rgba(0,229,255,0.06);border-radius:6px;">&#9989; SQL Prepared Statements</div>
+                <div style="padding:6px 10px;background:rgba(0,229,255,0.06);border-radius:6px;">&#9989; IP Rate Limiting</div>
+                <div style="padding:6px 10px;background:rgba(0,229,255,0.06);border-radius:6px;">&#9989; CORS Restricted</div>
+                <div style="padding:6px 10px;background:rgba(0,229,255,0.06);border-radius:6px;">&#9989; Content Security Policy</div>
+            </div>
+        </div>
+    </div>
+
 </div>
 
 <!-- Agent Create Modal -->
@@ -826,8 +900,133 @@ function switchTab(tab) {
     if (tab === 'access') { loadAccess(); }
     if (tab === 'agents') { loadAgents(); }
     if (tab === 'library') { loadLibrary(); }
+    if (tab === 'models') { loadModels(); }
     if (tab === 'logs') { logsOffset = 0; loadLogs(); }
+    if (tab === 'security') { loadSecurity(); }
     if (tab === 'settings') { loadSettings(); }
+}
+
+// --- Kill Switch ---
+function activateKillSwitch() {
+    if (!confirm('LOCK SERVER?\\n\\nThis will set access level to OFF — all agent actions will be blocked immediately.\\n\\nAre you sure?')) return;
+    api('PUT', '/v1/config/settings', { accessLevel: 0 }).then(function() {
+        var btn = document.getElementById('killSwitchBtn');
+        btn.textContent = 'LOCKED';
+        btn.style.background = '#666';
+        showSuccess('settingsSuccess', 'Server locked — access level set to OFF');
+        // Refresh overview
+        loadOverview();
+    }).catch(function() {
+        showError('overviewError', 'Failed to lock server');
+    });
+}
+
+// --- Models ---
+function loadModels() {
+    hideError('modelsError');
+    api('GET', '/v1/dashboard/status').then(function(data) {
+        var ol = data.ollama || {};
+        var models = ol.models || [];
+        var grid = document.getElementById('modelsGrid');
+        if (models.length === 0) {
+            grid.innerHTML = '<div class="card" style="color:var(--text-dim);">No Ollama models installed. Pull a model below.</div>';
+            return;
+        }
+        grid.innerHTML = models.map(function(m) {
+            var name = typeof m === 'string' ? m : (m.name || m.model || 'Unknown');
+            var size = m.size ? (m.size / 1e9).toFixed(1) + ' GB' : '';
+            return '<div class="stat-card" style="position:relative;">' +
+                '<div class="stat-label">' + name + '</div>' +
+                (size ? '<div class="stat-value" style="font-size:12px;">' + size + '</div>' : '') +
+                '<button onclick="deleteModel(\\'' + name.replace(/'/g, "\\\\'") + '\\')" style="position:absolute;top:8px;right:8px;background:none;border:none;color:var(--text-dim);cursor:pointer;font-size:14px;" title="Delete model">&times;</button>' +
+                '</div>';
+        }).join('');
+    }).catch(function() {
+        showError('modelsError', 'Failed to load models');
+    });
+}
+
+function pullModel() {
+    var name = document.getElementById('pullModelName').value.trim();
+    if (!name) return;
+    var status = document.getElementById('pullStatus');
+    status.textContent = 'Pulling ' + name + '... (this may take several minutes)';
+    status.style.color = 'var(--cyan)';
+    // POST to Ollama pull via Base proxy
+    fetch(BASE + '/v1/ollama/pull', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + TOKEN },
+        body: JSON.stringify({ name: name })
+    }).then(function(res) {
+        if (res.ok) {
+            status.textContent = 'Pull started for ' + name + '. Check Models tab to refresh.';
+            status.style.color = '#4CAF50';
+            document.getElementById('pullModelName').value = '';
+            setTimeout(loadModels, 5000);
+        } else {
+            status.textContent = 'Pull failed — check model name';
+            status.style.color = '#ff4444';
+        }
+    }).catch(function() {
+        status.textContent = 'Pull failed — server error';
+        status.style.color = '#ff4444';
+    });
+}
+
+function deleteModel(name) {
+    if (!confirm('Delete model "' + name + '"?')) return;
+    fetch(BASE + '/v1/ollama/delete', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + TOKEN },
+        body: JSON.stringify({ name: name })
+    }).then(function(res) {
+        if (res.ok) loadModels();
+    });
+}
+
+// --- Security ---
+function loadSecurity() {
+    hideError('securityError');
+    api('GET', '/v1/dashboard/status').then(function(data) {
+        var srv = data.server || {};
+        var conn = data.connections || {};
+        var levelNames = ['OFF', 'CHAT', 'READ', 'WRITE', 'EXEC', 'FULL'];
+        var level = srv.accessLevel || 0;
+        document.getElementById('secAccessLevel').textContent = level + ' (' + (levelNames[level] || '?') + ')';
+        document.getElementById('secBlocked').textContent = conn.blockedRequests || 0;
+        document.getElementById('secConnections').textContent = conn.active || 0;
+        document.getElementById('secRateLimit').textContent = (srv.rateLimit || 60) + '/min';
+
+        // Update kill switch state
+        var btn = document.getElementById('killSwitchBtn');
+        if (level === 0) {
+            btn.textContent = 'LOCKED';
+            btn.style.background = '#666';
+        } else {
+            btn.textContent = 'LOCK SERVER';
+            btn.style.background = '#ff4444';
+        }
+    }).catch(function() {
+        showError('securityError', 'Failed to load security data');
+    });
+
+    // Load recent blocked requests from audit log
+    api('GET', '/v1/audit/log?limit=20&offset=0').then(function(data) {
+        var entries = data.entries || data.logs || [];
+        var blocked = entries.filter(function(e) { return e.result === 'blocked' || e.result === 'denied'; });
+        var area = document.getElementById('securityEventsArea');
+        if (blocked.length === 0) {
+            area.innerHTML = '<div style="color:var(--text-dim);font-size:13px;text-align:center;padding:20px;">No blocked requests in recent history</div>';
+            return;
+        }
+        area.innerHTML = blocked.map(function(e) {
+            return '<div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid var(--border);font-size:12px;">' +
+                '<div><span style="color:#ff4444;font-weight:600;">BLOCKED</span> ' +
+                '<span style="color:var(--text);">' + (e.method || '') + ' ' + (e.path || '') + '</span></div>' +
+                '<div style="color:var(--text-dim);">' + (e.ip || '') + ' &bull; ' + (e.time || '') + '</div>' +
+                '</div>';
+        }).join('');
+    }).catch(function() {});
 }
 
 // --- Overview ---
@@ -1148,9 +1347,10 @@ function renderMemories(wrap, mems) {
     var html = '';
     for (var i = 0; i < mems.length; i++) {
         var m = mems[i];
+        var mid = m.id || m.memory_id || '';
         var catBadge = '<span class="badge badge-cyan">' + esc(m.category || 'unknown') + '</span>';
         var impBadge = '<span class="badge badge-purple">' + (m.importance != null ? m.importance.toFixed(2) : '?') + '</span>';
-        html += '<div class="memory-card">';
+        html += '<div class="memory-card" style="position:relative;">';
         html += '<div class="mem-text">' + esc(m.text || m.content || '') + '</div>';
         html += '<div class="mem-meta">';
         html += catBadge + ' ' + impBadge;
@@ -1158,10 +1358,23 @@ function renderMemories(wrap, mems) {
         if (m.createdAt || m.created_at || m.timestamp) {
             html += ' <span>' + shortTime(m.createdAt || m.created_at || m.timestamp) + '</span>';
         }
+        // Memory management buttons
+        if (mid) {
+            html += ' <button onclick="deleteMemory(' + mid + ')" style="background:none;border:none;color:#ff4444;cursor:pointer;font-size:11px;padding:2px 6px;" title="Delete">&times; Delete</button>';
+        }
         html += '</div>';
         html += '</div>';
     }
     wrap.innerHTML = html;
+}
+
+function deleteMemory(id) {
+    if (!confirm('Delete this memory?')) return;
+    api('DELETE', '/v1/loa/' + id).then(function() {
+        loadLibrary();
+    }).catch(function(e) {
+        showError('libraryError', 'Failed to delete: ' + e.message);
+    });
 }
 
 function loaTeach() {

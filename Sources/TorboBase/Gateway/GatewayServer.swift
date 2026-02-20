@@ -1326,6 +1326,51 @@ actor GatewayServer {
                 }
             }
 
+            // Ollama model management proxy
+            if req.path == "/v1/ollama/pull" && req.method == "POST" {
+                return await guardedRoute(level: .execute, current: currentLevel, clientIP: clientIP, req: req) {
+                    guard let body = req.jsonBody, let name = body["name"] as? String, !name.isEmpty else {
+                        return HTTPResponse.badRequest("Missing model name")
+                    }
+                    guard let url = URL(string: "\(OllamaManager.baseURL)/api/pull") else {
+                        return HTTPResponse.serverError("Ollama not configured")
+                    }
+                    var pullReq = URLRequest(url: url)
+                    pullReq.httpMethod = "POST"
+                    pullReq.setValue("application/json", forHTTPHeaderField: "Content-Type")
+                    pullReq.httpBody = try? JSONSerialization.data(withJSONObject: ["name": name, "stream": false])
+                    pullReq.timeoutInterval = 600  // Models can be large
+                    do {
+                        let (data, resp) = try await URLSession.shared.data(for: pullReq)
+                        let status = (resp as? HTTPURLResponse)?.statusCode ?? 500
+                        return HTTPResponse(statusCode: status, headers: ["Content-Type": "application/json"], body: data)
+                    } catch {
+                        return HTTPResponse.serverError("Ollama pull failed: \(error.localizedDescription)")
+                    }
+                }
+            }
+            if req.path == "/v1/ollama/delete" && req.method == "DELETE" {
+                return await guardedRoute(level: .execute, current: currentLevel, clientIP: clientIP, req: req) {
+                    guard let body = req.jsonBody, let name = body["name"] as? String, !name.isEmpty else {
+                        return HTTPResponse.badRequest("Missing model name")
+                    }
+                    guard let url = URL(string: "\(OllamaManager.baseURL)/api/delete") else {
+                        return HTTPResponse.serverError("Ollama not configured")
+                    }
+                    var delReq = URLRequest(url: url)
+                    delReq.httpMethod = "DELETE"
+                    delReq.setValue("application/json", forHTTPHeaderField: "Content-Type")
+                    delReq.httpBody = try? JSONSerialization.data(withJSONObject: ["name": name])
+                    do {
+                        let (data, resp) = try await URLSession.shared.data(for: delReq)
+                        let status = (resp as? HTTPURLResponse)?.statusCode ?? 500
+                        return HTTPResponse(statusCode: status, headers: ["Content-Type": "application/json"], body: data)
+                    } catch {
+                        return HTTPResponse.serverError("Ollama delete failed: \(error.localizedDescription)")
+                    }
+                }
+            }
+
             // WhatsApp webhook handler
             if req.path == "/v1/whatsapp/webhook" {
                 if req.method == "GET" {
