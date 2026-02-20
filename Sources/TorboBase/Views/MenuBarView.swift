@@ -83,7 +83,7 @@ struct MenuBarView: View {
                 }
                 if state.serverRunning {
                     MenuBarAction(title: "Open Web Chat", icon: "globe", tint: .cyan) {
-                        let url = "http://\(state.localIP):\(state.serverPort)/chat?token=\(state.serverToken)"
+                        let url = "http://\(state.localIP):\(state.serverPort)/chat"
                         if let parsed = URL(string: url) { NSWorkspace.shared.open(parsed) }
                     }
                 }

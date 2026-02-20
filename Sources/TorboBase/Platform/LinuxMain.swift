@@ -91,6 +91,8 @@ struct TorboBaseServer {
         TorboLog.info("Starting gateway server...", subsystem: "Main")
         await GatewayServer.shared.start(appState: AppState.shared)
         TorboLog.info("Gateway running on port \(port)", subsystem: "Main")
+        TorboLog.info("Dashboard: http://127.0.0.1:\(port)/dashboard", subsystem: "Main")
+        TorboLog.info("Bearer token: \(AppConfig.serverToken)", subsystem: "Main")
 
         // Start background services
         TorboLog.info("Starting proactive agent...", subsystem: "Main")

@@ -159,7 +159,7 @@ struct HomeView: View {
                 // Quick Actions
                 HStack(spacing: 8) {
                     Button {
-                        let url = "http://\(state.localIP):\(state.serverPort)/chat?token=\(state.serverToken)"
+                        let url = "http://\(state.localIP):\(state.serverPort)/chat"
                         if let parsed = URL(string: url) { NSWorkspace.shared.open(parsed) }
                     } label: {
                         Label("Web Chat", systemImage: "globe")
@@ -170,7 +170,7 @@ struct HomeView: View {
                     .disabled(!state.serverRunning)
 
                     Button {
-                        let url = "http://\(state.localIP):\(state.serverPort)/chat?token=\(state.serverToken)"
+                        let url = "http://\(state.localIP):\(state.serverPort)/chat"
                         NSPasteboard.general.clearContents()
                         NSPasteboard.general.setString(url, forType: .string)
                     } label: {
