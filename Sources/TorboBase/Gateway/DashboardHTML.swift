@@ -790,6 +790,25 @@ tr:hover { background: rgba(255,255,255,0.02); }
         </div>
     </div>
 
+    <!-- Logos Tab -->
+    <div id="tab-logos" class="tab-panel">
+        <div class="page-title">Logos</div>
+        <div style="font-size:13px;color:var(--text-dim);margin-bottom:24px;">Chat with your agents directly from the dashboard</div>
+        <div class="card" style="display:flex;flex-direction:column;height:calc(100vh - 200px);min-height:400px;padding:0;overflow:hidden;">
+            <div style="padding:12px 16px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:12px;">
+                <select id="logosAgent" style="width:auto;min-width:140px;padding:6px 10px;font-size:12px;" onchange="logosClearChat()">
+                    <option value="sid">SiD</option>
+                </select>
+                <button class="btn btn-secondary btn-sm" onclick="logosClearChat()">Clear</button>
+            </div>
+            <div id="logosMessages" style="flex:1;overflow-y:auto;padding:16px;display:flex;flex-direction:column;gap:12px;"></div>
+            <div style="padding:12px 16px;border-top:1px solid var(--border);display:flex;gap:8px;">
+                <textarea id="logosInput" rows="1" placeholder="Type a message..." style="flex:1;resize:none;min-height:38px;max-height:120px;padding:8px 12px;" onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();logosSend();}"></textarea>
+                <button class="btn btn-primary" onclick="logosSend()" id="logosSendBtn">Send</button>
+            </div>
+        </div>
+    </div>
+
     <!-- Vox Tab -->
     <div id="tab-vox" class="tab-panel">
         <div class="page-title">Vox</div>
@@ -1019,6 +1038,7 @@ function switchTab(tab) {
     if (tab === 'settings') { loadSettings(); }
     if (tab === 'lexis') { loadLexis(); }
     if (tab === 'skills') { loadSkills(); }
+    if (tab === 'logos') { logosLoadAgents(); logosClearChat(); }
 }
 
 // --- Kill Switch ---
@@ -1751,6 +1771,100 @@ function saveSettings() {
         showSuccess('settingsSuccess', 'Settings saved.');
     }).catch(function(e) {
         if (e.message !== 'Unauthorized') showError('settingsError', 'Failed to save settings: ' + e.message);
+    });
+}
+
+// --- Logos ---
+var logosHistory = [];
+var logosStreaming = false;
+
+function logosLoadAgents() {
+    api('GET', '/v1/agents').then(function(data) {
+        var agents = data.agents || data || [];
+        if (!Array.isArray(agents)) agents = [];
+        var sel = document.getElementById('logosAgent');
+        if (!sel) return;
+        sel.innerHTML = '';
+        for (var i = 0; i < agents.length; i++) {
+            var opt = document.createElement('option');
+            opt.value = agents[i].id;
+            opt.textContent = agents[i].name || agents[i].id;
+            sel.appendChild(opt);
+        }
+        if (!agents.length) {
+            var def = document.createElement('option');
+            def.value = 'sid';
+            def.textContent = 'SiD';
+            sel.appendChild(def);
+        }
+    }).catch(function() {});
+}
+
+function logosClearChat() {
+    logosHistory = [];
+    var wrap = document.getElementById('logosMessages');
+    if (wrap) wrap.innerHTML = '<div class="empty-state" style="margin:auto;">Start a conversation</div>';
+}
+
+function logosAppendMsg(role, text) {
+    var wrap = document.getElementById('logosMessages');
+    if (!wrap) return;
+    var isEmpty = wrap.querySelector('.empty-state');
+    if (isEmpty) wrap.innerHTML = '';
+    var div = document.createElement('div');
+    div.style.cssText = role === 'user'
+        ? 'align-self:flex-end;background:var(--cyan-dim);color:var(--text-bright);padding:10px 14px;border-radius:12px 12px 2px 12px;max-width:75%;font-size:13px;line-height:1.5;word-wrap:break-word;'
+        : 'align-self:flex-start;background:var(--surface-hover);color:var(--text);padding:10px 14px;border-radius:12px 12px 12px 2px;max-width:75%;font-size:13px;line-height:1.5;word-wrap:break-word;border:1px solid var(--border);';
+    div.textContent = text;
+    div.id = role === 'assistant' ? 'logosLastAssistant' : '';
+    wrap.appendChild(div);
+    wrap.scrollTop = wrap.scrollHeight;
+    return div;
+}
+
+function logosSend() {
+    if (logosStreaming) return;
+    var input = document.getElementById('logosInput');
+    var text = input.value.trim();
+    if (!text) return;
+    input.value = '';
+    logosHistory.push({role: 'user', content: text});
+    logosAppendMsg('user', text);
+    logosStreaming = true;
+    document.getElementById('logosSendBtn').textContent = '...';
+    var agentId = document.getElementById('logosAgent').value || 'sid';
+    var body = {
+        model: 'auto',
+        messages: logosHistory,
+        stream: false
+    };
+    fetch('/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            'Authorization': 'Bearer ' + TOKEN,
+            'x-torbo-agent-id': agentId
+        },
+        body: JSON.stringify(body)
+    }).then(function(r) { return r.json(); }).then(function(data) {
+        var reply = '';
+        if (data.choices && data.choices[0] && data.choices[0].message) {
+            reply = data.choices[0].message.content || '';
+        } else if (data.response) {
+            reply = data.response;
+        } else if (data.error) {
+            reply = 'Error: ' + (data.error.message || data.error);
+        }
+        if (reply) {
+            logosHistory.push({role: 'assistant', content: reply});
+            logosAppendMsg('assistant', reply);
+        }
+        logosStreaming = false;
+        document.getElementById('logosSendBtn').textContent = 'Send';
+    }).catch(function(e) {
+        logosAppendMsg('assistant', 'Connection error: ' + e.message);
+        logosStreaming = false;
+        document.getElementById('logosSendBtn').textContent = 'Send';
     });
 }
 
