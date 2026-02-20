@@ -323,32 +323,29 @@ tr:hover { background: rgba(255,255,255,0.02); }
         <div class="nav-item active" onclick="switchTab('overview')" data-tab="overview">
             <span class="nav-icon">&#9673;</span> Dashboard
         </div>
-        <div class="nav-item" onclick="switchTab('apikeys')" data-tab="apikeys">
-            <span class="nav-icon">&#9919;</span> API Keys
+        <div class="nav-item" onclick="switchTab('vox')" data-tab="vox">
+            <span class="nav-icon">&#9835;</span> Vox
         </div>
-        <div class="nav-item" onclick="switchTab('access')" data-tab="access">
-            <span class="nav-icon">&#9737;</span> Access Control
+        <div class="nav-item" onclick="switchTab('logos')" data-tab="logos">
+            <span class="nav-icon">&#9993;</span> Logos
         </div>
         <div class="nav-item" onclick="switchTab('agents')" data-tab="agents">
             <span class="nav-icon">&#9830;&#9830;</span> Agents
         </div>
-        <div class="nav-item" onclick="switchTab('library')" data-tab="library">
-            <span class="nav-icon">&#9782;</span> Library
+        <div class="nav-item" onclick="switchTab('skills')" data-tab="skills">
+            <span class="nav-icon">&#9881;</span> Skills
         </div>
         <div class="nav-item" onclick="switchTab('models')" data-tab="models">
-            <span class="nav-icon">&#9881;</span> Models
+            <span class="nav-icon">&#9674;</span> Models
         </div>
-        <div class="nav-item" onclick="switchTab('logs')" data-tab="logs">
-            <span class="nav-icon">&#9776;</span> Logs
+        <div class="nav-item" onclick="switchTab('lexis')" data-tab="lexis">
+            <span class="nav-icon">&#9782;</span> Lexis
         </div>
         <div class="nav-item" onclick="switchTab('security')" data-tab="security">
             <span class="nav-icon">&#9888;</span> Security
         </div>
         <div class="nav-item" onclick="switchTab('settings')" data-tab="settings">
-            <span class="nav-icon">&#9881;</span> Arkhe
-        </div>
-        <div class="nav-item" onclick="switchTab('legal')" data-tab="legal">
-            <span class="nav-icon">&#9878;</span> Legal
+            <span class="nav-icon">&#9878;</span> Arkhe
         </div>
     </div>
     <div class="sidebar-footer">
