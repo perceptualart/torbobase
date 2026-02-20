@@ -27,6 +27,46 @@ struct CloudRequestContext: Sendable {
     var documentsDir: String { dataDir + "/documents" }
 }
 
+// MARK: - Per-User Service Container
+
+/// Holds isolated service instances for a single cloud user.
+/// Each user gets their own ConversationStore, MemoryIndex, MemoryArmy,
+/// MemoryRouter, and AgentConfigManager — fully isolated from other users.
+final class UserServices: Sendable {
+    let userID: String
+    let conversationStore: ConversationStore
+    let memoryIndex: MemoryIndex
+    let memoryArmy: MemoryArmy
+    let memoryRouter: MemoryRouter
+    let agentConfigManager: AgentConfigManager
+
+    init(ctx: CloudRequestContext) {
+        self.userID = ctx.userID
+
+        // Per-user conversation store
+        let convDir = URL(fileURLWithPath: ctx.conversationsDir, isDirectory: true)
+        self.conversationStore = ConversationStore(storageDir: convDir)
+
+        // Per-user memory index (SQLite vector DB)
+        let dbPath = ctx.memoryDir + "/vectors.db"
+        self.memoryIndex = MemoryIndex(dbPath: dbPath)
+
+        // Per-user agents
+        let agentsURL = URL(fileURLWithPath: ctx.agentsDir, isDirectory: true)
+        self.agentConfigManager = AgentConfigManager(agentsDir: agentsURL)
+
+        // Per-user MemoryArmy (uses per-user MemoryIndex)
+        self.memoryArmy = MemoryArmy(memoryIndex: self.memoryIndex)
+
+        // Per-user MemoryRouter (uses all per-user instances)
+        self.memoryRouter = MemoryRouter(
+            memoryArmy: self.memoryArmy,
+            memoryIndex: self.memoryIndex,
+            agentConfigManager: self.agentConfigManager
+        )
+    }
+}
+
 // MARK: - Cloud User Manager
 
 actor CloudUserManager {
@@ -35,6 +75,12 @@ actor CloudUserManager {
     // Track active user sessions for stats
     private var activeSessions: [String: Date] = [:]  // userID → lastActive
     private let sessionTimeout: TimeInterval = 1800    // 30 minutes
+
+    // Per-user service instances — cached with idle eviction
+    private var userServices: [String: UserServices] = [:]
+    private var serviceLastAccess: [String: Date] = [:]
+    private let serviceEvictionInterval: TimeInterval = 3600  // 1 hour idle → evict
+    private var evictionTask: Task<Void, Never>?
 
     // MARK: - Directory Setup
 
@@ -50,6 +96,60 @@ actor CloudUserManager {
                     TorboLog.error("Failed to create user dir \(dir): \(error)", subsystem: "CloudUsers")
                 }
             }
+        }
+    }
+
+    // MARK: - Per-User Service Resolution
+
+    /// Get or create isolated service instances for a cloud user.
+    /// Instances are cached and lazily initialized.
+    func services(for ctx: CloudRequestContext) async -> UserServices {
+        serviceLastAccess[ctx.userID] = Date()
+
+        if let existing = userServices[ctx.userID] {
+            return existing
+        }
+
+        // Create new per-user services
+        ensureUserDirectories(ctx)
+        let svc = UserServices(ctx: ctx)
+
+        // Initialize the memory system for this user
+        await svc.memoryRouter.initializeForUser()
+
+        userServices[ctx.userID] = svc
+        TorboLog.info("Created services for user \(ctx.userID) (\(ctx.email))", subsystem: "CloudUsers")
+
+        // Start eviction timer if not running
+        startEvictionTimerIfNeeded()
+
+        return svc
+    }
+
+    // MARK: - Eviction
+
+    private func startEvictionTimerIfNeeded() {
+        guard evictionTask == nil else { return }
+        evictionTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 600_000_000_000) // 10 minutes
+                await self?.evictIdleServices()
+            }
+        }
+    }
+
+    private func evictIdleServices() {
+        let cutoff = Date().addingTimeInterval(-serviceEvictionInterval)
+        var evicted: [String] = []
+        for (userID, lastAccess) in serviceLastAccess {
+            if lastAccess < cutoff {
+                userServices.removeValue(forKey: userID)
+                serviceLastAccess.removeValue(forKey: userID)
+                evicted.append(userID)
+            }
+        }
+        if !evicted.isEmpty {
+            TorboLog.info("Evicted \(evicted.count) idle user service(s)", subsystem: "CloudUsers")
         }
     }
 
@@ -138,6 +238,7 @@ actor CloudUserManager {
         return [
             "active_users": active.count,
             "total_sessions_tracked": activeSessions.count,
+            "cached_service_instances": userServices.count,
         ]
     }
 }

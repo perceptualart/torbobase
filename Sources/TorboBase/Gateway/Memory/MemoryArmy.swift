@@ -26,6 +26,9 @@ import FoundationNetworking
 actor MemoryArmy {
     static let shared = MemoryArmy()
 
+    // The memory index this army operates on (global .shared or per-user instance)
+    let memoryIndex: MemoryIndex
+
     // Worker model assignments — small and fast
     private let librarianModel = "qwen2.5:7b"    // Good at extraction and summarization
     private let searcherModel = "llama3.2:3b"     // Fast classification
@@ -55,6 +58,15 @@ actor MemoryArmy {
         var lastWatcherRun: Date?
     }
 
+    init() {
+        memoryIndex = .shared
+    }
+
+    /// Per-user initializer for cloud multi-tenant isolation
+    init(memoryIndex: MemoryIndex) {
+        self.memoryIndex = memoryIndex
+    }
+
     // MARK: - Lifecycle
 
     /// Start the army. Call once at app launch.
@@ -63,7 +75,7 @@ actor MemoryArmy {
         isRunning = true
 
         // Initialize the vector index
-        await MemoryIndex.shared.initialize()
+        await memoryIndex.initialize()
 
         // Migrate existing MemoryManager facts into the vector index
         await migrateExistingMemories()
@@ -72,8 +84,17 @@ actor MemoryArmy {
         startRepairer()
         startWatcher()
 
-        let scrollCount = await MemoryIndex.shared.count
+        let scrollCount = await memoryIndex.count
         TorboLog.info("Library of Alexandria deployed — \(scrollCount) scrolls indexed", subsystem: "LoA")
+    }
+
+    /// Lightweight start for per-user cloud instances — initialize index only, no background workers
+    func startForUser() async {
+        guard !isRunning else { return }
+        isRunning = true
+        await memoryIndex.initialize()
+        let scrollCount = await memoryIndex.count
+        TorboLog.info("Per-user LoA initialized — \(scrollCount) scrolls", subsystem: "LoA")
     }
 
     func stop() {
@@ -99,7 +120,7 @@ actor MemoryArmy {
         // Step 2: Index each extracted memory
         var indexed = 0
         for memory in checkedMemories {
-            if await MemoryIndex.shared.addWithEntities(
+            if await memoryIndex.addWithEntities(
                 text: memory.text,
                 category: memory.category,
                 source: "conversation",
@@ -113,7 +134,7 @@ actor MemoryArmy {
         // Step 3: Create an episode summary (what happened in this exchange)
         let episodeSummary = await summarizeEpisode(userMessage: userMessage, assistantResponse: assistantResponse)
         if let episode = episodeSummary {
-            await MemoryIndex.shared.add(
+            await memoryIndex.add(
                 text: episode,
                 category: "episode",
                 source: "librarian",
@@ -172,10 +193,10 @@ actor MemoryArmy {
         let results: [MemoryIndex.SearchResult]
         if isRememberQuery {
             // Explicit memory recall — search harder, return more, lower threshold
-            results = await MemoryIndex.shared.search(query: searchQuery, topK: 15, minScore: 0.2)
+            results = await memoryIndex.search(query: searchQuery, topK: 15, minScore: 0.2)
         } else {
             // Ambient retrieval — top relevant memories for context
-            results = await MemoryIndex.shared.search(query: searchQuery, topK: 8, minScore: 0.35)
+            results = await memoryIndex.search(query: searchQuery, topK: 8, minScore: 0.35)
         }
 
         let elapsed = (Date().timeIntervalSinceReferenceDate - startTime) * 1000
@@ -240,9 +261,9 @@ actor MemoryArmy {
         await decayOldMemories()
 
         // Step 4: Purge very low importance memories if we're over capacity
-        let memCount = await MemoryIndex.shared.count
+        let memCount = await memoryIndex.count
         if memCount > 5000 {
-            await MemoryIndex.shared.purgeBelow(importance: 0.1)
+            await memoryIndex.purgeBelow(importance: 0.1)
         }
 
         let elapsed = (Date().timeIntervalSinceReferenceDate - startTime) * 1000
@@ -270,8 +291,8 @@ actor MemoryArmy {
         lastWatcherCheck = Date()
         stats.lastWatcherRun = Date()
 
-        let memCount = await MemoryIndex.shared.count
-        let categories = await MemoryIndex.shared.categoryCounts()
+        let memCount = await memoryIndex.count
+        let categories = await memoryIndex.categoryCounts()
 
         TorboLog.info("Health check — \(memCount) memories (\(categories))", subsystem: "LoA·Watcher")
 
@@ -296,7 +317,7 @@ actor MemoryArmy {
     /// Called after every 50 new memories are indexed. Reflections help the system
     /// understand user interests and recurring themes over time.
     private func generateReflection() async {
-        let index = MemoryIndex.shared
+        let index = memoryIndex
         let allEntries = await index.allEntries
 
         // Get the 50 most recent non-reflection memories
@@ -489,7 +510,7 @@ actor MemoryArmy {
     /// If a new fact updates/corrects an existing fact, soft-deprecate the old one
     /// and boost the new one's importance to match or exceed the old.
     private func detectContradictions(_ extracted: [ExtractedMemory]) async -> [ExtractedMemory] {
-        let index = MemoryIndex.shared
+        let index = memoryIndex
         guard await index.count > 0 else { return extracted }
 
         var result: [ExtractedMemory] = []
@@ -586,7 +607,7 @@ actor MemoryArmy {
     // MARK: - Internal: Deduplication
 
     private func deduplicateMemories() async -> Int {
-        let index = MemoryIndex.shared
+        let index = memoryIndex
         let allEntries = await index.allEntries
         guard allEntries.count > 1 else { return 0 }
 
@@ -687,7 +708,7 @@ actor MemoryArmy {
     // MARK: - Internal: Episode Compression
 
     private func compressOldEpisodes() async -> Int {
-        let index = MemoryIndex.shared
+        let index = memoryIndex
         let allEntries = await index.allEntries
 
         // Find episodes older than 7 days
@@ -770,7 +791,7 @@ actor MemoryArmy {
     // MARK: - Internal: Importance Decay
 
     private func decayOldMemories() async {
-        let index = MemoryIndex.shared
+        let index = memoryIndex
         let allEntries = await index.allEntries
         let now = Date()
 
@@ -853,7 +874,7 @@ actor MemoryArmy {
     // MARK: - Migration: Existing MemoryManager → Index
 
     private func migrateExistingMemories() async {
-        let index = MemoryIndex.shared
+        let index = memoryIndex
         let currentCount = await index.count
 
         // Only migrate if index is empty (first run)

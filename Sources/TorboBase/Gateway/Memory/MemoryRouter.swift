@@ -15,18 +15,43 @@ import Foundation
 actor MemoryRouter {
     static let shared = MemoryRouter()
 
+    // Configurable service references (global .shared by default, per-user for cloud)
+    let memoryArmy: MemoryArmy
+    let memoryIndex: MemoryIndex
+    let agentConfigManager: AgentConfigManager
+
     private var isReady = false
 
     // Agent identity is loaded from AgentConfigManager at request time.
     // No hardcoded personality here — it's all in agents/{id}.json.
 
+    init() {
+        memoryArmy = .shared
+        memoryIndex = .shared
+        agentConfigManager = .shared
+    }
+
+    /// Per-user initializer for cloud multi-tenant isolation
+    init(memoryArmy: MemoryArmy, memoryIndex: MemoryIndex, agentConfigManager: AgentConfigManager) {
+        self.memoryArmy = memoryArmy
+        self.memoryIndex = memoryIndex
+        self.agentConfigManager = agentConfigManager
+    }
+
     // MARK: - Lifecycle
 
     func initialize() async {
         guard !isReady else { return }
-        await MemoryArmy.shared.start()
+        await memoryArmy.start()
         isReady = true
         TorboLog.info("Initialized and ready", subsystem: "MemoryRouter")
+    }
+
+    /// Lightweight initialize for per-user cloud instances
+    func initializeForUser() async {
+        guard !isReady else { return }
+        await memoryArmy.startForUser()
+        isReady = true
     }
 
     // MARK: - Pre-Request: Inject Memories into System Prompt
@@ -54,7 +79,7 @@ actor MemoryRouter {
         // Retrieve relevant memories (skip if memory system is disabled)
         let memoryBlock: String?
         if AppConfig.memoryEnabled {
-            memoryBlock = await MemoryArmy.shared.searcherRetrieve(
+            memoryBlock = await memoryArmy.searcherRetrieve(
                 userMessage: userContent,
                 conversationHistory: messages
             )
@@ -71,10 +96,10 @@ actor MemoryRouter {
         // 1. Agent identity block (skip if client provided their own system prompt)
         if !clientProvidedSystem {
             let agentConfig: AgentConfig
-            if let found = await AgentConfigManager.shared.agent(agentID) {
+            if let found = await agentConfigManager.agent(agentID) {
                 agentConfig = found
             } else {
-                agentConfig = await AgentConfigManager.shared.defaultAgent
+                agentConfig = await agentConfigManager.defaultAgent
             }
             let identityBlock = agentConfig.buildIdentityBlock(accessLevel: accessLevel, availableTools: toolNames)
             systemParts.append(identityBlock)
@@ -98,7 +123,7 @@ actor MemoryRouter {
 
         // 4. Skills prompt additions (enabled skills at current access level, filtered by agent)
         if !clientProvidedSystem {
-            let agentSkillIDs = await AgentConfigManager.shared.agent(agentID)?.enabledSkillIDs ?? []
+            let agentSkillIDs = await agentConfigManager.agent(agentID)?.enabledSkillIDs ?? []
             let skillsBlock = await SkillsManager.shared.skillsPromptBlock(forAccessLevel: accessLevel, allowedSkillIDs: agentSkillIDs)
             if !skillsBlock.isEmpty {
                 systemParts.append(skillsBlock)
@@ -125,10 +150,11 @@ actor MemoryRouter {
     /// Nonisolated so callers don't need to await — fires and forgets.
     nonisolated func processExchange(userMessage: String, assistantResponse: String, model: String) {
         guard AppConfig.memoryEnabled else { return }
+        let army = memoryArmy
         // Run extraction in background — never block the response
         Task {
             // Memory Army's librarian handles extraction + indexing
-            await MemoryArmy.shared.librarianProcess(
+            await army.librarianProcess(
                 userMessage: userMessage,
                 assistantResponse: assistantResponse,
                 model: model
@@ -147,7 +173,7 @@ actor MemoryRouter {
 
     /// Search memories directly (for /v1/memory/search endpoint)
     func searchMemories(query: String, topK: Int = 10) async -> [[String: Any]] {
-        let results = await MemoryIndex.shared.search(query: query, topK: topK, minScore: 0.2)
+        let results = await memoryIndex.search(query: query, topK: topK, minScore: 0.2)
         return results.map { r in
             [
                 "id": r.id,
@@ -163,20 +189,20 @@ actor MemoryRouter {
 
     /// Add a memory manually (for /v1/memory/add endpoint)
     func addMemory(text: String, category: String = "fact", importance: Float = 0.7) async -> Bool {
-        let id = await MemoryIndex.shared.add(text: text, category: category, source: "manual", importance: importance)
+        let id = await memoryIndex.add(text: text, category: category, source: "manual", importance: importance)
         return id != nil
     }
 
     /// Remove a memory by ID (for /v1/memory/remove endpoint)
     func removeMemory(id: Int64) async {
-        await MemoryIndex.shared.remove(id: id)
+        await memoryIndex.remove(id: id)
     }
 
     /// Get memory system stats
     func getStats() async -> [String: Any] {
-        let indexCount = await MemoryIndex.shared.count
-        let categories = await MemoryIndex.shared.categoryCounts()
-        let armyStats = await MemoryArmy.shared.getStats()
+        let indexCount = await memoryIndex.count
+        let categories = await memoryIndex.categoryCounts()
+        let armyStats = await memoryArmy.getStats()
 
         return [
             "totalMemories": indexCount,
@@ -188,7 +214,7 @@ actor MemoryRouter {
 
     /// Force a repair cycle
     func triggerRepair() async {
-        await MemoryArmy.shared.runRepairCycle()
+        await memoryArmy.runRepairCycle()
     }
 
     // MARK: - Helpers

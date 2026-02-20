@@ -35,6 +35,18 @@ actor ConversationStore {
         TorboLog.info("Data directory: \(storageDir.path)", subsystem: "ConvStore")
     }
 
+    /// Per-user initializer for cloud multi-tenant isolation
+    init(storageDir customDir: URL) {
+        storageDir = customDir
+        messagesFile = customDir.appendingPathComponent("messages.jsonl")
+        sessionsFile = customDir.appendingPathComponent("sessions.json")
+
+        encoder.dateEncodingStrategy = .iso8601
+        decoder.dateDecodingStrategy = .iso8601
+
+        try? FileManager.default.createDirectory(at: customDir, withIntermediateDirectories: true)
+    }
+
     // MARK: - Messages
 
     /// Append a message (buffered, writes in batches)

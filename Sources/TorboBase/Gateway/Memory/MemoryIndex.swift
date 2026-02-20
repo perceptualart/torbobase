@@ -74,6 +74,13 @@ actor MemoryIndex {
         dbPath = dir.appendingPathComponent("vectors.db").path
     }
 
+    /// Per-user initializer for cloud multi-tenant isolation
+    init(dbPath customPath: String) {
+        let dir = (customPath as NSString).deletingLastPathComponent
+        try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        dbPath = customPath
+    }
+
     // MARK: - Lifecycle
 
     func initialize() async {

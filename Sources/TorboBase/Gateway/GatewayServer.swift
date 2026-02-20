@@ -768,11 +768,11 @@ actor GatewayServer {
                 }
                 await audit(clientIP: clientIP, method: req.method, path: req.path,
                            required: .chatOnly, granted: true, detail: "OK (streaming)")
-                await streamChatCompletion(req, clientIP: clientIP, agentID: agentID, accessLevel: currentLevel, platform: platform, writer: writer, corsOrigin: corsOrigin)
+                await streamChatCompletion(req, clientIP: clientIP, agentID: agentID, accessLevel: currentLevel, platform: platform, writer: writer, corsOrigin: corsOrigin, cloudContext: cloudContext)
                 return nil // Already streamed
             }
             return await guardedRoute(level: .chatOnly, current: currentLevel, clientIP: clientIP, req: req) {
-                await self.proxyChatCompletion(req, clientIP: clientIP, agentID: agentID, accessLevel: currentLevel, platform: platform)
+                await self.proxyChatCompletion(req, clientIP: clientIP, agentID: agentID, accessLevel: currentLevel, platform: platform, cloudContext: cloudContext)
             }
         case ("GET", "/v1/models"):
             return await guardedRoute(level: .chatOnly, current: currentLevel, clientIP: clientIP, req: req) {
@@ -1557,7 +1557,7 @@ actor GatewayServer {
 
     // MARK: - Streaming Chat Completion (SSE)
 
-    private func streamChatCompletion(_ req: HTTPRequest, clientIP: String, agentID: String, accessLevel: AccessLevel, platform: String? = nil, writer: ResponseWriter, corsOrigin: String? = nil) async {
+    private func streamChatCompletion(_ req: HTTPRequest, clientIP: String, agentID: String, accessLevel: AccessLevel, platform: String? = nil, writer: ResponseWriter, corsOrigin: String? = nil, cloudContext: CloudRequestContext? = nil) async {
         guard var body = req.jsonBody else {
             writer.sendResponse(.badRequest("Invalid JSON body")); return
         }
@@ -1588,15 +1588,28 @@ actor GatewayServer {
         }
 
         // Enrich with agent identity + memory (identity skipped if client provided system prompt)
-        await MemoryRouter.shared.enrichRequest(&body, accessLevel: accessLevel.rawValue, toolNames: toolNames, clientProvidedSystem: hasClientSystem, agentID: agentID, platform: platform)
+        // Cloud users get per-user MemoryRouter with isolated memory/agents
+        let router: MemoryRouter
+        if let ctx = cloudContext {
+            let svc = await CloudUserManager.shared.services(for: ctx)
+            router = svc.memoryRouter
+        } else {
+            router = MemoryRouter.shared
+        }
+        await router.enrichRequest(&body, accessLevel: accessLevel.rawValue, toolNames: toolNames, clientProvidedSystem: hasClientSystem, agentID: agentID, platform: platform)
 
         // Log user message (handles both string and array/vision content)
         if let messages = body["messages"] as? [[String: Any]],
            let last = messages.last(where: { $0["role"] as? String == "user" }),
            let content = extractTextContent(from: last["content"]) {
             let userMsg = ConversationMessage(role: "user", content: content, model: model, clientIP: clientIP, agentID: agentID)
-            let s = appState
-            await MainActor.run { s?.addMessage(userMsg) }
+            if let ctx = cloudContext {
+                let svc = await CloudUserManager.shared.services(for: ctx)
+                await svc.conversationStore.appendMessage(userMsg)
+            } else {
+                let s = appState
+                await MainActor.run { s?.addMessage(userMsg) }
+            }
         }
 
         // Tool execution loop: use non-streaming tool loop, then simulate SSE output.
@@ -1631,7 +1644,7 @@ actor GatewayServer {
                         } else {
                             simulateStreamResponse(content, model: model, writer: writer, corsOrigin: corsOrigin)
                         }
-                        logAssistantResponse(response, model: model, clientIP: clientIP, originalMessages: req.jsonBody?["messages"])
+                        logAssistantResponse(response, model: model, clientIP: clientIP, originalMessages: req.jsonBody?["messages"], cloudContext: cloudContext, router: router)
                     } else {
                         let bodyStr = String(data: response.body, encoding: .utf8) ?? "(empty)"
                         TorboLog.warn("Tool loop: empty/unparseable response from \(model) (status \(response.statusCode)): \(bodyStr.prefix(500))", subsystem: "Gateway")
@@ -1751,7 +1764,7 @@ actor GatewayServer {
 
         // Route cloud models through their streaming APIs
         if model.hasPrefix("claude") || model.hasPrefix("gpt") || model.hasPrefix("gemini") || model.hasPrefix("grok") {
-            await streamCloudCompletion(body: body, model: model, clientIP: clientIP, writer: writer, corsOrigin: corsOrigin)
+            await streamCloudCompletion(body: body, model: model, clientIP: clientIP, writer: writer, corsOrigin: corsOrigin, cloudContext: cloudContext, router: router)
             return
         }
 
@@ -1818,8 +1831,13 @@ actor GatewayServer {
             let capturedContent = fullContent
             if !capturedContent.isEmpty {
                 let assistantMsg = ConversationMessage(role: "assistant", content: capturedContent, model: model, clientIP: clientIP, agentID: agentID)
-                let s = appState
-                await MainActor.run { s?.addMessage(assistantMsg) }
+                if cloudContext == nil {
+                    let s = appState
+                    await MainActor.run { s?.addMessage(assistantMsg) }
+                } else if let ctx = cloudContext {
+                    let svc = await CloudUserManager.shared.services(for: ctx)
+                    await svc.conversationStore.appendMessage(assistantMsg)
+                }
 
                 // Token tracking (estimate from content length for streaming)
                 let promptEst = (req.jsonBody?["messages"] as? [[String: Any]])?.reduce(0) { $0 + ((extractTextContent(from: $1["content"]) ?? "").count / 4) } ?? 0
@@ -1829,8 +1847,8 @@ actor GatewayServer {
                 if let messages = (req.jsonBody?["messages"] as? [[String: Any]]),
                    let userContent = extractTextContent(from: messages.last(where: { $0["role"] as? String == "user" })?["content"]) {
                     Task { await TelegramBridge.shared.forwardExchange(user: userContent, assistant: capturedContent, model: model) }
-                    // Memory extraction (background)
-                    MemoryRouter.shared.processExchange(userMessage: userContent, assistantResponse: capturedContent, model: model)
+                    // Memory extraction (background) — use per-user router for cloud users
+                    router.processExchange(userMessage: userContent, assistantResponse: capturedContent, model: model)
                 }
             }
         } catch {
@@ -1846,7 +1864,7 @@ actor GatewayServer {
 
     // MARK: - Cloud Streaming
 
-    private func streamCloudCompletion(body: [String: Any], model: String, clientIP: String, writer: ResponseWriter, corsOrigin: String? = nil) async {
+    private func streamCloudCompletion(body: [String: Any], model: String, clientIP: String, writer: ResponseWriter, corsOrigin: String? = nil, cloudContext: CloudRequestContext? = nil, router: MemoryRouter? = nil) async {
         let keys = await MainActor.run { AppState.shared.cloudAPIKeys }
         var fullContent = ""
 
@@ -2203,13 +2221,19 @@ actor GatewayServer {
         let capturedCloudContent = fullContent
         if !capturedCloudContent.isEmpty {
             let assistantMsg = ConversationMessage(role: "assistant", content: capturedCloudContent, model: model, clientIP: clientIP)
-            let s = appState
-            await MainActor.run { s?.addMessage(assistantMsg) }
+            if let ctx = cloudContext {
+                let svc = await CloudUserManager.shared.services(for: ctx)
+                await svc.conversationStore.appendMessage(assistantMsg)
+            } else {
+                let s = appState
+                await MainActor.run { s?.addMessage(assistantMsg) }
+            }
             if let messages = body["messages"] as? [[String: Any]],
                let userContent = extractTextContent(from: messages.last(where: { $0["role"] as? String == "user" })?["content"]) {
                 Task { await TelegramBridge.shared.forwardExchange(user: userContent, assistant: capturedCloudContent, model: model) }
-                // Memory extraction (background)
-                MemoryRouter.shared.processExchange(userMessage: userContent, assistantResponse: capturedCloudContent, model: model)
+                // Memory extraction (background) — use per-user router for cloud users
+                let memRouter = router ?? MemoryRouter.shared
+                memRouter.processExchange(userMessage: userContent, assistantResponse: capturedCloudContent, model: model)
             }
         }
     }
@@ -2247,7 +2271,7 @@ actor GatewayServer {
 
     // MARK: - Chat Proxy (with streaming, logging & Telegram forwarding)
 
-    private func proxyChatCompletion(_ req: HTTPRequest, clientIP: String, agentID: String, accessLevel: AccessLevel, platform: String? = nil) async -> HTTPResponse {
+    private func proxyChatCompletion(_ req: HTTPRequest, clientIP: String, agentID: String, accessLevel: AccessLevel, platform: String? = nil, cloudContext: CloudRequestContext? = nil) async -> HTTPResponse {
         guard var body = req.jsonBody else {
             return HTTPResponse.badRequest("Invalid JSON body")
         }
@@ -2279,7 +2303,15 @@ actor GatewayServer {
         }
 
         // Enrich with agent identity + memory (identity skipped if client provided system prompt)
-        await MemoryRouter.shared.enrichRequest(&body, accessLevel: accessLevel.rawValue, toolNames: toolNames, clientProvidedSystem: hasClientSystem, agentID: agentID, platform: platform)
+        // Cloud users get per-user MemoryRouter with isolated memory/agents
+        let router: MemoryRouter
+        if let ctx = cloudContext {
+            let svc = await CloudUserManager.shared.services(for: ctx)
+            router = svc.memoryRouter
+        } else {
+            router = MemoryRouter.shared
+        }
+        await router.enrichRequest(&body, accessLevel: accessLevel.rawValue, toolNames: toolNames, clientProvidedSystem: hasClientSystem, agentID: agentID, platform: platform)
 
         // Force non-streaming for this path (streaming handled separately)
         body["stream"] = false
@@ -2289,8 +2321,13 @@ actor GatewayServer {
            let last = messages.last(where: { $0["role"] as? String == "user" }),
            let content = extractTextContent(from: last["content"]) {
             let userMsg = ConversationMessage(role: "user", content: content, model: model, clientIP: clientIP, agentID: agentID)
-            let s = appState
-            await MainActor.run { s?.addMessage(userMsg) }
+            if let ctx = cloudContext {
+                let svc = await CloudUserManager.shared.services(for: ctx)
+                await svc.conversationStore.appendMessage(userMsg)
+            } else {
+                let s = appState
+                await MainActor.run { s?.addMessage(userMsg) }
+            }
         }
 
         // Tool execution loop — auto-execute built-in tools (web_search, web_fetch)
@@ -2304,7 +2341,7 @@ actor GatewayServer {
                   let json = try? JSONSerialization.jsonObject(with: response.body) as? [String: Any],
                   await ToolProcessor.shared.hasBuiltInToolCalls(json) else {
                 // No built-in tool calls (or error) — log and return as-is
-                logAssistantResponse(response, model: model, clientIP: clientIP, originalMessages: req.jsonBody?["messages"])
+                logAssistantResponse(response, model: model, clientIP: clientIP, originalMessages: req.jsonBody?["messages"], cloudContext: cloudContext, router: router)
                 return response
             }
 
@@ -2343,7 +2380,7 @@ actor GatewayServer {
 
         // Max rounds reached — return whatever we have
         let finalResponse = await sendChatRequest(body: currentBody, model: model, clientIP: clientIP)
-        logAssistantResponse(finalResponse, model: model, clientIP: clientIP, originalMessages: req.jsonBody?["messages"])
+        logAssistantResponse(finalResponse, model: model, clientIP: clientIP, originalMessages: req.jsonBody?["messages"], cloudContext: cloudContext, router: router)
         return finalResponse
     }
 
@@ -2365,7 +2402,7 @@ actor GatewayServer {
     }
 
     /// Log assistant response and forward to Telegram
-    private func logAssistantResponse(_ response: HTTPResponse, model: String, clientIP: String, originalMessages: Any?) {
+    private func logAssistantResponse(_ response: HTTPResponse, model: String, clientIP: String, originalMessages: Any?, cloudContext: CloudRequestContext? = nil, router: MemoryRouter? = nil) {
         guard response.statusCode == 200,
               let json = try? JSONSerialization.jsonObject(with: response.body) as? [String: Any],
               let choices = json["choices"] as? [[String: Any]],
@@ -2373,13 +2410,18 @@ actor GatewayServer {
               let message = first["message"] as? [String: Any],
               let content = message["content"] as? String else { return }
         let assistantMsg = ConversationMessage(role: "assistant", content: content, model: model, clientIP: clientIP)
-        let s = appState
-        Task { @MainActor in s?.addMessage(assistantMsg) }
+        if cloudContext == nil {
+            let s = appState
+            Task { @MainActor in s?.addMessage(assistantMsg) }
+        } else if let ctx = cloudContext {
+            Task { await CloudUserManager.shared.services(for: ctx).conversationStore.appendMessage(assistantMsg) }
+        }
         if let messages = originalMessages as? [[String: Any]],
            let userContent = extractTextContent(from: messages.last(where: { $0["role"] as? String == "user" })?["content"]) {
             Task { await TelegramBridge.shared.forwardExchange(user: userContent, assistant: content, model: model) }
-            // Memory extraction (background)
-            MemoryRouter.shared.processExchange(userMessage: userContent, assistantResponse: content, model: model)
+            // Memory extraction (background) — use per-user router for cloud users
+            let memRouter = router ?? MemoryRouter.shared
+            memRouter.processExchange(userMessage: userContent, assistantResponse: content, model: model)
         }
     }
 

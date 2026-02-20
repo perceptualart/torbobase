@@ -334,6 +334,24 @@ actor AgentConfigManager {
         TorboLog.info("Loaded \(loaded.count) agent(s): \(loaded.keys.sorted().joined(separator: ", "))", subsystem: "Agents")
     }
 
+    /// Per-user initializer for cloud multi-tenant isolation
+    init(agentsDir customDir: URL) {
+        agentsDir = customDir
+        // No legacy migration for per-user instances
+        legacySidConfigFile = customDir.appendingPathComponent("sid_config.json")
+
+        encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        encoder.dateEncodingStrategy = .iso8601
+        decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+
+        try? FileManager.default.createDirectory(at: customDir, withIntermediateDirectories: true)
+
+        let loaded = Self.bootstrapConfigs(agentsDir: customDir, legacySidConfigFile: legacySidConfigFile, encoder: encoder, decoder: decoder)
+        configs = loaded
+    }
+
     /// Bootstrap agent configs from disk (nonisolated to avoid actor init warnings)
     private nonisolated static func bootstrapConfigs(agentsDir: URL, legacySidConfigFile: URL, encoder: JSONEncoder, decoder: JSONDecoder) -> [String: AgentConfig] {
         let fm = FileManager.default
