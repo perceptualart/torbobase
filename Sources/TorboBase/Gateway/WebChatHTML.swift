@@ -560,7 +560,7 @@ enum WebChatHTML {
     <div class="input-area">
         <button class="attach-btn" onclick="document.getElementById('fileInput').click()" title="Attach files">&#x1f4ce;</button>
         <input type="file" id="fileInput" multiple style="display:none" onchange="handleFileSelect(event)">
-        <button class="mic-btn" id="micBtn" onclick="toggleMic()" title="Voice input">&#x1f3a4;</button>
+        <button class="mic-btn" id="micBtn" onclick="toggleMic()" ondblclick="toggleVoiceMode()" title="Tap: voice input | Double-tap: hands-free mode">&#x1f3a4;</button>
         <textarea id="input" rows="1" placeholder="Type a message..." autofocus></textarea>
         <button class="speaker-btn" id="speakerBtn" onclick="toggleSpeaker()" title="Toggle voice output">&#x1f508;</button>
         <button id="send" onclick="sendMessage()">Send</button>
@@ -1639,9 +1639,13 @@ enum WebChatHTML {
 
     // ─── Voice (TTS + STT) ───
     let ttsEnabled = localStorage.getItem(STORAGE_PREFIX + 'tts') === 'true';
+    let voiceMode = localStorage.getItem(STORAGE_PREFIX + 'voicemode') === 'true';  // Hands-free: auto-send + re-listen
     let mediaRecorder = null;
     let audioChunks = [];
     let isRecording = false;
+    let speechRecognition = null;
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    const hasWebSpeech = !!SpeechRecognition;
 
     // ─── Audio Visualization ───
     let audioCtx = null;
@@ -1852,6 +1856,12 @@ enum WebChatHTML {
             speakerBtn.classList.add('active');
             speakerBtn.innerHTML = '&#x1f50a;';
         }
+        // Restore voice mode state
+        if (voiceMode) {
+            const micBtn = document.getElementById('micBtn');
+            micBtn.style.color = 'var(--cyan)';
+            micBtn.title = 'Voice mode ON (tap to stop)';
+        }
     }
 
     function toggleSpeaker() {
@@ -1885,7 +1895,14 @@ enum WebChatHTML {
             const blob = await res.blob();
             const url = URL.createObjectURL(blob);
             const audio = new Audio(url);
-            audio.onended = () => { currentTTSAudio = null; URL.revokeObjectURL(url); };
+            audio.onended = () => {
+                currentTTSAudio = null;
+                URL.revokeObjectURL(url);
+                // Voice mode: auto-listen after TTS finishes (hands-free conversation loop)
+                if (voiceMode && !isRecording) {
+                    setTimeout(() => toggleMic(), 300);
+                }
+            };
             try {
                 ensureAudioContext();
                 if (audioCtx.state === 'suspended') await audioCtx.resume();
@@ -1898,10 +1915,93 @@ enum WebChatHTML {
     }
 
     async function toggleMic() {
-        if (isRecording) {
-            stopRecording();
-            return;
+        if (isRecording) { stopRecording(); return; }
+
+        // Interrupt any playing TTS when user taps mic (barge-in)
+        if (currentTTSAudio && !currentTTSAudio.paused) {
+            currentTTSAudio.pause();
+            currentTTSAudio = null;
         }
+
+        // Prefer Web Speech API (real-time streaming transcription)
+        if (hasWebSpeech) {
+            startWebSpeech();
+        } else {
+            await startWhisperRecording();
+        }
+    }
+
+    function startWebSpeech() {
+        speechRecognition = new SpeechRecognition();
+        speechRecognition.continuous = false;
+        speechRecognition.interimResults = true;
+        speechRecognition.lang = 'en-US';
+
+        isRecording = true;
+        document.getElementById('micBtn').classList.add('recording');
+        statusEl.textContent = 'Listening...';
+
+        let finalTranscript = '';
+
+        speechRecognition.onresult = (event) => {
+            let interim = '';
+            for (let i = event.resultIndex; i < event.results.length; i++) {
+                if (event.results[i].isFinal) {
+                    finalTranscript += event.results[i][0].transcript;
+                } else {
+                    interim += event.results[i][0].transcript;
+                }
+            }
+            // Show live transcription in input field
+            inputEl.value = finalTranscript + interim;
+            inputEl.style.height = 'auto';
+            inputEl.style.height = inputEl.scrollHeight + 'px';
+        };
+
+        speechRecognition.onend = () => {
+            isRecording = false;
+            document.getElementById('micBtn').classList.remove('recording');
+            const text = (finalTranscript || inputEl.value).trim();
+            if (text) {
+                inputEl.value = text;
+                // Auto-send: voice interaction should flow naturally
+                sendMessage();
+                statusEl.textContent = 'Ready';
+            } else {
+                statusEl.textContent = 'No speech detected';
+                setTimeout(() => { statusEl.textContent = 'Ready'; }, 2000);
+            }
+        };
+
+        speechRecognition.onerror = (event) => {
+            isRecording = false;
+            document.getElementById('micBtn').classList.remove('recording');
+            if (event.error === 'no-speech') {
+                statusEl.textContent = 'No speech detected';
+            } else if (event.error === 'not-allowed') {
+                statusEl.textContent = 'Mic blocked — check browser permissions';
+            } else {
+                statusEl.textContent = 'Speech error: ' + event.error;
+            }
+            setTimeout(() => { statusEl.textContent = 'Ready'; }, 2000);
+        };
+
+        speechRecognition.start();
+
+        // Wire mic to orb visualization
+        navigator.mediaDevices.getUserMedia({ audio: true }).then(stream => {
+            try {
+                ensureAudioContext();
+                if (audioCtx.state === 'suspended') audioCtx.resume();
+                micSource = audioCtx.createMediaStreamSource(stream);
+                micSource.connect(micAnalyser);
+                // Store stream ref so we can stop it
+                speechRecognition._micStream = stream;
+            } catch(e) {}
+        }).catch(() => {});
+    }
+
+    async function startWhisperRecording() {
         try {
             const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
             mediaRecorder = new MediaRecorder(stream);
@@ -1916,6 +2016,7 @@ enum WebChatHTML {
             mediaRecorder.start();
             isRecording = true;
             document.getElementById('micBtn').classList.add('recording');
+            statusEl.textContent = 'Recording...';
             try {
                 ensureAudioContext();
                 if (audioCtx.state === 'suspended') await audioCtx.resume();
@@ -1935,6 +2036,14 @@ enum WebChatHTML {
     }
 
     function stopRecording() {
+        if (speechRecognition) {
+            // Stop Web Speech API
+            speechRecognition.stop();
+            if (speechRecognition._micStream) {
+                speechRecognition._micStream.getTracks().forEach(t => t.stop());
+            }
+            speechRecognition = null;
+        }
         if (mediaRecorder && mediaRecorder.state !== 'inactive') {
             mediaRecorder.stop();
         }
@@ -1961,7 +2070,8 @@ enum WebChatHTML {
                     inputEl.value = text;
                     inputEl.style.height = 'auto';
                     inputEl.style.height = inputEl.scrollHeight + 'px';
-                    inputEl.focus();
+                    // Auto-send after Whisper transcription too
+                    sendMessage();
                 }
                 statusEl.textContent = 'Ready';
             } else {
@@ -1971,6 +2081,21 @@ enum WebChatHTML {
         } catch(e) {
             statusEl.textContent = 'STT error';
             setTimeout(() => { statusEl.textContent = 'Ready'; }, 2000);
+        }
+    }
+
+    // Voice mode toggle — hands-free: auto-listen after TTS finishes
+    function toggleVoiceMode() {
+        voiceMode = !voiceMode;
+        localStorage.setItem(STORAGE_PREFIX + 'voicemode', voiceMode);
+        const btn = document.getElementById('micBtn');
+        btn.title = voiceMode ? 'Voice mode ON (tap to stop)' : 'Voice input';
+        if (voiceMode) {
+            btn.style.color = 'var(--cyan)';
+            // Enable TTS if not already on
+            if (!ttsEnabled) toggleSpeaker();
+        } else {
+            btn.style.color = '';
         }
     }
 
