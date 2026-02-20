@@ -19,6 +19,14 @@ struct AgentsView: View {
     @State private var importError: String?
     @State private var showImportError = false
 
+    // View mode: settings vs chat
+    @State private var viewMode: AgentViewMode = .settings
+
+    enum AgentViewMode: String, CaseIterable {
+        case chat = "Chat"
+        case settings = "Settings"
+    }
+
     // Section expansion (all collapsed by default)
     @State private var permissionsExpanded = false
     @State private var voiceExpanded = false
@@ -217,9 +225,9 @@ struct AgentsView: View {
     // MARK: - Agent Detail Panel
 
     private var agentDetailPanel: some View {
-        ScrollView {
+        VStack(spacing: 0) {
+            // Header with view mode toggle
             VStack(alignment: .leading, spacing: 0) {
-                // Header
                 HStack(alignment: .center) {
                     VStack(alignment: .leading, spacing: 4) {
                         HStack(spacing: 10) {
@@ -248,6 +256,17 @@ struct AgentsView: View {
                     }
                     Spacer()
                     HStack(spacing: 8) {
+                        // Chat / Settings toggle
+                        Picker("", selection: $viewMode) {
+                            ForEach(AgentViewMode.allCases, id: \.self) { mode in
+                                Text(mode.rawValue).tag(mode)
+                            }
+                        }
+                        .pickerStyle(.segmented)
+                        .frame(width: 160)
+
+                        Divider().frame(height: 20).background(Color.white.opacity(0.06))
+
                         // Per-agent kill switch
                         Toggle(isOn: Binding(
                             get: { editConfig.accessLevel > 0 },
@@ -314,6 +333,15 @@ struct AgentsView: View {
                 .padding(.horizontal, 32)
                 .padding(.top, 32)
                 .padding(.bottom, 24)
+            }
+
+            // View mode switch: Chat or Settings
+            if viewMode == .chat {
+                AgentChatView(agentID: editConfig.id, agentName: editConfig.name)
+                    .environmentObject(state)
+            } else {
+            ScrollView {
+            VStack(alignment: .leading, spacing: 0) {
 
                 VStack(spacing: 16) {
 
@@ -755,6 +783,8 @@ struct AgentsView: View {
                 .padding(.horizontal, 32)
                 .padding(.bottom, 32)
             }
+            } // ScrollView
+            } // else (settings mode)
         }
         .onChange(of: editConfig.accessLevel) { _ in debouncedSave() }
         .onChange(of: editConfig.name) { _ in debouncedSave() }
