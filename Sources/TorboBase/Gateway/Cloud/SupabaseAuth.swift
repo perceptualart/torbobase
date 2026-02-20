@@ -31,81 +31,123 @@ struct CloudUser: Codable, Sendable {
 }
 
 // MARK: - Plan Tiers
+//
+// Three tiers:
+//   free_base — Self-hosted on Mac. No account, no cloud. User provides own API keys.
+//   torbo     — $5/month (1 month free trial). Cloud-hosted Base, all features.
+//   torbo_max — $10/month (30 day free trial). Everything + admin panel + priority routing.
 
 enum PlanTier: String, Codable, Sendable {
-    case free = "free"
-    case pro = "pro"
-    case premium = "premium"
+    case freeBase = "free_base"
+    case torbo = "torbo"
+    case torboMax = "torbo_max"
 
     var displayName: String {
         switch self {
-        case .free: return "Free"
-        case .pro: return "Pro"
-        case .premium: return "Premium"
+        case .freeBase: return "Torbo Base"
+        case .torbo: return "Torbo"
+        case .torboMax: return "Torbo Max"
         }
     }
 
+    /// Daily message limit for cloud users.
+    /// free_base is self-hosted — limits are irrelevant (user owns the server).
+    /// Cloud tiers: torbo has standard limits, torbo_max gets higher limits.
     var dailyMessageLimit: Int {
         switch self {
-        case .free: return 50
-        case .pro: return Int.max   // unlimited
-        case .premium: return Int.max
+        case .freeBase: return Int.max   // self-hosted, no cloud limits
+        case .torbo: return 500          // standard rate limit
+        case .torboMax: return Int.max   // higher limits (effectively unlimited)
         }
     }
 
+    /// Allowed agents. Empty = all agents allowed.
+    /// All cloud tiers get all 4 agents (SiD, aDa, Mira, Orion).
     var allowedAgents: [String] {
-        switch self {
-        case .free: return ["sid"]
-        case .pro: return []   // empty = all agents allowed
-        case .premium: return []
-        }
+        return []  // all agents on all tiers
     }
 
     var hasElevenLabsVoice: Bool {
         switch self {
-        case .free: return false
-        case .pro: return true
-        case .premium: return true
+        case .freeBase: return true   // self-hosted, user provides own ElevenLabs key
+        case .torbo: return true      // included
+        case .torboMax: return true   // included
         }
     }
 
+    /// Piper on-device voices — always available
+    var hasPiperVoice: Bool { true }
+
     var hasTools: Bool {
         switch self {
-        case .free: return false
-        case .pro: return true
-        case .premium: return true
+        case .freeBase: return true   // self-hosted, full access
+        case .torbo: return true      // tools, HomeKit, Shortcuts included
+        case .torboMax: return true   // plus advanced tools
         }
     }
 
     var hasHomeKit: Bool {
         switch self {
-        case .free: return false
-        case .pro: return false
-        case .premium: return true
+        case .freeBase: return true   // self-hosted, full access
+        case .torbo: return true      // included
+        case .torboMax: return true   // included
+        }
+    }
+
+    /// Advanced tools: code sandbox, Docker execution, browser automation
+    var hasAdvancedTools: Bool {
+        switch self {
+        case .freeBase: return true    // self-hosted, full access
+        case .torbo: return false      // standard tools only
+        case .torboMax: return true    // advanced tools unlocked
         }
     }
 
     var hasPriorityRouting: Bool {
         switch self {
-        case .free: return false
-        case .pro: return false
-        case .premium: return true
+        case .freeBase: return false   // self-hosted, routes to own providers
+        case .torbo: return false      // standard routing
+        case .torboMax: return true    // priority routing
         }
     }
 
+    /// Admin panel access in Arkhe: dashboard, agent management, security,
+    /// memory viewer/editor, system prompt editor, token budgets, activity monitor, kill switches.
+    /// Self-hosted users always get admin (checked at iOS layer by detecting local Base).
+    var hasAdminPanel: Bool {
+        switch self {
+        case .freeBase: return true    // self-hosted always gets admin
+        case .torbo: return false      // no admin panel
+        case .torboMax: return true    // admin panel unlocked
+        }
+    }
+
+    /// Max access level.
+    /// self-hosted: FULL (user controls their own server)
+    /// torbo: WRITE (tools, HomeKit, but no exec/shell)
+    /// torbo_max: FULL (advanced tools, admin panel)
     var maxAccessLevel: Int {
         switch self {
-        case .free: return 1     // CHAT only
-        case .pro: return 3      // up to WRITE
-        case .premium: return 5  // FULL
+        case .freeBase: return 5   // FULL
+        case .torbo: return 3      // up to WRITE
+        case .torboMax: return 5   // FULL
         }
     }
 
     var monthlyPrice: Double {
         switch self {
-        case .free: return 0.0
-        case .pro: return 9.99
-        case .premium: return 19.99
+        case .freeBase: return 0.0
+        case .torbo: return 5.0
+        case .torboMax: return 10.0
+        }
+    }
+
+    /// Free trial days for new subscribers
+    var trialDays: Int {
+        switch self {
+        case .freeBase: return 0
+        case .torbo: return 30      // 1 month free trial
+        case .torboMax: return 30   // 30 day free trial
         }
     }
 }
@@ -405,7 +447,7 @@ actor SupabaseAuth {
         let newUser = CloudUser(
             id: userID,
             email: email,
-            planTier: .free,
+            planTier: .torbo,  // New cloud signups start on Torbo (with free trial)
             stripeCustomerID: nil,
             stripeSubscriptionID: nil,
             subscriptionStatus: nil,
@@ -554,7 +596,7 @@ actor SupabaseAuth {
         CloudUser(
             id: row["id"] as? String ?? "",
             email: row["email"] as? String ?? "",
-            planTier: PlanTier(rawValue: row["plan_tier"] as? String ?? "free") ?? .free,
+            planTier: PlanTier(rawValue: row["plan_tier"] as? String ?? "torbo") ?? .torbo,
             stripeCustomerID: row["stripe_customer_id"] as? String,
             stripeSubscriptionID: row["stripe_subscription_id"] as? String,
             subscriptionStatus: row["subscription_status"] as? String,

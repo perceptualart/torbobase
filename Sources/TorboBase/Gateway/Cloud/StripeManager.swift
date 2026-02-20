@@ -19,16 +19,16 @@ import Crypto
 
 enum StripePrices {
     // Set these from environment variables — they're your Stripe Price IDs
-    static var proPriceID: String {
-        ProcessInfo.processInfo.environment["STRIPE_PRO_PRICE_ID"] ?? ""
+    static var torboPriceID: String {
+        ProcessInfo.processInfo.environment["STRIPE_TORBO_PRICE_ID"] ?? ""
     }
-    static var premiumPriceID: String {
-        ProcessInfo.processInfo.environment["STRIPE_PREMIUM_PRICE_ID"] ?? ""
+    static var torboMaxPriceID: String {
+        ProcessInfo.processInfo.environment["STRIPE_TORBO_MAX_PRICE_ID"] ?? ""
     }
 
     static func tierForPriceID(_ priceID: String) -> PlanTier? {
-        if priceID == proPriceID { return .pro }
-        if priceID == premiumPriceID { return .premium }
+        if priceID == torboPriceID { return .torbo }
+        if priceID == torboMaxPriceID { return .torboMax }
         return nil
     }
 }
@@ -74,9 +74,9 @@ actor StripeManager {
 
         let priceID: String
         switch tier {
-        case .pro: priceID = StripePrices.proPriceID
-        case .premium: priceID = StripePrices.premiumPriceID
-        case .free: return (nil, "Cannot checkout for free tier")
+        case .torbo: priceID = StripePrices.torboPriceID
+        case .torboMax: priceID = StripePrices.torboMaxPriceID
+        case .freeBase: return (nil, "Torbo Base is free and self-hosted — no checkout needed")
         }
 
         guard !priceID.isEmpty else {
@@ -92,7 +92,7 @@ actor StripeManager {
         request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
         request.setValue("Basic \(Data("\(secretKey):".utf8).base64EncodedString())", forHTTPHeaderField: "Authorization")
 
-        let params = [
+        var params = [
             "mode": "subscription",
             "customer_email": email,
             "client_reference_id": userID,
@@ -105,6 +105,12 @@ actor StripeManager {
             "subscription_data[metadata][user_id]": userID,
             "subscription_data[metadata][tier]": tier.rawValue,
         ]
+
+        // Add free trial period
+        let trialDays = tier.trialDays
+        if trialDays > 0 {
+            params["subscription_data[trial_period_days]"] = "\(trialDays)"
+        }
 
         let body = params.map { "\(percentEncode($0.key))=\(percentEncode($0.value))" }.joined(separator: "&")
         request.httpBody = body.data(using: .utf8)
@@ -280,8 +286,8 @@ actor StripeManager {
             return
         }
 
-        let tierStr = (session["metadata"] as? [String: Any])?["tier"] as? String ?? "pro"
-        let tier = PlanTier(rawValue: tierStr) ?? .pro
+        let tierStr = (session["metadata"] as? [String: Any])?["tier"] as? String ?? "torbo"
+        let tier = PlanTier(rawValue: tierStr) ?? .torbo
 
         await SupabaseAuth.shared.updateUserTier(
             userID: userID,
@@ -301,13 +307,13 @@ actor StripeManager {
         let userID = (subscription["metadata"] as? [String: Any])?["user_id"] as? String
 
         // Determine tier from the subscription items
-        var tier: PlanTier = .free
+        var tier: PlanTier = .torbo
         if let items = subscription["items"] as? [String: Any],
            let data = items["data"] as? [[String: Any]],
            let firstItem = data.first,
            let price = firstItem["price"] as? [String: Any],
            let priceID = price["id"] as? String {
-            tier = StripePrices.tierForPriceID(priceID) ?? .pro
+            tier = StripePrices.tierForPriceID(priceID) ?? .torbo
         }
 
         // Only set active tier if subscription is active
@@ -318,7 +324,7 @@ actor StripeManager {
         case "past_due":
             effectiveTier = tier  // Keep tier but mark status
         default:
-            effectiveTier = .free
+            effectiveTier = .freeBase  // Subscription lapsed → downgrade
         }
 
         if let uid = userID {
@@ -346,12 +352,12 @@ actor StripeManager {
 
         await SupabaseAuth.shared.updateUserTier(
             userID: userID,
-            tier: .free,
+            tier: .freeBase,
             stripeCustomerID: customerID,
             stripeSubscriptionID: subscriptionID,
             status: "canceled"
         )
-        TorboLog.info("Subscription canceled: user \(userID) → free", subsystem: "Stripe")
+        TorboLog.info("Subscription canceled: user \(userID) → free_base", subsystem: "Stripe")
     }
 
     private func handlePaymentFailed(_ invoice: [String: Any]) async {

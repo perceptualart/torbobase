@@ -36,8 +36,8 @@ services:
       # Stripe (subscription billing)
       - STRIPE_SECRET_KEY=${STRIPE_SECRET_KEY:-}
       - STRIPE_WEBHOOK_SECRET=${STRIPE_WEBHOOK_SECRET:-}
-      - STRIPE_PRO_PRICE_ID=${STRIPE_PRO_PRICE_ID:-}
-      - STRIPE_PREMIUM_PRICE_ID=${STRIPE_PREMIUM_PRICE_ID:-}
+      - STRIPE_TORBO_PRICE_ID=${STRIPE_TORBO_PRICE_ID:-}
+      - STRIPE_TORBO_MAX_PRICE_ID=${STRIPE_TORBO_MAX_PRICE_ID:-}
       # Cloud config
       - CLOUD_BASE_URL=${CLOUD_BASE_URL:-https://cloud.torbo.app}
       # Redis

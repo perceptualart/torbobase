@@ -2,7 +2,12 @@
 // Licensed under Apache 2.0 — see LICENSE file.
 // Torbo Base Cloud — Tier Enforcement
 // Checks user plan tier before routing any request.
-// Enforces message limits, agent access, feature gates, and access levels.
+// Enforces message limits, feature gates, and access levels.
+//
+// Tiers:
+//   free_base — Self-hosted. No limits, full access. Not used in cloud.
+//   torbo     — $5/month. All agents, voices, tools, HomeKit. Standard limits.
+//   torbo_max — $10/month. Everything + admin panel + priority + advanced tools.
 
 import Foundation
 
@@ -30,50 +35,44 @@ enum TierEnforcer {
     ) -> TierCheckResult {
         let tier = ctx.tier
 
+        // free_base is self-hosted — no cloud enforcement applies
+        if tier == .freeBase { return .allowed }
+
         // 1. Check access level cap
         if accessLevel > tier.maxAccessLevel {
             return .denied(
-                reason: "Your \(tier.displayName) plan supports access level \(tier.maxAccessLevel) max. This request requires level \(accessLevel).",
-                upgradeRequired: accessLevel <= PlanTier.pro.maxAccessLevel ? .pro : .premium
+                reason: "Your \(tier.displayName) plan supports access level \(tier.maxAccessLevel) max. Upgrade to Torbo Max for full access.",
+                upgradeRequired: .torboMax
             )
         }
 
-        // 2. Check agent access
-        if !tier.allowedAgents.isEmpty && !tier.allowedAgents.contains(agentID) {
-            return .denied(
-                reason: "Agent '\(agentID)' requires a Pro or Premium plan. Free tier only includes SiD.",
-                upgradeRequired: .pro
-            )
-        }
-
-        // 3. Check feature gates based on path
-        if path.hasPrefix("/v1/audio/speech") && path.contains("elevenlabs") && !tier.hasElevenLabsVoice {
-            return .denied(
-                reason: "ElevenLabs voices require a Pro or Premium plan.",
-                upgradeRequired: .pro
-            )
-        }
-
-        // Tools access (file ops, exec, etc.)
-        if !tier.hasTools {
-            let toolPaths = ["/fs/", "/exec", "/v1/code/execute", "/v1/docker/",
-                             "/v1/browser/", "/v1/webhooks", "/v1/schedules"]
-            for toolPath in toolPaths {
-                if path.hasPrefix(toolPath) {
+        // 2. Advanced tools — only Torbo Max
+        if !tier.hasAdvancedTools {
+            let advancedPaths = ["/v1/code/execute", "/v1/docker/", "/v1/browser/",
+                                 "/exec/shell"]
+            for advPath in advancedPaths {
+                if path.hasPrefix(advPath) {
                     return .denied(
-                        reason: "Tools (file access, code execution, etc.) require a Pro or Premium plan.",
-                        upgradeRequired: .pro
+                        reason: "Advanced tools (code sandbox, Docker, browser automation) require Torbo Max.",
+                        upgradeRequired: .torboMax
                     )
                 }
             }
         }
 
-        // HomeKit (future) — premium only
-        if path.hasPrefix("/v1/homekit") && !tier.hasHomeKit {
-            return .denied(
-                reason: "HomeKit integration requires a Premium plan.",
-                upgradeRequired: .premium
-            )
+        // 3. Admin panel endpoints — only Torbo Max
+        //    Dashboard config, security audit, system prompt, token budgets, kill switches
+        if !tier.hasAdminPanel {
+            let adminPaths = ["/v1/dashboard", "/v1/config", "/v1/audit",
+                              "/v1/security", "/control/level"]
+            for adminPath in adminPaths {
+                if path.hasPrefix(adminPath) {
+                    return .denied(
+                        reason: "The admin panel (Arkhe) requires Torbo Max. Self-hosted users get admin access for free.",
+                        upgradeRequired: .torboMax
+                    )
+                }
+            }
         }
 
         return .allowed
@@ -84,17 +83,20 @@ enum TierEnforcer {
     /// Check if a user can send a message (daily limit).
     /// Call this BEFORE processing a chat completion request.
     static func checkMessageLimit(ctx: CloudRequestContext) async -> TierCheckResult {
+        // Self-hosted has no limits
+        if ctx.tier == .freeBase { return .allowed }
+
         let (allowed, remaining) = await SupabaseAuth.shared.trackMessage(userID: ctx.userID)
 
         if !allowed {
             let limit = ctx.tier.dailyMessageLimit
             return .rateLimited(
-                reason: "Daily message limit reached (\(limit) messages). Resets at midnight UTC.",
+                reason: "Daily message limit reached (\(limit) messages). Upgrade to Torbo Max for higher limits, or wait until midnight UTC.",
                 retryAfterSeconds: secondsUntilMidnightUTC()
             )
         }
 
-        if remaining <= 5 && ctx.tier == .free {
+        if remaining <= 10 && ctx.tier == .torbo {
             TorboLog.info("User \(ctx.userID) approaching daily limit: \(remaining) remaining", subsystem: "TierEnforcer")
         }
 
@@ -105,22 +107,20 @@ enum TierEnforcer {
 
     /// Check if a user can use the requested voice
     static func checkVoice(ctx: CloudRequestContext, voiceID: String?) -> TierCheckResult {
-        // If no voice ID specified, or using on-device TTS, always allowed
-        guard let voiceID = voiceID, !voiceID.isEmpty else { return .allowed }
-
-        // On-device voices are always allowed
-        let onDeviceVoices = ["samantha", "daniel", "karen", "moira", "tessa", "alex"]
-        if onDeviceVoices.contains(voiceID.lowercased()) { return .allowed }
-
-        // ElevenLabs voices require Pro+
-        if !ctx.tier.hasElevenLabsVoice {
-            return .denied(
-                reason: "ElevenLabs voices require a Pro or Premium plan. On-device voices are available on all plans.",
-                upgradeRequired: .pro
-            )
-        }
-
+        // All tiers get all voices (Piper on-device + ElevenLabs when online)
         return .allowed
+    }
+
+    // MARK: - Admin Panel Check
+
+    /// Check if a user has admin panel access.
+    /// Used by iOS app to decide whether to render the Arkhe admin tab.
+    /// Returns true for:
+    ///   - torbo_max subscribers
+    ///   - Any user connected to a local (self-hosted) Base instance
+    static func hasAdminAccess(tier: PlanTier, isLocalBase: Bool) -> Bool {
+        if isLocalBase { return true }      // Self-hosted always gets admin
+        return tier.hasAdminPanel           // Cloud: only torbo_max
     }
 
     // MARK: - Build Tier Error Response
@@ -135,13 +135,17 @@ enum TierEnforcer {
                 "error": "tier_limit",
                 "message": reason,
                 "upgrade_to": upgrade.rawValue,
-                "upgrade_price": "$\(String(format: "%.2f", upgrade.monthlyPrice))/month"
+                "upgrade_name": upgrade.displayName,
+                "upgrade_price": "$\(String(format: "%.0f", upgrade.monthlyPrice))/month",
+                "trial_days": upgrade.trialDays,
             ]
         case .rateLimited(let reason, let retryAfter):
             return [
                 "error": "rate_limited",
                 "message": reason,
-                "retry_after_seconds": retryAfter
+                "retry_after_seconds": retryAfter,
+                "upgrade_to": PlanTier.torboMax.rawValue,
+                "upgrade_name": PlanTier.torboMax.displayName,
             ]
         }
     }

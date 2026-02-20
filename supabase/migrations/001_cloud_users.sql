@@ -8,7 +8,7 @@
 CREATE TABLE IF NOT EXISTS cloud_users (
     id UUID PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
     email TEXT NOT NULL,
-    plan_tier TEXT NOT NULL DEFAULT 'free' CHECK (plan_tier IN ('free', 'pro', 'premium')),
+    plan_tier TEXT NOT NULL DEFAULT 'torbo' CHECK (plan_tier IN ('free_base', 'torbo', 'torbo_max')),
     stripe_customer_id TEXT,
     stripe_subscription_id TEXT,
     subscription_status TEXT DEFAULT 'none',
@@ -46,7 +46,7 @@ CREATE OR REPLACE FUNCTION handle_new_user()
 RETURNS TRIGGER AS $$
 BEGIN
     INSERT INTO cloud_users (id, email, plan_tier, created_at, last_active)
-    VALUES (NEW.id, NEW.email, 'free', NOW(), NOW())
+    VALUES (NEW.id, NEW.email, 'torbo', NOW(), NOW())  -- New signups start on Torbo (with free trial)
     ON CONFLICT (id) DO NOTHING;
     RETURN NEW;
 END;

@@ -169,11 +169,14 @@ enum CloudRoutes {
         }
 
         profile["features"] = [
-            "agents": ctx.tier.allowedAgents.isEmpty ? "all" : ctx.tier.allowedAgents.joined(separator: ","),
+            "agents": "all",  // All tiers get all 4 agents
+            "piper_voice": ctx.tier.hasPiperVoice,
             "elevenlabs_voice": ctx.tier.hasElevenLabsVoice,
             "tools": ctx.tier.hasTools,
+            "advanced_tools": ctx.tier.hasAdvancedTools,
             "homekit": ctx.tier.hasHomeKit,
             "priority_routing": ctx.tier.hasPriorityRouting,
+            "admin_panel": ctx.tier.hasAdminPanel,
             "max_access_level": ctx.tier.maxAccessLevel,
         ] as [String: Any]
 
@@ -185,7 +188,7 @@ enum CloudRoutes {
     // ────────────────────────────────────────────────
 
     /// POST /v1/billing/checkout
-    /// Body: { "tier": "pro" | "premium" }
+    /// Body: { "tier": "torbo" | "torbo_max" }
     /// Creates a Stripe checkout session and returns the URL.
     static func handleCheckout(_ req: HTTPRequest, ctx: CloudRequestContext) async -> HTTPResponse {
         guard await StripeManager.shared.isEnabled else {
@@ -196,11 +199,11 @@ enum CloudRoutes {
         guard let body = req.jsonBody,
               let tierStr = body["tier"] as? String,
               let tier = PlanTier(rawValue: tierStr) else {
-            return HTTPResponse.badRequest("Missing or invalid 'tier' field. Use 'pro' or 'premium'.")
+            return HTTPResponse.badRequest("Missing or invalid 'tier' field. Use 'torbo' or 'torbo_max'.")
         }
 
-        guard tier != .free else {
-            return HTTPResponse.badRequest("Cannot checkout for free tier. Use portal to downgrade.")
+        guard tier != .freeBase else {
+            return HTTPResponse.badRequest("Torbo Base is free and self-hosted — no checkout needed.")
         }
 
         guard tier != ctx.tier else {
@@ -276,9 +279,15 @@ enum CloudRoutes {
         }
 
         status["tiers"] = [
-            ["tier": "free", "name": "Free", "price": 0, "features": "50 msgs/day, SiD only, on-device voice"],
-            ["tier": "pro", "name": "Pro", "price": 9.99, "features": "Unlimited msgs, all agents, ElevenLabs, tools"],
-            ["tier": "premium", "name": "Premium", "price": 19.99, "features": "Everything + HomeKit + priority routing"],
+            ["tier": "free_base", "name": "Torbo Base", "price": 0,
+             "features": "Self-hosted on Mac. Full access. User provides own API keys. No account needed.",
+             "trial_days": 0],
+            ["tier": "torbo", "name": "Torbo", "price": 5,
+             "features": "Cloud-hosted. All 4 agents, Piper + ElevenLabs voices, tools, HomeKit, Shortcuts.",
+             "trial_days": 30],
+            ["tier": "torbo_max", "name": "Torbo Max", "price": 10,
+             "features": "Everything in Torbo + admin panel (Arkhe), priority routing, higher rate limits, advanced tools.",
+             "trial_days": 30],
         ] as [[String: Any]]
 
         return HTTPResponse.json(status)
