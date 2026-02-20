@@ -790,6 +790,66 @@ tr:hover { background: rgba(255,255,255,0.02); }
         </div>
     </div>
 
+    <!-- Vox Tab -->
+    <div id="tab-vox" class="tab-panel">
+        <div class="page-title">Vox</div>
+        <div style="font-size:13px;color:var(--text-dim);margin-bottom:24px;">Voice &amp; audio configuration</div>
+
+        <div class="section-label">TTS Provider</div>
+        <div class="card">
+            <div style="display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap;">
+                <div>
+                    <div style="font-size:14px;font-weight:600;color:var(--text-bright);">Text-to-Speech Engine</div>
+                    <div style="font-size:12px;color:var(--text-dim);margin-top:4px;">Select the TTS provider for agent voice output</div>
+                </div>
+                <span class="badge badge-purple">Coming soon</span>
+            </div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:16px;">
+                <div style="padding:14px;background:var(--bg);border:1px solid var(--border);border-radius:10px;">
+                    <div style="font-size:13px;font-weight:600;color:var(--text-bright);">ElevenLabs</div>
+                    <div style="font-size:11px;color:var(--text-dim);margin-top:4px;">High-quality neural voices</div>
+                </div>
+                <div style="padding:14px;background:var(--bg);border:1px solid var(--border);border-radius:10px;">
+                    <div style="font-size:13px;font-weight:600;color:var(--text-bright);">Apple TTS</div>
+                    <div style="font-size:11px;color:var(--text-dim);margin-top:4px;">Built-in system voices</div>
+                </div>
+            </div>
+        </div>
+
+        <div class="section-label">Wake Word</div>
+        <div class="card">
+            <div style="display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap;">
+                <div>
+                    <div style="font-size:14px;font-weight:600;color:var(--text-bright);">Wake Word Detection</div>
+                    <div style="font-size:12px;color:var(--text-dim);margin-top:4px;">Activate agents with a spoken keyword</div>
+                </div>
+                <span class="badge badge-purple">Coming soon</span>
+            </div>
+        </div>
+
+        <div class="section-label">Audio Pipeline</div>
+        <div class="card">
+            <div style="display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap;">
+                <div>
+                    <div style="font-size:14px;font-weight:600;color:var(--text-bright);">Audio Pipeline Status</div>
+                    <div style="font-size:12px;color:var(--text-dim);margin-top:4px;">Input/output routing, noise cancellation, echo suppression</div>
+                </div>
+                <span class="badge badge-purple">Coming soon</span>
+            </div>
+        </div>
+
+        <div class="section-label">Voice Model</div>
+        <div class="card">
+            <div style="display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap;">
+                <div>
+                    <div style="font-size:14px;font-weight:600;color:var(--text-bright);">Voice Model Configuration</div>
+                    <div style="font-size:12px;color:var(--text-dim);margin-top:4px;">Per-agent voice selection, speed, pitch, and emotion settings</div>
+                </div>
+                <span class="badge badge-purple">Coming soon</span>
+            </div>
+        </div>
+    </div>
+
     <!-- Lexis Tab -->
     <div id="tab-lexis" class="tab-panel">
         <div class="page-title">Lexis</div>
