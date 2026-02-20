@@ -1344,7 +1344,31 @@ function deleteAgentFromDetail() {
 
 function renderAgentDetail(agent) {
     var content = document.getElementById('agentDetailContent');
+    var lvl = agent.accessLevel != null ? agent.accessLevel : 0;
     var html = '';
+    // Agent Privileges — most important control, placed first
+    html += '<div class="section-label">Agent Privileges</div>';
+    html += '<div class="card">';
+    html += '<div style="display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap;margin-bottom:16px;">';
+    html += '<div>';
+    html += '<div style="font-size:14px;font-weight:700;color:var(--text-bright);">Access Level</div>';
+    html += '<div style="font-size:12px;color:var(--text-dim);margin-top:2px;" id="agentPrivDesc">' + esc(LEVELS[lvl] ? LEVELS[lvl].name + ' — ' + LEVELS[lvl].desc : '') + '</div>';
+    html += '</div>';
+    html += '</div>';
+    html += '<div class="level-selector" id="agentLevelSelector">';
+    for (var i = 0; i < LEVELS.length; i++) {
+        var lv = LEVELS[i];
+        var colorVar = 'var(--' + lv.color + ')';
+        var isActive = i === lvl;
+        html += '<div class="level-step' + (isActive ? ' active' : '') + '" ';
+        html += 'onclick="setAgentLevel(' + i + ')" ';
+        html += 'style="' + (isActive ? 'border-color:' + colorVar + ';background:var(--' + lv.color + '-dim);' : '') + '">';
+        html += '<div class="level-num" style="color:' + colorVar + ';">' + lv.num + '</div>';
+        html += '<div class="level-name" style="color:' + (isActive ? colorVar : 'var(--text-dim)') + ';">' + esc(lv.name) + '</div>';
+        html += '</div>';
+    }
+    html += '</div>';
+    html += '</div>';
     // Activity section
     html += '<div class="section-label">Activity</div>';
     html += '<div class="card"><div style="color:var(--text-dim);font-size:13px;">No recent activity.</div></div>';
@@ -1355,6 +1379,17 @@ function renderAgentDetail(agent) {
     html += '<div style="font-size:13px;"><strong style="color:var(--text-bright);">Personality:</strong> ' + esc(agent.personality || 'Not set') + '</div>';
     html += '</div>';
     content.innerHTML = html;
+}
+
+function setAgentLevel(level) {
+    if (!selectedAgentId) return;
+    api('PUT', '/v1/agents/' + encodeURIComponent(selectedAgentId), {accessLevel: level}).then(function(data) {
+        selectedAgentData = data || selectedAgentData;
+        if (selectedAgentData) selectedAgentData.accessLevel = level;
+        renderAgentDetail(selectedAgentData);
+    }).catch(function(e) {
+        alert('Failed to update access level: ' + e.message);
+    });
 }
 
 function showAgentModal() {
