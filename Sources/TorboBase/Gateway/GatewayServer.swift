@@ -1293,6 +1293,36 @@ actor GatewayServer {
                             return HTTPResponse.json(["status": "reset", "id": targetAgentID])
                         }
                     }
+
+                    // GET /v1/agents/{id}/prompt — get fully assembled identity prompt for agent
+                    if components.count == 2 && components[1] == "prompt" && req.method == "GET" {
+                        return await guardedRoute(level: .chatOnly, current: currentLevel, clientIP: clientIP, req: req) {
+                            guard let config = await AgentConfigManager.shared.agent(targetAgentID) else {
+                                return HTTPResponse.notFound()
+                            }
+                            let agentLevel = min(config.accessLevel, currentLevel.rawValue)
+                            // Extract tool names from tool definitions
+                            let toolDefs = await ToolProcessor.toolDefinitionsWithMCP(for: AccessLevel(rawValue: agentLevel) ?? .chatOnly, agentID: targetAgentID)
+                            let toolNames = toolDefs.compactMap { ($0["name"] as? String) ?? (($0["function"] as? [String: Any])?["name"] as? String) }
+                            let identityBlock = config.buildIdentityBlock(accessLevel: agentLevel, availableTools: toolNames)
+
+                            let response: [String: Any] = [
+                                "agent_id": targetAgentID,
+                                "name": config.name,
+                                "identity": identityBlock,
+                                "access_level": agentLevel,
+                                "voice_tone": config.voiceTone,
+                                "personality_preset": config.personalityPreset,
+                                "custom_instructions": config.customInstructions,
+                                "background_knowledge": config.backgroundKnowledge,
+                                "last_modified": config.lastModifiedAt?.timeIntervalSince1970 ?? 0
+                            ]
+                            guard let data = try? JSONSerialization.data(withJSONObject: response) else {
+                                return HTTPResponse.serverError("Failed to serialize prompt")
+                            }
+                            return HTTPResponse(statusCode: 200, headers: ["Content-Type": "application/json"], body: data)
+                        }
+                    }
                 }
             }
 
