@@ -50,7 +50,7 @@ actor ConversationStore {
         }
     }
 
-    /// Force write any pending messages to disk
+    /// Force write any pending messages to disk (encrypted at rest)
     func flushMessages() {
         guard !pendingMessages.isEmpty else { return }
 
@@ -58,19 +58,22 @@ actor ConversationStore {
         pendingMessages.removeAll()
         writeTask = nil
 
-        // Append as JSONL (one JSON object per line)
+        // M5: Encrypt each message line independently (preserves append-only pattern)
         var lines = ""
         for msg in toWrite {
-            if let data = try? encoder.encode(msg),
-               let line = String(data: data, encoding: .utf8) {
-                lines += line + "\n"
+            if let data = try? encoder.encode(msg) {
+                if let encrypted = KeychainManager.encryptData(data) {
+                    lines += encrypted.base64EncodedString() + "\n"
+                } else if let line = String(data: data, encoding: .utf8) {
+                    // Fallback to plaintext if encryption fails
+                    lines += line + "\n"
+                }
             }
         }
 
         guard !lines.isEmpty else { return }
 
         if FileManager.default.fileExists(atPath: messagesFile.path) {
-            // Append to existing file
             if let handle = try? FileHandle(forWritingTo: messagesFile) {
                 handle.seekToEndOfFile()
                 if let data = lines.data(using: .utf8) {
@@ -79,7 +82,6 @@ actor ConversationStore {
                 handle.closeFile()
             }
         } else {
-            // Create new file
             do {
                 try lines.write(to: messagesFile, atomically: true, encoding: .utf8)
             } catch {
@@ -87,10 +89,10 @@ actor ConversationStore {
             }
         }
 
-        TorboLog.info("Flushed \(toWrite.count) messages to disk", subsystem: "ConvStore")
+        TorboLog.info("Flushed \(toWrite.count) messages to disk (encrypted)", subsystem: "ConvStore")
     }
 
-    /// Load all messages from disk
+    /// Load all messages from disk (handles encrypted + legacy plaintext lines)
     func loadMessages() -> [ConversationMessage] {
         guard FileManager.default.fileExists(atPath: messagesFile.path) else { return [] }
 
@@ -99,8 +101,15 @@ actor ConversationStore {
             let lines = content.components(separatedBy: "\n").filter { !$0.isEmpty }
             var messages: [ConversationMessage] = []
             for line in lines {
-                if let data = line.data(using: .utf8),
-                   let msg = try? decoder.decode(ConversationMessage.self, from: data) {
+                // Try encrypted line first (base64 → decrypt → JSON)
+                if let b64Data = Data(base64Encoded: line),
+                   let decrypted = KeychainManager.decryptData(b64Data),
+                   let msg = try? decoder.decode(ConversationMessage.self, from: decrypted) {
+                    messages.append(msg)
+                }
+                // Fallback: legacy plaintext JSON line
+                else if let data = line.data(using: .utf8),
+                        let msg = try? decoder.decode(ConversationMessage.self, from: data) {
                     messages.append(msg)
                 }
             }

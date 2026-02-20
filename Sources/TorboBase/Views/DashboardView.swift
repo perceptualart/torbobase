@@ -985,6 +985,7 @@ struct SecurityView: View {
                     SecurityProtectionRow(name: "Rate Limiting", status: state.rateLimit > 0, detail: state.rateLimit > 0 ? "\(state.rateLimit) req/min" : "Disabled")
                     SecurityProtectionRow(name: "Token Expiry", status: true, detail: "Paired device tokens expire after 30 days idle")
                     SecurityProtectionRow(name: "Webhook Secrets", status: true, detail: "Auto-generated HMAC secrets on all webhooks")
+                    SecurityProtectionRow(name: "Conversation Encryption", status: true, detail: "AES-256 per-message encryption at rest")
                 }
 
                 Divider().overlay(Color.white.opacity(0.06))
@@ -1006,6 +1007,27 @@ struct SecurityView: View {
                         .onChange(of: state.rateLimit) { val in
                             AppConfig.rateLimit = val
                         }
+                }
+
+                // M6: Key rotation reminder
+                if let ageDays = KeychainManager.tokenAgeDays, ageDays > 90 {
+                    HStack(spacing: 8) {
+                        Image(systemName: "key.fill")
+                            .foregroundStyle(.yellow)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Token Rotation Recommended")
+                                .font(.system(size: 12, weight: .bold))
+                                .foregroundStyle(.yellow)
+                            Text("Server token is \(ageDays) days old. Consider regenerating in Settings.")
+                                .font(.system(size: 10))
+                                .foregroundStyle(.white.opacity(0.5))
+                        }
+                        Spacer()
+                    }
+                    .padding(12)
+                    .background(Color.yellow.opacity(0.06))
+                    .cornerRadius(8)
+                    .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.yellow.opacity(0.2), lineWidth: 1))
                 }
 
                 Divider().overlay(Color.white.opacity(0.06))

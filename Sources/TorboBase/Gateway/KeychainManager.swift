@@ -111,6 +111,11 @@ enum KeychainManager {
         #endif
     }
 
+    /// Public encrypt for other subsystems (conversation storage, etc.)
+    static func encryptData(_ plaintext: Data) -> Data? { encrypt(plaintext) }
+    /// Public decrypt for other subsystems
+    static func decryptData(_ ciphertext: Data) -> Data? { decrypt(ciphertext) }
+
     /// Encrypt data — AES-256-CBC on macOS (CommonCrypto), AES-256-GCM on Linux (swift-crypto)
     private static func encrypt(_ plaintext: Data) -> Data? {
         let key = encryptionKey
@@ -321,6 +326,10 @@ enum KeychainManager {
             }
             let token = AppConfig.generateToken()
             set(token, for: serverTokenKey)
+            // Record creation date for rotation tracking
+            if get(serverTokenCreatedKey) == nil {
+                set(ISO8601DateFormatter().string(from: Date()), for: serverTokenCreatedKey)
+            }
             return token
         }
         set {
@@ -332,7 +341,22 @@ enum KeychainManager {
     static func regenerateServerToken() -> String {
         let token = AppConfig.generateToken()
         set(token, for: serverTokenKey)
+        set(ISO8601DateFormatter().string(from: Date()), for: serverTokenCreatedKey)
         return token
+    }
+
+    /// M6: Track when the server token was created/last rotated
+    private static let serverTokenCreatedKey = "server.token.created"
+
+    static var serverTokenCreatedDate: Date? {
+        guard let str = get(serverTokenCreatedKey) else { return nil }
+        return ISO8601DateFormatter().date(from: str)
+    }
+
+    /// Days since the server token was last rotated (nil if unknown)
+    static var tokenAgeDays: Int? {
+        guard let created = serverTokenCreatedDate else { return nil }
+        return Calendar.current.dateComponents([.day], from: created, to: Date()).day
     }
 
     // MARK: - Convenience: Telegram
