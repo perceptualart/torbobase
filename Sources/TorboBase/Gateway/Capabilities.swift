@@ -1837,7 +1837,15 @@ extension ToolProcessor {
                     content = "Unknown tool: \(name)"
                 }
                 if let fileWarning { content = fileWarning.formatted + "\n\n" + content }
-                TorboLog.info("Executed 1 built-in tool(s) (level: \(accessLevel.name))", subsystem: "Tools")
+                TorboLog.info("Tool: \(name) by \(agentID) (level: \(accessLevel.name))", subsystem: "Tools")
+                // Audit log — visible in dashboard Security tab
+                let toolEntry = AuditEntry(
+                    timestamp: Date(), clientIP: agentID,
+                    method: "TOOL", path: name,
+                    requiredLevel: accessLevel, granted: true,
+                    detail: "Agent \(agentID) executed \(name)"
+                )
+                await MainActor.run { AppState.shared.addAuditEntry(toolEntry) }
                 results.append(["role": "tool", "tool_call_id": id, "content": content])
                 continue
             }

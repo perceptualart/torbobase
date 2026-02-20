@@ -554,7 +554,10 @@ actor GatewayServer {
             return HTTPResponse(statusCode: 200,
                               headers: [
                                 "Content-Type": "text/html; charset=utf-8",
-                                "Permissions-Policy": "microphone=(self), camera=()"
+                                "Permissions-Policy": "microphone=(self), camera=()",
+                                "Content-Security-Policy": "default-src 'self'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; img-src 'self' data:; font-src 'none'; frame-src 'none'; object-src 'none'",
+                                "X-Frame-Options": "DENY",
+                                "X-Content-Type-Options": "nosniff"
                               ],
                               body: Data(WebChatHTML.page.utf8))
         }
@@ -563,7 +566,10 @@ actor GatewayServer {
         if req.method == "GET" && req.path == "/dashboard" {
             return HTTPResponse(statusCode: 200,
                               headers: [
-                                "Content-Type": "text/html; charset=utf-8"
+                                "Content-Type": "text/html; charset=utf-8",
+                                "Content-Security-Policy": "default-src 'self'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; img-src 'self' data:; font-src 'none'; frame-src 'none'; object-src 'none'",
+                                "X-Frame-Options": "DENY",
+                                "X-Content-Type-Options": "nosniff"
                               ],
                               body: Data(DashboardHTML.page.utf8))
         }

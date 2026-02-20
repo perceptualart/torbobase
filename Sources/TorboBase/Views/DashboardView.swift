@@ -901,6 +901,18 @@ struct SecurityView: View {
     @State private var capabilitiesExpanded = false
     @State private var auditExpanded = false
 
+    /// H9: Detect non-local IPs from audit log
+    private var nonLocalIPs: [String]? {
+        let localPrefixes = ["127.0.0.1", "::1", "localhost"]
+        let remoteIPs = Set(state.auditLog.compactMap { entry -> String? in
+            let ip = entry.clientIP
+            guard !ip.isEmpty else { return nil }
+            if localPrefixes.contains(where: { ip.hasPrefix($0) }) { return nil }
+            return ip
+        })
+        return remoteIPs.isEmpty ? nil : Array(remoteIPs).sorted()
+    }
+
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 24) {
@@ -937,6 +949,28 @@ struct SecurityView: View {
                     )
                 }
 
+                // H9: Non-local access warning
+                if let remoteIPs = nonLocalIPs, !remoteIPs.isEmpty {
+                    HStack(spacing: 8) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .foregroundStyle(.orange)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Non-Local Access Detected")
+                                .font(.system(size: 12, weight: .bold))
+                                .foregroundStyle(.orange)
+                            Text("Connections from: \(remoteIPs.joined(separator: ", "))")
+                                .font(.system(size: 10, design: .monospaced))
+                                .foregroundStyle(.white.opacity(0.6))
+                                .lineLimit(2)
+                        }
+                        Spacer()
+                    }
+                    .padding(12)
+                    .background(Color.orange.opacity(0.08))
+                    .cornerRadius(8)
+                    .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.orange.opacity(0.3), lineWidth: 1))
+                }
+
                 // Active protections
                 SectionHeader(title: "ACTIVE PROTECTIONS")
                 VStack(spacing: 2) {
@@ -947,9 +981,10 @@ struct SecurityView: View {
                     SecurityProtectionRow(name: "Shell Injection Guard", status: true, detail: "Metachar + command blocklist")
                     SecurityProtectionRow(name: "CORS Restriction", status: true, detail: "localhost only")
                     SecurityProtectionRow(name: "Email Content Sandboxing", status: true, detail: "External email marked as untrusted")
-                    SecurityProtectionRow(name: "SSRF Protection (Tools)", status: AppConfig.ssrfProtectionEnabled, detail: "Private IPs blocked on all tool paths")
+                    SecurityProtectionRow(name: "SSRF Protection", status: AppConfig.ssrfProtectionEnabled, detail: "Private IPs blocked on all tool paths")
                     SecurityProtectionRow(name: "Rate Limiting", status: state.rateLimit > 0, detail: state.rateLimit > 0 ? "\(state.rateLimit) req/min" : "Disabled")
-                    SecurityProtectionRow(name: "SSRF Protection", status: AppConfig.ssrfProtectionEnabled, detail: AppConfig.ssrfProtectionEnabled ? "Private IPs blocked" : "Disabled")
+                    SecurityProtectionRow(name: "Token Expiry", status: true, detail: "Paired device tokens expire after 30 days idle")
+                    SecurityProtectionRow(name: "Webhook Secrets", status: true, detail: "Auto-generated HMAC secrets on all webhooks")
                 }
 
                 Divider().overlay(Color.white.opacity(0.06))

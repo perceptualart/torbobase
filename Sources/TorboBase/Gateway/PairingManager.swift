@@ -15,8 +15,20 @@ import Security
 // GatewayServer is an actor and can't call @MainActor PairingManager synchronously.
 // This reads paired device tokens from encrypted KeychainManager store.
 enum PairedDeviceStore {
+    /// Token expiry: 30 days without activity
+    static let tokenExpiryInterval: TimeInterval = 30 * 24 * 60 * 60
+
     static func isAuthorized(token: String) -> Bool {
-        KeychainManager.isPairedDeviceToken(token)
+        let devices = KeychainManager.loadPairedDevices()
+        guard let device = devices.first(where: { $0.token == token }) else { return false }
+        // Check staleness — reject tokens unused for 30+ days
+        let referenceDate = device.lastSeen ?? device.pairedAt
+        let age = Date().timeIntervalSince(referenceDate)
+        if age > tokenExpiryInterval {
+            TorboLog.warn("Rejected expired device token for '\(device.name)' (idle \(Int(age / 86400))d)", subsystem: "Pairing")
+            return false
+        }
+        return true
     }
 }
 
@@ -115,11 +127,9 @@ final class PairingManager: _PairingManagerBase {
             port: Int32(port)
         )
 
-        // TXT record with metadata
+        // TXT record — minimal broadcast (no version or machine name for security)
         let txt: [String: Data] = [
-            "version": Data(TorboVersion.current.utf8),
-            "platform": Data("macos".utf8),
-            "name": Data(machineName.utf8)
+            "platform": Data("macos".utf8)
         ]
         netService?.setTXTRecord(NetService.data(fromTXTRecord: txt))
         netService?.publish()

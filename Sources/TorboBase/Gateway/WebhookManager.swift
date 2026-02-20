@@ -11,6 +11,9 @@ import CommonCrypto
 #if canImport(Crypto)
 import Crypto
 #endif
+#if canImport(Security)
+import Security
+#endif
 
 // MARK: - Webhook Definition
 
@@ -86,6 +89,24 @@ actor WebhookManager {
     func createWebhook(name: String, description: String, assignedTo: String,
                         action: WebhookDefinition.WebhookAction = .createTask(priority: 1),
                         secret: String? = nil) -> WebhookDefinition {
+        // H8: Always require a webhook secret — generate one if not provided
+        let webhookSecret: String
+        if let provided = secret, !provided.isEmpty {
+            webhookSecret = provided
+        } else {
+            var bytes = [UInt8](repeating: 0, count: 32)
+            #if canImport(Security)
+            _ = SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes)
+            #else
+            if let fh = FileHandle(forReadingAtPath: "/dev/urandom") {
+                let data = fh.readData(ofLength: 32)
+                fh.closeFile()
+                if data.count == 32 { bytes = Array(data) }
+            }
+            #endif
+            webhookSecret = Data(bytes).base64EncodedString()
+            TorboLog.info("Auto-generated secret for webhook '\(name)'", subsystem: "Webhook")
+        }
         let webhook = WebhookDefinition(
             id: UUID().uuidString.prefix(12).lowercased().replacingOccurrences(of: "-", with: ""),
             name: name,
@@ -93,7 +114,7 @@ actor WebhookManager {
             assignedTo: assignedTo,
             action: action,
             enabled: true,
-            secret: secret,
+            secret: webhookSecret,
             createdAt: Date(),
             lastTriggeredAt: nil,
             triggerCount: 0
