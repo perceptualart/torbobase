@@ -520,7 +520,7 @@ enum WebChatHTML {
             <option value="sid">SiD</option>
         </select>
         <span class="agent-name" id="agentName">SiD</span>
-        <select class="model-select" id="model" onchange="agentModelMap[currentAgentID] = this.value">
+        <select class="model-select" id="model" onchange="agentModelMap[currentAgentID] = this.value; saveModelMap()">
             <option value="qwen2.5:7b">Loading models...</option>
         </select>
         <span class="status" id="status">Connecting...</span>
@@ -681,8 +681,10 @@ enum WebChatHTML {
     let pendingAttachments = []; // { name, type, dataUrl, base64 }
     // Per-agent conversation histories for room mode
     let roomConversations = {};
-    // Per-agent model selection — remembers which model each agent uses
-    const agentModelMap = {};
+    // Per-agent model selection — remembers which model each agent uses (persisted to localStorage)
+    const MODEL_MAP_KEY = 'torbo_agent_models';
+    const agentModelMap = (() => { try { return JSON.parse(localStorage.getItem(MODEL_MAP_KEY) || '{}'); } catch { return {}; } })();
+    function saveModelMap() { try { localStorage.setItem(MODEL_MAP_KEY, JSON.stringify(agentModelMap)); } catch {} }
     // localStorage keys
     const STORAGE_PREFIX = 'torbo_';
     const THEME_KEY = STORAGE_PREFIX + 'theme';
@@ -1041,6 +1043,7 @@ enum WebChatHTML {
         saveConversation(); // save current agent's chat before switching
         // Remember current agent's model
         agentModelMap[currentAgentID] = modelEl.value;
+        saveModelMap();
         currentAgentID = agentSelectEl.value;
         // Restore this agent's model if previously set AND still available in dropdown
         const savedModel = agentModelMap[currentAgentID];
@@ -1049,6 +1052,7 @@ enum WebChatHTML {
         } else {
             // No saved model or model no longer available — reset to first option
             delete agentModelMap[currentAgentID];
+            saveModelMap();
             if (modelEl.options.length > 0) modelEl.value = modelEl.options[0].value;
         }
         conversationHistory = [];
@@ -1382,6 +1386,7 @@ enum WebChatHTML {
         if (useModel && !modelEl.querySelector('option[value="' + CSS.escape(useModel) + '"]')) {
             // Stale model — fall back to current dropdown value
             delete agentModelMap[agentID];
+            saveModelMap();
             useModel = modelEl.value;
         }
         let fullContent = '';

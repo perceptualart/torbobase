@@ -95,7 +95,7 @@ struct DashboardView: View {
                     SkillsView()
                 case .models:
                     ModelsView()
-                case .sessions:
+                case .spaces:
                     SpacesView()
                 case .security:
                     SecurityView()

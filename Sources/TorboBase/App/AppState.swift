@@ -703,7 +703,7 @@ enum DashboardTab: String, CaseIterable {
     case agents = "Agents"
     case skills = "Skills"
     case models = "Models"
-    case sessions = "Spaces"
+    case spaces = "Spaces"
     case security = "Security"
     case settings = "Settings"
 
@@ -713,7 +713,7 @@ enum DashboardTab: String, CaseIterable {
         case .agents: return "person.2.fill"
         case .skills: return "puzzlepiece.fill"
         case .models: return "cube.fill"
-        case .sessions: return "bubble.left.and.bubble.right.fill"
+        case .spaces: return "bubble.left.and.bubble.right.fill"
         case .security: return "shield.checkered"
         case .settings: return "gearshape.fill"
         }
