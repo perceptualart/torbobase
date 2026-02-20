@@ -2155,25 +2155,13 @@ actor GatewayServer {
                                    let chunkStr = String(data: chunkData, encoding: .utf8) {
                                     writer.sendSSEChunk(chunkStr)
                                 }
-                            } else if let partialJson = delta["partial_json"] as? String {
-                                // Tool call argument streaming
+                            } else if delta["type"] as? String == "input_json_delta" {
+                                // Tool call argument streaming — accumulate only, emit on content_block_stop.
+                                // Previous approach emitted per-delta chunks but JSONSerialization.data(withJSONObject:)
+                                // silently failed (try?) on partial JSON strings, sending empty argument chunks.
+                                let partialJson = delta["partial_json"] as? String ?? ""
                                 currentToolArgs += partialJson
-                                let toolDelta: [String: Any] = [
-                                    "tool_calls": [[
-                                        "index": toolCallIndex,
-                                        "function": ["arguments": partialJson]
-                                    ] as [String: Any]]
-                                ]
-                                let chunk: [String: Any] = [
-                                    "id": completionId,
-                                    "object": "chat.completion.chunk",
-                                    "model": model,
-                                    "choices": [["index": 0, "delta": toolDelta, "finish_reason": NSNull()]]
-                                ]
-                                if let chunkData = try? JSONSerialization.data(withJSONObject: chunk),
-                                   let chunkStr = String(data: chunkData, encoding: .utf8) {
-                                    writer.sendSSEChunk(chunkStr)
-                                }
+                                TorboLog.debug("Anthropic input_json_delta for \(currentToolName): +\(partialJson.count) chars, total=\(currentToolArgs.count)", subsystem: "Gateway")
                             }
                         } else if type == "content_block_start",
                                   let contentBlock = json["content_block"] as? [String: Any],
@@ -2183,6 +2171,7 @@ actor GatewayServer {
                             currentToolId = contentBlock["id"] as? String ?? "call_\(UUID().uuidString.prefix(8))"
                             currentToolName = contentBlock["name"] as? String ?? ""
                             currentToolArgs = ""
+                            // Emit start chunk with name only — args come on content_block_stop
                             let toolDelta: [String: Any] = [
                                 "tool_calls": [[
                                     "index": toolCallIndex,
@@ -2201,8 +2190,36 @@ actor GatewayServer {
                                let chunkStr = String(data: chunkData, encoding: .utf8) {
                                 writer.sendSSEChunk(chunkStr)
                             }
+                            TorboLog.info("Anthropic tool_use start: \(currentToolName) (id: \(currentToolId))", subsystem: "Gateway")
                         } else if type == "content_block_stop" {
-                            if hasToolCalls {
+                            // Emit complete tool args on block stop — NOT per-delta.
+                            // Per-delta emission used JSONSerialization on partial JSON fragments
+                            // which could silently fail (try?), sending empty argument chunks.
+                            // Complete JSON strings serialize reliably.
+                            if hasToolCalls && !currentToolId.isEmpty {
+                                let args = currentToolArgs.isEmpty ? "{}" : currentToolArgs
+                                TorboLog.info("Anthropic tool_use complete: \(currentToolName) args=\(args.prefix(200)) (\(args.count) chars)", subsystem: "Gateway")
+                                let toolDelta: [String: Any] = [
+                                    "tool_calls": [[
+                                        "index": toolCallIndex,
+                                        "function": ["arguments": args]
+                                    ] as [String: Any]]
+                                ]
+                                let argsChunk: [String: Any] = [
+                                    "id": completionId,
+                                    "object": "chat.completion.chunk",
+                                    "model": model,
+                                    "choices": [["index": 0, "delta": toolDelta, "finish_reason": NSNull()]]
+                                ]
+                                if let chunkData = try? JSONSerialization.data(withJSONObject: argsChunk),
+                                   let chunkStr = String(data: chunkData, encoding: .utf8) {
+                                    writer.sendSSEChunk(chunkStr)
+                                } else {
+                                    TorboLog.error("Failed to serialize tool args chunk for \(currentToolName) — args: \(args.prefix(200))", subsystem: "Gateway")
+                                }
+                                currentToolId = ""
+                                currentToolName = ""
+                                currentToolArgs = ""
                                 toolCallIndex += 1
                             }
                         } else if type == "message_stop" || type == "message_delta" {
