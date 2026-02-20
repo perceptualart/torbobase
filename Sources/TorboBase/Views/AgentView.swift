@@ -33,6 +33,14 @@ struct AgentsView: View {
     @State private var capabilitiesExpanded = false
     @State private var personalityExpanded = false
     @State private var activityExpanded = false
+    @State private var tokenBudgetExpanded = false
+
+    // Token usage data
+    @State private var tokenDaily: Int = 0
+    @State private var tokenWeekly: Int = 0
+    @State private var tokenMonthly: Int = 0
+    @State private var tokenCost30d: Double = 0
+    @State private var tokenHistory: [(date: String, tokens: Int)] = []
 
     // Per-agent task data
     @State private var agentTasks: [TaskQueue.AgentTask] = []
@@ -567,6 +575,94 @@ struct AgentsView: View {
                         }
                     }
 
+                    // MARK: - Token Budget
+                    sectionCard(title: "Token Budget", icon: "gauge.with.dots.needle.33percent", isExpanded: $tokenBudgetExpanded) {
+                        // Usage summary
+                        HStack(spacing: 12) {
+                            tokenUsagePill(label: "Today", used: tokenDaily, limit: editConfig.dailyTokenLimit)
+                            tokenUsagePill(label: "Week", used: tokenWeekly, limit: editConfig.weeklyTokenLimit)
+                            tokenUsagePill(label: "Month", used: tokenMonthly, limit: editConfig.monthlyTokenLimit)
+                            VStack(spacing: 2) {
+                                Text(String(format: "$%.2f", tokenCost30d))
+                                    .font(.system(size: 14, weight: .bold, design: .monospaced))
+                                    .foregroundStyle(.green)
+                                Text("30d cost")
+                                    .font(.system(size: 8, weight: .medium))
+                                    .foregroundStyle(.white.opacity(0.3))
+                            }
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 8)
+                            .background(Color.green.opacity(0.04))
+                            .cornerRadius(6)
+                        }
+
+                        // 7-day usage chart
+                        if !tokenHistory.isEmpty {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text("LAST 7 DAYS")
+                                    .font(.system(size: 9, weight: .bold, design: .monospaced))
+                                    .foregroundStyle(.white.opacity(0.2))
+                                HStack(alignment: .bottom, spacing: 4) {
+                                    let maxTokens = max(tokenHistory.map(\.tokens).max() ?? 1, 1)
+                                    ForEach(Array(tokenHistory.enumerated()), id: \.offset) { _, day in
+                                        VStack(spacing: 2) {
+                                            RoundedRectangle(cornerRadius: 2)
+                                                .fill(Color.cyan.opacity(0.4))
+                                                .frame(height: max(CGFloat(day.tokens) / CGFloat(maxTokens) * 60, 2))
+                                            Text(day.date)
+                                                .font(.system(size: 7, design: .monospaced))
+                                                .foregroundStyle(.white.opacity(0.2))
+                                        }
+                                        .frame(maxWidth: .infinity)
+                                    }
+                                }
+                                .frame(height: 80)
+                            }
+                        }
+
+                        // Budget settings
+                        fieldRow(label: "Daily Limit (0 = unlimited)") {
+                            TextField("", value: $editConfig.dailyTokenLimit, format: .number)
+                                .textFieldStyle(.plain)
+                                .font(.system(size: 13, design: .monospaced))
+                                .padding(8)
+                                .background(Color.white.opacity(0.04))
+                                .clipShape(RoundedRectangle(cornerRadius: 6))
+                                .frame(width: 120)
+                        }
+                        fieldRow(label: "Weekly Limit") {
+                            TextField("", value: $editConfig.weeklyTokenLimit, format: .number)
+                                .textFieldStyle(.plain)
+                                .font(.system(size: 13, design: .monospaced))
+                                .padding(8)
+                                .background(Color.white.opacity(0.04))
+                                .clipShape(RoundedRectangle(cornerRadius: 6))
+                                .frame(width: 120)
+                        }
+                        fieldRow(label: "Monthly Limit") {
+                            TextField("", value: $editConfig.monthlyTokenLimit, format: .number)
+                                .textFieldStyle(.plain)
+                                .font(.system(size: 13, design: .monospaced))
+                                .padding(8)
+                                .background(Color.white.opacity(0.04))
+                                .clipShape(RoundedRectangle(cornerRadius: 6))
+                                .frame(width: 120)
+                        }
+                        Toggle("Hard stop at budget (agent refuses requests)", isOn: $editConfig.hardStopOnBudget)
+                            .font(.system(size: 11))
+                            .foregroundStyle(.white.opacity(0.5))
+                            .toggleStyle(.switch)
+                            .tint(.red)
+                            .scaleEffect(0.8, anchor: .leading)
+
+                        Button("Refresh Usage") {
+                            Task { await refreshTokenUsage() }
+                        }
+                        .buttonStyle(.plain)
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundStyle(.cyan.opacity(0.6))
+                    }
+
                     // MARK: - Voice (below Permissions per spec)
                     sectionCard(title: "Voice", icon: "waveform", isExpanded: $voiceExpanded) {
                         fieldRow(label: "ElevenLabs Voice ID") {
@@ -798,6 +894,61 @@ struct AgentsView: View {
         .onChange(of: editConfig.elevenLabsVoiceID) { _ in debouncedSave() }
         .onChange(of: editConfig.fallbackTTSVoice) { _ in debouncedSave() }
         .onChange(of: editConfig.personalityPreset) { _ in debouncedSave() }
+        .onChange(of: editConfig.dailyTokenLimit) { _ in debouncedSave() }
+        .onChange(of: editConfig.weeklyTokenLimit) { _ in debouncedSave() }
+        .onChange(of: editConfig.monthlyTokenLimit) { _ in debouncedSave() }
+        .onChange(of: editConfig.hardStopOnBudget) { _ in debouncedSave() }
+        .onChange(of: selectedAgentID) { _ in Task { await refreshTokenUsage() } }
+    }
+
+    @ViewBuilder
+    private func tokenUsagePill(label: String, used: Int, limit: Int) -> some View {
+        let pct = limit > 0 ? min(Double(used) / Double(limit), 1.0) : 0
+        let isWarning = pct >= 0.8
+        let isOver = pct >= 1.0
+        VStack(spacing: 2) {
+            Text(formatTokenCount(used))
+                .font(.system(size: 14, weight: .bold, design: .monospaced))
+                .foregroundStyle(isOver ? .red : (isWarning ? .orange : .white.opacity(0.7)))
+            if limit > 0 {
+                GeometryReader { geo in
+                    ZStack(alignment: .leading) {
+                        RoundedRectangle(cornerRadius: 2)
+                            .fill(Color.white.opacity(0.06))
+                        RoundedRectangle(cornerRadius: 2)
+                            .fill(isOver ? Color.red.opacity(0.6) : (isWarning ? Color.orange.opacity(0.5) : Color.cyan.opacity(0.4)))
+                            .frame(width: geo.size.width * pct)
+                    }
+                }
+                .frame(height: 3)
+                Text("\(Int(pct * 100))% of \(formatTokenCount(limit))")
+                    .font(.system(size: 7, design: .monospaced))
+                    .foregroundStyle(.white.opacity(0.2))
+            }
+            Text(label)
+                .font(.system(size: 8, weight: .medium))
+                .foregroundStyle(.white.opacity(0.3))
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 8)
+        .background(isOver ? Color.red.opacity(0.04) : Color.white.opacity(0.02))
+        .cornerRadius(6)
+    }
+
+    private func formatTokenCount(_ count: Int) -> String {
+        if count >= 1_000_000 { return String(format: "%.1fM", Double(count) / 1_000_000) }
+        if count >= 1_000 { return String(format: "%.1fK", Double(count) / 1_000) }
+        return "\(count)"
+    }
+
+    private func refreshTokenUsage() async {
+        let id = editConfig.id
+        tokenDaily = await TokenTracker.shared.dailyUsage(agentID: id)
+        tokenWeekly = await TokenTracker.shared.weeklyUsage(agentID: id)
+        tokenMonthly = await TokenTracker.shared.monthlyUsage(agentID: id)
+        let monthAgo = Calendar.current.date(byAdding: .day, value: -30, to: Date()) ?? Date()
+        tokenCost30d = await TokenTracker.shared.estimatedCost(agentID: id, since: monthAgo)
+        tokenHistory = await TokenTracker.shared.dailyHistory(agentID: id, days: 7)
     }
 
     private func debouncedSave() {

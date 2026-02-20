@@ -222,6 +222,9 @@ actor GatewayServer {
                 await WebhookManager.shared.initialize()
             }
 
+            // Initialize Token Tracker
+            Task { await TokenTracker.shared.initialize() }
+
             // Start Calendar Manager (requests access on first use)
             // CalendarManager.shared is lazy — initialized when first called
 
@@ -1720,6 +1723,11 @@ actor GatewayServer {
                 let s = appState
                 await MainActor.run { s?.addMessage(assistantMsg) }
 
+                // Token tracking (estimate from content length for streaming)
+                let promptEst = (req.jsonBody?["messages"] as? [[String: Any]])?.reduce(0) { $0 + ((extractTextContent(from: $1["content"]) ?? "").count / 4) } ?? 0
+                let completionEst = capturedContent.count / 4
+                await TokenTracker.shared.record(agentID: agentID, promptTokens: promptEst, completionTokens: completionEst, model: model)
+
                 if let messages = (req.jsonBody?["messages"] as? [[String: Any]]),
                    let userContent = extractTextContent(from: messages.last(where: { $0["role"] as? String == "user" })?["content"]) {
                     Task { await TelegramBridge.shared.forwardExchange(user: userContent, assistant: capturedContent, model: model) }
@@ -2517,6 +2525,13 @@ actor GatewayServer {
                     let assistantMsg = ConversationMessage(role: "assistant", content: text, model: model, clientIP: clientIP)
                     let s = appState
                     await MainActor.run { s?.addMessage(assistantMsg) }
+                }
+                // Track tokens from Anthropic usage data
+                if let usage = json["usage"] as? [String: Any] {
+                    let ptok = usage["input_tokens"] as? Int ?? 0
+                    let ctok = usage["output_tokens"] as? Int ?? 0
+                    let aid = (body["agent_id"] as? String) ?? "sid"
+                    await TokenTracker.shared.record(agentID: aid, promptTokens: ptok, completionTokens: ctok, model: model)
                 }
                 return HTTPResponse.json(openAIFormat)
             }
