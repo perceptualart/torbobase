@@ -264,7 +264,18 @@ tr:hover { background: rgba(255,255,255,0.02); }
     font-size: 12px; color: var(--text-dim); margin-bottom: 8px;
     line-height: 1.4; max-height: 36px; overflow: hidden;
 }
-.agent-card .agent-actions { display: flex; gap: 8px; flex-shrink: 0; }
+.agent-card .agent-actions { display: flex; gap: 8px; flex-shrink: 0; flex-wrap: wrap; justify-content: flex-end; }
+.agent-card .agent-actions .btn { white-space: nowrap; }
+.agent-card { cursor: pointer; transition: border-color 0.15s; }
+.agent-card:hover { border-color: var(--border-light); }
+.agent-detail-header {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 12px; margin-bottom: 24px; flex-wrap: wrap;
+}
+.agent-detail-actions {
+    display: flex; gap: 8px; flex-shrink: 0; flex-wrap: wrap;
+}
+.agent-detail-actions .btn { white-space: nowrap; min-width: max-content; }
 .flex-row { display: flex; align-items: center; gap: 12px; }
 .flex-between { display: flex; align-items: center; justify-content: space-between; }
 .mb-8 { margin-bottom: 8px; }
@@ -454,12 +465,30 @@ tr:hover { background: rgba(255,255,255,0.02); }
 
     <!-- Agents Tab -->
     <div id="tab-agents" class="tab-panel">
-        <div class="flex-between mb-16">
-            <div class="page-title" style="margin-bottom:0;">Agents</div>
-            <button class="btn btn-primary" onclick="showAgentModal()">+ New Agent</button>
+        <!-- Agent List View -->
+        <div id="agentListView">
+            <div class="flex-between mb-16">
+                <div class="page-title" style="margin-bottom:0;">Agents</div>
+                <button class="btn btn-primary" onclick="showAgentModal()">+ New Agent</button>
+            </div>
+            <div id="agentsError" class="error-msg" style="display:none;"></div>
+            <div id="agentsList"><div class="empty-state"><span class="spinner"></span></div></div>
         </div>
-        <div id="agentsError" class="error-msg" style="display:none;"></div>
-        <div id="agentsList"><div class="empty-state"><span class="spinner"></span></div></div>
+        <!-- Agent Detail/Settings View -->
+        <div id="agentDetailView" style="display:none;">
+            <div class="agent-detail-header">
+                <div style="display:flex;align-items:center;gap:12px;min-width:0;flex:1;">
+                    <button class="btn btn-secondary btn-sm" onclick="hideAgentDetail()" style="flex-shrink:0;">&larr; Back</button>
+                    <div class="page-title" style="margin-bottom:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" id="agentDetailName">Agent</div>
+                </div>
+                <div class="agent-detail-actions">
+                    <button class="btn btn-secondary btn-sm" onclick="exportAgent(selectedAgentId)">Export</button>
+                    <button class="btn btn-secondary btn-sm" onclick="resetAgent(selectedAgentId)">Reset</button>
+                    <button class="btn btn-danger btn-sm" id="agentDetailDeleteBtn" onclick="deleteAgentFromDetail()">Delete</button>
+                </div>
+            </div>
+            <div id="agentDetailContent"></div>
+        </div>
     </div>
 
     <!-- Library Tab -->
@@ -1206,7 +1235,12 @@ function loadAgents() {
     });
 }
 
+var selectedAgentId = null;
+var selectedAgentData = null;
+var allAgentsCache = [];
+
 function renderAgents(agents) {
+    allAgentsCache = agents;
     var wrap = document.getElementById('agentsList');
     if (!agents.length) {
         wrap.innerHTML = '<div class="empty-state">No agents configured.</div>';
@@ -1218,7 +1252,7 @@ function renderAgents(agents) {
         var lvl = a.accessLevel != null ? a.accessLevel : 0;
         var lv = LEVELS[lvl] || LEVELS[0];
         var badgeClass = 'badge-' + lv.color;
-        html += '<div class="agent-card">';
+        html += '<div class="agent-card" onclick="showAgentDetail(\'' + esc(a.id) + '\')">';
         html += '<div class="agent-info">';
         html += '<div class="agent-name">' + esc(a.name || a.id) + ' ';
         if (a.isBuiltIn) html += '<span class="badge badge-purple">Built-in</span>';
@@ -1228,12 +1262,99 @@ function renderAgents(agents) {
         html += '</div>';
         html += '<div class="agent-actions">';
         if (!a.isBuiltIn) {
-            html += '<button class="btn btn-danger btn-sm" onclick="deleteAgent(\'' + esc(a.id) + '\')">Delete</button>';
+            html += '<button class="btn btn-danger btn-sm" onclick="event.stopPropagation();deleteAgent(\'' + esc(a.id) + '\')">Delete</button>';
         }
         html += '</div>';
         html += '</div>';
     }
     wrap.innerHTML = html;
+}
+
+function showAgentDetail(id) {
+    selectedAgentId = id;
+    var found = null;
+    for (var i = 0; i < allAgentsCache.length; i++) {
+        if (allAgentsCache[i].id === id) { found = allAgentsCache[i]; break; }
+    }
+    if (!found) {
+        api('GET', '/v1/agents/' + encodeURIComponent(id)).then(function(data) {
+            selectedAgentData = data;
+            openAgentDetail(data);
+        }).catch(function(e) {
+            showError('agentsError', 'Failed to load agent: ' + e.message);
+        });
+    } else {
+        selectedAgentData = found;
+        openAgentDetail(found);
+    }
+}
+
+function openAgentDetail(agent) {
+    document.getElementById('agentListView').style.display = 'none';
+    document.getElementById('agentDetailView').style.display = 'block';
+    document.getElementById('agentDetailName').textContent = agent.name || agent.id;
+    document.getElementById('agentDetailDeleteBtn').style.display = agent.isBuiltIn ? 'none' : 'inline-flex';
+    renderAgentDetail(agent);
+}
+
+function hideAgentDetail() {
+    document.getElementById('agentDetailView').style.display = 'none';
+    document.getElementById('agentListView').style.display = 'block';
+    selectedAgentId = null;
+    selectedAgentData = null;
+    loadAgents();
+}
+
+function exportAgent(id) {
+    if (!id) return;
+    api('GET', '/v1/agents/' + encodeURIComponent(id)).then(function(data) {
+        var json = JSON.stringify(data, null, 2);
+        var blob = new Blob([json], {type: 'application/json'});
+        var a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = (data.name || id) + '.json';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(a.href);
+    }).catch(function(e) {
+        alert('Export failed: ' + e.message);
+    });
+}
+
+function resetAgent(id) {
+    if (!id) return;
+    if (!confirm('Reset agent to defaults? This cannot be undone.')) return;
+    api('POST', '/v1/agents/' + encodeURIComponent(id) + '/reset').then(function() {
+        showAgentDetail(id);
+    }).catch(function(e) {
+        alert('Reset failed: ' + e.message);
+    });
+}
+
+function deleteAgentFromDetail() {
+    if (!selectedAgentId) return;
+    if (!confirm('Delete this agent? This cannot be undone.')) return;
+    api('DELETE', '/v1/agents/' + encodeURIComponent(selectedAgentId)).then(function() {
+        hideAgentDetail();
+    }).catch(function(e) {
+        alert('Delete failed: ' + e.message);
+    });
+}
+
+function renderAgentDetail(agent) {
+    var content = document.getElementById('agentDetailContent');
+    var html = '';
+    // Activity section
+    html += '<div class="section-label">Activity</div>';
+    html += '<div class="card"><div style="color:var(--text-dim);font-size:13px;">No recent activity.</div></div>';
+    // Identity section
+    html += '<div class="section-label">Identity</div>';
+    html += '<div class="card">';
+    html += '<div style="font-size:13px;margin-bottom:8px;"><strong style="color:var(--text-bright);">Role:</strong> ' + esc(agent.role || 'Not set') + '</div>';
+    html += '<div style="font-size:13px;"><strong style="color:var(--text-bright);">Personality:</strong> ' + esc(agent.personality || 'Not set') + '</div>';
+    html += '</div>';
+    content.innerHTML = html;
 }
 
 function showAgentModal() {
