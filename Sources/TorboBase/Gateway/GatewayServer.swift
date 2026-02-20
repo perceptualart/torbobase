@@ -1480,7 +1480,7 @@ actor GatewayServer {
         if let messages = body["messages"] as? [[String: Any]],
            let last = messages.last(where: { $0["role"] as? String == "user" }),
            let content = extractTextContent(from: last["content"]) {
-            let userMsg = ConversationMessage(role: "user", content: content, model: model, clientIP: clientIP)
+            let userMsg = ConversationMessage(role: "user", content: content, model: model, clientIP: clientIP, agentID: agentID)
             let s = appState
             await MainActor.run { s?.addMessage(userMsg) }
         }
@@ -1703,7 +1703,7 @@ actor GatewayServer {
             // Log the full assistant response
             let capturedContent = fullContent
             if !capturedContent.isEmpty {
-                let assistantMsg = ConversationMessage(role: "assistant", content: capturedContent, model: model, clientIP: clientIP)
+                let assistantMsg = ConversationMessage(role: "assistant", content: capturedContent, model: model, clientIP: clientIP, agentID: agentID)
                 let s = appState
                 await MainActor.run { s?.addMessage(assistantMsg) }
 
@@ -2169,7 +2169,7 @@ actor GatewayServer {
         if let messages = body["messages"] as? [[String: Any]],
            let last = messages.last(where: { $0["role"] as? String == "user" }),
            let content = extractTextContent(from: last["content"]) {
-            let userMsg = ConversationMessage(role: "user", content: content, model: model, clientIP: clientIP)
+            let userMsg = ConversationMessage(role: "user", content: content, model: model, clientIP: clientIP, agentID: agentID)
             let s = appState
             await MainActor.run { s?.addMessage(userMsg) }
         }

@@ -94,14 +94,16 @@ struct ConversationMessage: Identifiable, Codable {
     let model: String
     let timestamp: Date
     let clientIP: String?
+    let agentID: String?  // Per-agent session isolation
 
-    init(role: String, content: String, model: String = "", clientIP: String? = nil) {
+    init(role: String, content: String, model: String = "", clientIP: String? = nil, agentID: String? = nil) {
         self.id = UUID()
         self.role = role
         self.content = content
         self.model = model
         self.timestamp = Date()
         self.clientIP = clientIP
+        self.agentID = agentID
     }
 }
 

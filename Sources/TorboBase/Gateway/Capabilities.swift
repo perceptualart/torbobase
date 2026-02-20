@@ -374,7 +374,11 @@ actor ToolProcessor {
                     content = await WebSearchEngine.shared.search(query: query)
                 case "web_fetch":
                     let url = args["url"] as? String ?? ""
-                    content = await WebSearchEngine.shared.fetchPage(url: url)
+                    if let ssrfError = AccessControl.validateURLForSSRF(url) {
+                        content = "Blocked: \(ssrfError)"
+                    } else {
+                        content = await WebSearchEngine.shared.fetchPage(url: url)
+                    }
                 case "generate_image":
                     let prompt = args["prompt"] as? String ?? ""
                     let size = args["size"] as? String ?? "1024x1024"
@@ -1384,7 +1388,11 @@ extension ToolProcessor {
                     content = await WebSearchEngine.shared.search(query: query)
                 case "web_fetch":
                     let url = args["url"] as? String ?? ""
-                    content = await WebSearchEngine.shared.fetchPage(url: url)
+                    if let ssrfError = AccessControl.validateURLForSSRF(url) {
+                        content = "Blocked: \(ssrfError)"
+                    } else {
+                        content = await WebSearchEngine.shared.fetchPage(url: url)
+                    }
                 case "generate_image":
                     let prompt = args["prompt"] as? String ?? ""
                     let size = args["size"] as? String ?? "1024x1024"

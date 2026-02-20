@@ -940,12 +940,14 @@ struct SecurityView: View {
                 // Active protections
                 SectionHeader(title: "ACTIVE PROTECTIONS")
                 VStack(spacing: 2) {
-                    SecurityProtectionRow(name: "Token Authentication", status: true, detail: "Bearer token required")
-                    SecurityProtectionRow(name: "Localhost Binding", status: true, detail: "NWListener + NIO bound to 127.0.0.1")
+                    SecurityProtectionRow(name: "Token Authentication", status: true, detail: "Bearer token required on all API routes")
+                    SecurityProtectionRow(name: "Network Binding", status: true, detail: "0.0.0.0 (LAN — required for phone pairing) + bearer auth")
                     SecurityProtectionRow(name: "API Key Encryption", status: true, detail: "AES-256-CBC at rest")
                     SecurityProtectionRow(name: "Path Traversal Block", status: true, detail: "Sensitive files protected")
                     SecurityProtectionRow(name: "Shell Injection Guard", status: true, detail: "Metachar + command blocklist")
                     SecurityProtectionRow(name: "CORS Restriction", status: true, detail: "localhost only")
+                    SecurityProtectionRow(name: "Email Content Sandboxing", status: true, detail: "External email marked as untrusted")
+                    SecurityProtectionRow(name: "SSRF Protection (Tools)", status: AppConfig.ssrfProtectionEnabled, detail: "Private IPs blocked on all tool paths")
                     SecurityProtectionRow(name: "Rate Limiting", status: state.rateLimit > 0, detail: state.rateLimit > 0 ? "\(state.rateLimit) req/min" : "Disabled")
                     SecurityProtectionRow(name: "SSRF Protection", status: AppConfig.ssrfProtectionEnabled, detail: AppConfig.ssrfProtectionEnabled ? "Private IPs blocked" : "Disabled")
                 }
