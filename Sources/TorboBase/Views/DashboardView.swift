@@ -41,7 +41,8 @@ struct DashboardView: View {
                         SidebarButton(
                             title: tab.rawValue,
                             icon: tab.icon,
-                            isSelected: state.currentTab == tab
+                            isSelected: state.currentTab == tab,
+                            hint: tab.hint
                         ) {
                             withAnimation(.easeInOut(duration: 0.2)) {
                                 state.currentTab = tab
@@ -1222,7 +1223,7 @@ struct SettingsView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("Settings")
+                    Text("Arkhe")
                         .font(.system(size: 22, weight: .bold))
                         .foregroundStyle(.white)
                     Text("All sections collapsed — expand what you need")
@@ -1430,7 +1431,7 @@ struct SettingsView: View {
                     }
                     .padding(.top, 8)
                 } label: {
-                    Label("VOICE & IMAGE", systemImage: "waveform")
+                    Label("VOX & IMAGE", systemImage: "waveform")
                         .font(.system(size: 10, weight: .bold, design: .monospaced))
                         .foregroundStyle(.white.opacity(0.3))
                 }
@@ -2135,6 +2136,7 @@ struct SidebarButton: View {
     let title: String
     let icon: String
     let isSelected: Bool
+    var hint: String = ""
     let action: () -> Void
 
     var body: some View {
@@ -2144,9 +2146,16 @@ struct SidebarButton: View {
                     .font(.system(size: 12))
                     .frame(width: 18)
                     .foregroundStyle(isSelected ? .white : .white.opacity(0.4))
-                Text(title)
-                    .font(.system(size: 12, weight: isSelected ? .semibold : .regular))
-                    .foregroundStyle(isSelected ? .white : .white.opacity(0.5))
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(title)
+                        .font(.system(size: 12, weight: isSelected ? .semibold : .regular))
+                        .foregroundStyle(isSelected ? .white : .white.opacity(0.5))
+                    if !hint.isEmpty {
+                        Text(hint)
+                            .font(.system(size: 8, design: .monospaced))
+                            .foregroundStyle(.white.opacity(0.15))
+                    }
+                }
                 Spacer()
             }
             .padding(.horizontal, 10)

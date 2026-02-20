@@ -328,7 +328,7 @@ tr:hover { background: rgba(255,255,255,0.02); }
             <span class="nav-icon">&#9776;</span> Logs
         </div>
         <div class="nav-item" onclick="switchTab('settings')" data-tab="settings">
-            <span class="nav-icon">&#9881;</span> Settings
+            <span class="nav-icon">&#9881;</span> Arkhe
         </div>
     </div>
     <div class="sidebar-footer">

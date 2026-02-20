@@ -663,8 +663,8 @@ struct AgentsView: View {
                         .foregroundStyle(.cyan.opacity(0.6))
                     }
 
-                    // MARK: - Voice (below Permissions per spec)
-                    sectionCard(title: "Voice", icon: "waveform", isExpanded: $voiceExpanded) {
+                    // MARK: - Vox (Voice — below Permissions per spec)
+                    sectionCard(title: "Vox", icon: "waveform", isExpanded: $voiceExpanded) {
                         fieldRow(label: "ElevenLabs Voice ID") {
                             TextField("Voice ID or leave empty", text: $editConfig.elevenLabsVoiceID)
                                 .textFieldStyle(.plain)

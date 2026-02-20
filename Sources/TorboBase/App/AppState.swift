@@ -705,9 +705,9 @@ enum DashboardTab: String, CaseIterable {
     case agents = "Agents"
     case skills = "Skills"
     case models = "Models"
-    case spaces = "Spaces"
+    case spaces = "Lexis"
     case security = "Security"
-    case settings = "Settings"
+    case settings = "Arkhe"
 
     var icon: String {
         switch self {
@@ -718,6 +718,18 @@ enum DashboardTab: String, CaseIterable {
         case .spaces: return "bubble.left.and.bubble.right.fill"
         case .security: return "shield.checkered"
         case .settings: return "gearshape.fill"
+        }
+    }
+
+    var hint: String {
+        switch self {
+        case .home: return "dashboard"
+        case .agents: return "agents"
+        case .skills: return "skills"
+        case .models: return "models"
+        case .spaces: return "conversations"
+        case .security: return "security"
+        case .settings: return "settings"
         }
     }
 }
