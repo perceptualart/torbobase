@@ -281,6 +281,11 @@ tr:hover { background: rgba(255,255,255,0.02); }
 .mb-8 { margin-bottom: 8px; }
 .mb-16 { margin-bottom: 16px; }
 .mt-16 { margin-top: 16px; }
+.home-orb-wrap {
+    display: flex; justify-content: center; align-items: center;
+    margin-bottom: 24px;
+}
+.home-orb-wrap canvas { width: 200px; height: 200px; }
 @media (max-width: 768px) {
     .sidebar { display: none; }
     .main { padding: 16px; }
@@ -372,6 +377,11 @@ tr:hover { background: rgba(255,255,255,0.02); }
     <div id="tab-overview" class="tab-panel active">
         <div class="page-title">Overview</div>
         <div id="overviewError" class="error-msg" style="display:none;"></div>
+
+        <!-- Animated Orb -->
+        <div class="home-orb-wrap">
+            <canvas id="homeOrb" width="400" height="400"></canvas>
+        </div>
 
         <!-- Kill Switch -->
         <div id="killSwitchCard" class="card" style="border:1px solid rgba(255,68,68,0.3);background:rgba(255,68,68,0.06);margin-bottom:20px;display:flex;align-items:center;justify-content:space-between;gap:16px;">
@@ -1667,6 +1677,82 @@ function saveSettings() {
         if (e.message !== 'Unauthorized') showError('settingsError', 'Failed to save settings: ' + e.message);
     });
 }
+
+// --- Orb Renderer ---
+var orbLayers = [
+    { hue:306, sat:80, bri:90,  rMul:1.15, ph:0.08, wv:0.25, sx:1.1,  sy:0.45, rot:0.015, blur:21,   op:0.05,  po:0, wo:0, ro:0 },
+    { hue:0,   sat:85, bri:100, rMul:1.0,  ph:0.12, wv:0.35, sx:1.0,  sy:0.5,  rot:0.02,  blur:14,   op:0.07,  po:0, wo:0, ro:0 },
+    { hue:29,  sat:90, bri:100, rMul:0.95, ph:0.1,  wv:0.3,  sx:0.85, sy:0.65, rot:0.018, blur:11.5, op:0.08,  po:1.5, wo:2, ro:Math.PI*0.3 },
+    { hue:187, sat:90, bri:100, rMul:0.9,  ph:0.14, wv:0.4,  sx:0.75, sy:0.8,  rot:0.022, blur:9,    op:0.12,  po:3, wo:1, ro:Math.PI*0.7 },
+    { hue:216, sat:85, bri:100, rMul:0.85, ph:0.09, wv:0.28, sx:0.7,  sy:0.75, rot:0.025, blur:7,    op:0.138, po:2, wo:3, ro:Math.PI*1.1 },
+    { hue:270, sat:80, bri:100, rMul:0.75, ph:0.16, wv:0.45, sx:0.6,  sy:0.7,  rot:0.028, blur:5,    op:0.152, po:4, wo:2, ro:Math.PI*0.5 },
+    { hue:331, sat:70, bri:100, rMul:0.6,  ph:0.11, wv:0.32, sx:0.55, sy:0.6,  rot:0.03,  blur:3.5,  op:0.166, po:1, wo:4, ro:Math.PI*1.4 }
+];
+
+function orbHsl(h, s, b, a) {
+    s /= 100; b /= 100;
+    var k = function(n) { return (n + h / 30) % 12; };
+    var f = function(n) { return b - b * s * Math.max(Math.min(k(n) - 3, 9 - k(n), 1), -1); };
+    return 'rgba(' + Math.round(f(0)*255) + ',' + Math.round(f(8)*255) + ',' + Math.round(f(4)*255) + ',' + a + ')';
+}
+
+function drawOrbLayer(ctx, cx, cy, radius, L, t, intensity) {
+    var ph = t * L.ph + L.po;
+    var wp = t * L.wv + L.wo;
+    var rot = t * L.rot + L.ro;
+    var r = radius * L.rMul;
+    var breatheAmp = 0.08 + intensity * 0.12;
+    var bx = L.sx * (1.0 + Math.sin(wp * 0.3) * breatheAmp);
+    var by = L.sy * (1.0 + Math.cos(wp * 0.25) * breatheAmp);
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    var pts = [];
+    for (var i = 0; i <= 64; i++) {
+        var angle = (i / 64) * Math.PI * 2;
+        var w1 = Math.sin(angle * 2 + ph) * 0.25;
+        var w2 = Math.sin(angle * 3 + wp) * 0.18;
+        var w3 = Math.cos(angle * 4 + ph * 0.8) * 0.12;
+        var w4 = Math.sin(angle * 1.5 + wp * 1.3) * 0.15;
+        var ap = Math.sin(angle * 2 + ph * 3) * intensity * 0.35;
+        var ap2 = Math.cos(angle * 3 + wp * 2) * intensity * 0.25;
+        var ap3 = Math.sin(angle * 5 + ph * 4) * intensity * 0.18;
+        var dist = r * (0.55 + w1 + w2 + w3 + w4 + ap + ap2 + ap3);
+        var x = Math.cos(angle) * dist * bx;
+        var y = Math.sin(angle) * dist * by;
+        pts.push({ x: cx + x * Math.cos(rot) - y * Math.sin(rot), y: cy + x * Math.sin(rot) + y * Math.cos(rot) });
+    }
+    var fillColor = orbHsl(L.hue, L.sat, L.bri, Math.min(L.op * (1.0 + intensity * 0.6), 0.85));
+    ctx.filter = 'blur(' + L.blur + 'px)';
+    ctx.beginPath();
+    for (var j = 0; j < pts.length; j++) { j === 0 ? ctx.moveTo(pts[j].x, pts[j].y) : ctx.lineTo(pts[j].x, pts[j].y); }
+    ctx.closePath();
+    ctx.fillStyle = fillColor;
+    ctx.fill();
+    ctx.filter = 'blur(' + (L.blur * 0.4) + 'px)';
+    ctx.beginPath();
+    for (var j2 = 0; j2 < pts.length; j2++) { j2 === 0 ? ctx.moveTo(pts[j2].x, pts[j2].y) : ctx.lineTo(pts[j2].x, pts[j2].y); }
+    ctx.closePath();
+    ctx.fillStyle = orbHsl(L.hue, L.sat, L.bri, Math.min(L.op * 0.49 * (1.0 + intensity * 0.6), 0.85));
+    ctx.fill();
+    ctx.restore();
+}
+
+function renderHomeOrb() {
+    var canvas = document.getElementById('homeOrb');
+    if (!canvas || currentTab !== 'overview') return;
+    var ctx = canvas.getContext('2d');
+    var w = canvas.width, h = canvas.height;
+    var cx = w / 2, cy = h / 2;
+    var radius = Math.min(w, h) * 0.45;
+    var t = performance.now() / 1000;
+    ctx.clearRect(0, 0, w, h);
+    for (var i = 0; i < orbLayers.length; i++) {
+        drawOrbLayer(ctx, cx, cy, radius, orbLayers[i], t, 0.08);
+    }
+    requestAnimationFrame(renderHomeOrb);
+}
+
+requestAnimationFrame(renderHomeOrb);
 
 // --- Init ---
 var isLocal = (location.hostname === 'localhost' || location.hostname === '127.0.0.1' || location.hostname === '::1');
