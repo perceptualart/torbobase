@@ -505,7 +505,7 @@ actor MemoryArmy {
             guard let text = item["text"] as? String, text.count >= 10 else { return nil }
             let rawCategory = item["category"] as? String ?? "fact"
             let category = Self.allowedCategories.contains(rawCategory) ? rawCategory : "fact"
-            let importance = Float(item["importance"] as? Double ?? 0.5)
+            let importance = Float(min(1.0, max(0.0, item["importance"] as? Double ?? 0.5)))
             let entities = item["entities"] as? [String] ?? []
             return ExtractedMemory(text: text, category: category, importance: importance, entities: entities)
         }

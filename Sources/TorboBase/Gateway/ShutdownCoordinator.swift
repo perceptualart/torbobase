@@ -53,7 +53,11 @@ actor ShutdownCoordinator {
             await callback()
         }
 
-        // 4. Final: flush any pending memory writes
+        // 4. Flush pending token tracking records (L-13)
+        TorboLog.info("Flushing token tracker...", subsystem: "Shutdown")
+        await TokenTracker.shared.flush()
+
+        // 5. Final: flush any pending memory writes
         TorboLog.info("Flushing memory index...", subsystem: "Shutdown")
         // Force a final access tracking write if needed
         let memCount = await MemoryIndex.shared.count

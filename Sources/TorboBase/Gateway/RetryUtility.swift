@@ -50,6 +50,8 @@ enum RetryUtility {
 
                 TorboLog.warn("Attempt \(attempt)/\(maxAttempts) failed: \(error.localizedDescription). Retrying in \(String(format: "%.1f", delay))s...", subsystem: "Retry")
 
+                // L-14: Explicitly check cancellation before sleeping to avoid unnecessary delay
+                try Task.checkCancellation()
                 try await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
 
                 // Exponential increase for next iteration

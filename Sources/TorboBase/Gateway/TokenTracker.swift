@@ -58,8 +58,8 @@ actor TokenTracker {
         records.append(entry)
         dirty = true
 
-        // Batch save every 20 records
-        if records.count % 20 == 0 { save() }
+        // L-13: Batch save every 5 records (reduced from 20 to limit crash data loss)
+        if records.count % 5 == 0 { save() }
 
         TorboLog.debug("Token usage: \(agentID) +\(entry.totalTokens) tokens (\(model))", subsystem: "Tokens")
     }

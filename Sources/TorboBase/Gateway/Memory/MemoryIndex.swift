@@ -12,6 +12,9 @@ import SQLite3
 #elseif canImport(CSQLite3)
 import CSQLite3
 #endif
+#if canImport(CommonCrypto)
+import CommonCrypto
+#endif
 
 /// A persistent vector store for Sid's memories.
 /// Embeds text using `nomic-embed-text` via Ollama, stores in SQLite,
@@ -556,15 +559,17 @@ actor MemoryIndex {
         let ts = ISO8601DateFormatter().string(from: timestamp)
         let embeddingData = embedding.withUnsafeBufferPointer { Data(buffer: $0) }
 
-        sqlite3_bind_text(stmt, 1, (text as NSString).utf8String, -1, nil)
-        sqlite3_bind_text(stmt, 2, (category as NSString).utf8String, -1, nil)
-        sqlite3_bind_text(stmt, 3, (source as NSString).utf8String, -1, nil)
-        sqlite3_bind_text(stmt, 4, (ts as NSString).utf8String, -1, nil)
+        // L-8: Use SQLITE_TRANSIENT so SQLite copies string data (NSString temporaries may release)
+        let SQLITE_TRANSIENT = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
+        sqlite3_bind_text(stmt, 1, (text as NSString).utf8String, -1, SQLITE_TRANSIENT)
+        sqlite3_bind_text(stmt, 2, (category as NSString).utf8String, -1, SQLITE_TRANSIENT)
+        sqlite3_bind_text(stmt, 3, (source as NSString).utf8String, -1, SQLITE_TRANSIENT)
+        sqlite3_bind_text(stmt, 4, (ts as NSString).utf8String, -1, SQLITE_TRANSIENT)
         sqlite3_bind_double(stmt, 5, Double(importance))
         _ = embeddingData.withUnsafeBytes { ptr in
-            sqlite3_bind_blob(stmt, 6, ptr.baseAddress, Int32(embeddingData.count), nil)
+            sqlite3_bind_blob(stmt, 6, ptr.baseAddress, Int32(embeddingData.count), SQLITE_TRANSIENT)
         }
-        sqlite3_bind_text(stmt, 7, (hash as NSString).utf8String, -1, nil)
+        sqlite3_bind_text(stmt, 7, (hash as NSString).utf8String, -1, SQLITE_TRANSIENT)
 
         guard sqlite3_step(stmt) == SQLITE_DONE else { return nil }
         return sqlite3_last_insert_rowid(db)
@@ -661,13 +666,24 @@ actor MemoryIndex {
     }
 
     private func textHash(_ text: String) -> String {
-        // Simple hash — normalized lowercase trimmed text
+        // L-9: SHA-256 hash for reliable deduplication (replaces DJB2)
         let normalized = text.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
-        var hash: UInt64 = 5381
-        for byte in normalized.utf8 {
-            hash = ((hash << 5) &+ hash) &+ UInt64(byte)
+        let data = Data(normalized.utf8)
+        #if canImport(CommonCrypto)
+        var digest = [UInt8](repeating: 0, count: Int(CC_SHA256_DIGEST_LENGTH))
+        data.withUnsafeBytes { ptr in
+            _ = CC_SHA256(ptr.baseAddress, CC_LONG(data.count), &digest)
+        }
+        return digest.map { String(format: "%02x", $0) }.joined()
+        #else
+        // Fallback: FNV-1a 64-bit (better distribution than DJB2)
+        var hash: UInt64 = 14695981039346656037
+        for byte in data {
+            hash ^= UInt64(byte)
+            hash &*= 1099511628211
         }
         return String(hash, radix: 16)
+        #endif
     }
 
     // MARK: - BM25 Index Management

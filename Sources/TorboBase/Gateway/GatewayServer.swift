@@ -558,18 +558,22 @@ actor GatewayServer {
         // CORS preflight
         if req.method == "OPTIONS" { return HTTPResponse.cors(origin: corsOrigin) }
 
-        // Health check — includes Tailscale IP so iOS app can auto-discover it
+        // Health check — Tailscale details only returned to authenticated callers
         if req.method == "GET" && (req.path == "/" || req.path == "/health") {
             var response: [String: Any] = [
                 "status": "ok",
                 "service": "torbo-base",
                 "version": TorboVersion.current
             ]
-            if let tsIP = Self.detectTailscaleIP() {
-                response["tailscaleIP"] = tsIP
-            }
-            if let tsHostname = Self.detectTailscaleHostname() {
-                response["tailscaleHostname"] = tsHostname
+            // L-2: Only expose Tailscale hostname/IP to authenticated requests
+            let hasAuth = req.headers["Authorization"] != nil || req.headers["authorization"] != nil
+            if hasAuth {
+                if let tsIP = Self.detectTailscaleIP() {
+                    response["tailscaleIP"] = tsIP
+                }
+                if let tsHostname = Self.detectTailscaleHostname() {
+                    response["tailscaleHostname"] = tsHostname
+                }
             }
             return HTTPResponse.json(response)
         }
@@ -604,11 +608,11 @@ actor GatewayServer {
             return serveLegalPage(path: req.path)
         }
 
-        // Access level — no auth
+        // L-1: Access level — return only a boolean "active" without exposing exact level
         if req.method == "GET" && req.path == "/level" {
             let s = appState
             let level = await MainActor.run { s?.accessLevel.rawValue ?? 0 }
-            return HTTPResponse.json(["level": level])
+            return HTTPResponse.json(["active": level > 0])
         }
 
         // Rate limit unauthenticated endpoints (prevents brute-force pairing)
@@ -822,8 +826,10 @@ actor GatewayServer {
         case ("POST", "/v1/room/create"):
             return await guardedRoute(level: .chatOnly, current: currentLevel, clientIP: clientIP, req: req) {
                 let body = req.jsonBody ?? [:]
-                let roomID = body["room"] as? String ?? UUID().uuidString.prefix(8).lowercased()
-                let sender = body["sender"] as? String ?? "Anonymous"
+                // L-5: Always generate server-side room IDs — never accept client-supplied values
+                let roomID = UUID().uuidString.prefix(8).lowercased()
+                let rawSender = body["sender"] as? String ?? "Anonymous"
+                let sender = String(rawSender.replacingOccurrences(of: "[<>&\"']", with: "", options: .regularExpression).prefix(30))
                 await ChatRoomStore.shared.createRoom(String(roomID))
                 return HTTPResponse.json(["room": roomID, "sender": sender, "status": "created"])
             }
@@ -1538,9 +1544,11 @@ actor GatewayServer {
     private func handlePair(_ req: HTTPRequest, clientIP: String) async -> HTTPResponse {
         guard let body = req.jsonBody,
               let code = body["code"] as? String,
-              let deviceName = body["deviceName"] as? String else {
+              let rawDeviceName = body["deviceName"] as? String else {
             return HTTPResponse.badRequest("Missing 'code' or 'deviceName'")
         }
+        // L-7: Sanitize device name — strip control chars and limit length
+        let deviceName = String(rawDeviceName.unicodeScalars.filter { !$0.properties.isDefaultIgnorableCodePoint && $0.value >= 0x20 }.prefix(64))
         let result = await MainActor.run {
             PairingManager.shared.pair(code: code, deviceName: deviceName)
         }
@@ -1579,9 +1587,11 @@ actor GatewayServer {
         }
 
         guard let body = req.jsonBody,
-              let deviceName = body["deviceName"] as? String, !deviceName.isEmpty else {
+              let rawDeviceName = body["deviceName"] as? String, !rawDeviceName.isEmpty else {
             return HTTPResponse.badRequest("Missing 'deviceName'")
         }
+        // L-7: Sanitize device name
+        let deviceName = String(rawDeviceName.unicodeScalars.filter { !$0.properties.isDefaultIgnorableCodePoint && $0.value >= 0x20 }.prefix(64))
 
         // Check if this device is already paired (by name) — return existing token
         let existing: (token: String, id: String)? = await MainActor.run {
@@ -1591,7 +1601,7 @@ actor GatewayServer {
             return nil
         }
         if let existing {
-            TorboLog.info("Auto-pair: returning existing token for \(deviceName)", subsystem: "Pairing")
+            TorboLog.debug("Auto-pair: returning existing token for \(deviceName)", subsystem: "Pairing")
             var existingResponse: [String: Any] = ["token": existing.token, "deviceId": existing.id, "status": "existing"]
             if let tsIP = Self.detectTailscaleIP() { existingResponse["tailscaleIP"] = tsIP }
             if let tsHostname = Self.detectTailscaleHostname() { existingResponse["tailscaleHostname"] = tsHostname }
@@ -1965,7 +1975,7 @@ actor GatewayServer {
             TorboLog.error("Ollama stream error: \(error.localizedDescription)", subsystem: "Gateway")
             // Send error as SSE chunk (headers already sent, can't send HTTP response)
             let errChunk = """
-            {"id":"err","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"content":"\\n\\n[Stream interrupted: \(error.localizedDescription.replacingOccurrences(of: "\"", with: "'"))]"},"finish_reason":"stop"}]}
+            {"id":"err","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"content":"\\n\\n[Stream interrupted — please try again]"},"finish_reason":"stop"}]}
             """
             writer.sendSSEChunk(errChunk)
             writer.sendSSEDone()
@@ -2042,7 +2052,7 @@ actor GatewayServer {
             } catch {
                 TorboLog.error("\(providerName) stream error: \(error.localizedDescription)", subsystem: "Gateway")
                 let errChunk = """
-                {"id":"err","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"content":"\\n\\n[Stream interrupted: \(error.localizedDescription.replacingOccurrences(of: "\"", with: "'"))]"},"finish_reason":"stop"}]}
+                {"id":"err","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"content":"\\n\\n[Stream interrupted — please try again]"},"finish_reason":"stop"}]}
                 """
                 writer.sendSSEChunk(errChunk)
                 writer.sendSSEDone()
@@ -2230,7 +2240,7 @@ actor GatewayServer {
             } catch {
                 TorboLog.error("Anthropic stream error: \(error.localizedDescription)", subsystem: "Gateway")
                 let errChunk = """
-                {"id":"err","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"content":"\\n\\n[Stream interrupted: \(error.localizedDescription.replacingOccurrences(of: "\"", with: "'"))]"},"finish_reason":"stop"}]}
+                {"id":"err","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"content":"\\n\\n[Stream interrupted — please try again]"},"finish_reason":"stop"}]}
                 """
                 writer.sendSSEChunk(errChunk)
                 writer.sendSSEDone()
@@ -2313,7 +2323,7 @@ actor GatewayServer {
             } catch {
                 TorboLog.error("Gemini stream error: \(error.localizedDescription)", subsystem: "Gateway")
                 let errChunk = """
-                {"id":"err","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"content":"\\n\\n[Stream interrupted: \(error.localizedDescription.replacingOccurrences(of: "\"", with: "'"))]"},"finish_reason":"stop"}]}
+                {"id":"err","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"content":"\\n\\n[Stream interrupted — please try again]"},"finish_reason":"stop"}]}
                 """
                 writer.sendSSEChunk(errChunk)
                 writer.sendSSEDone()
