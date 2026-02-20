@@ -188,6 +188,9 @@ actor GatewayServer {
             }
             TorboLog.info("Listener bound to port \(port)", subsystem: "Gateway")
 
+            // Log all reachable addresses for connectivity debugging
+            logReachableAddresses(port: port)
+
             await MainActor.run {
                 PairingManager.shared.startAdvertising(port: port)
             }
@@ -548,6 +551,44 @@ actor GatewayServer {
               !dnsName.isEmpty else { return nil }
         // DNSName has trailing dot — strip it: "mymac.tail1234.ts.net." → "mymac.tail1234.ts.net"
         return dnsName.hasSuffix(".") ? String(dnsName.dropLast()) : dnsName
+    }
+
+    /// Log all network addresses where Base is reachable (for connectivity debugging).
+    nonisolated private func logReachableAddresses(port: UInt16) {
+        var addresses: [String] = ["127.0.0.1 (localhost)"]
+        // Scan all network interfaces for IPv4 addresses
+        var ifaddr: UnsafeMutablePointer<ifaddrs>?
+        if getifaddrs(&ifaddr) == 0, let first = ifaddr {
+            defer { freeifaddrs(ifaddr) }
+            for ptr in sequence(first: first, next: { $0.pointee.ifa_next }) {
+                guard let sa = ptr.pointee.ifa_addr, sa.pointee.sa_family == UInt8(AF_INET) else { continue }
+                var hostname = [CChar](repeating: 0, count: Int(NI_MAXHOST))
+                #if os(macOS)
+                let saLen = socklen_t(sa.pointee.sa_len)
+                #else
+                let saLen = socklen_t(MemoryLayout<sockaddr_in>.size)
+                #endif
+                getnameinfo(sa, saLen, &hostname, socklen_t(hostname.count), nil, 0, NI_NUMERICHOST)
+                let ip = String(cString: hostname)
+                if ip == "127.0.0.1" { continue }
+                let iface = String(cString: ptr.pointee.ifa_name)
+                if ip.hasPrefix("100.") {
+                    let parts = ip.split(separator: ".").compactMap { Int($0) }
+                    if parts.count >= 2 && parts[1] >= 64 && parts[1] <= 127 {
+                        addresses.append("\(ip) (Tailscale, \(iface))")
+                        continue
+                    }
+                }
+                addresses.append("\(ip) (\(iface))")
+            }
+        }
+        if let tsHost = Self.detectTailscaleHostname() {
+            addresses.append("\(tsHost) (MagicDNS)")
+        }
+        TorboLog.info("Reachable at:", subsystem: "Gateway")
+        for addr in addresses {
+            TorboLog.info("  → http://\(addr):\(port)/health", subsystem: "Gateway")
+        }
     }
 
     private func route(_ req: HTTPRequest, clientIP: String, writer: ResponseWriter? = nil) async -> HTTPResponse? {
