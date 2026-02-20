@@ -21,7 +21,7 @@ struct SkillsView: View {
                         Text("Skills")
                             .font(.system(size: 24, weight: .bold))
                             .foregroundStyle(.white)
-                        Text("Modular capabilities that extend what SiD can do")
+                        Text("Modular capabilities that extend what Torbo can do")
                             .font(.system(size: 13))
                             .foregroundStyle(.white.opacity(0.4))
                     }
