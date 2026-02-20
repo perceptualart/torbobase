@@ -340,33 +340,40 @@ actor SupabaseAuth {
 
     /// Validate a JWT and extract claims without calling Supabase API.
     /// Uses HMAC-SHA256 with the JWT secret for signature verification.
+    /// Returns nil if JWT secret is not configured — caller must fall back to API validation.
     func validateJWT(_ token: String) -> JWTClaims? {
         let parts = token.split(separator: ".")
         guard parts.count == 3 else { return nil }
+
+        // Reject local JWT validation when secret is not configured.
+        // Without a secret, signature verification is impossible — accepting
+        // unverified tokens would let anyone forge claims.
+        guard !jwtSecret.isEmpty else {
+            TorboLog.debug("JWT local validation unavailable — no secret configured", subsystem: "CloudAuth")
+            return nil
+        }
 
         let headerB64 = String(parts[0])
         let payloadB64 = String(parts[1])
         let signatureB64 = String(parts[2])
 
-        // Verify signature if JWT secret is configured
-        if !jwtSecret.isEmpty {
-            let signingInput = "\(headerB64).\(payloadB64)"
-            guard let signingData = signingInput.data(using: .utf8),
-                  let keyData = jwtSecret.data(using: .utf8) else { return nil }
+        // Verify signature
+        let signingInput = "\(headerB64).\(payloadB64)"
+        guard let signingData = signingInput.data(using: .utf8),
+              let keyData = jwtSecret.data(using: .utf8) else { return nil }
 
-            let expectedSig = hmacSHA256(data: signingData, key: keyData)
-            guard let providedSig = base64URLDecode(signatureB64) else { return nil }
+        let expectedSig = hmacSHA256(data: signingData, key: keyData)
+        guard let providedSig = base64URLDecode(signatureB64) else { return nil }
 
-            // Constant-time comparison
-            guard expectedSig.count == providedSig.count else { return nil }
-            var result: UInt8 = 0
-            for i in 0..<expectedSig.count {
-                result |= expectedSig[i] ^ providedSig[i]
-            }
-            guard result == 0 else {
-                TorboLog.warn("JWT signature mismatch", subsystem: "CloudAuth")
-                return nil
-            }
+        // Constant-time comparison
+        guard expectedSig.count == providedSig.count else { return nil }
+        var result: UInt8 = 0
+        for i in 0..<expectedSig.count {
+            result |= expectedSig[i] ^ providedSig[i]
+        }
+        guard result == 0 else {
+            TorboLog.warn("JWT signature mismatch", subsystem: "CloudAuth")
+            return nil
         }
 
         // Decode payload

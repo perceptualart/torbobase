@@ -1476,8 +1476,10 @@ actor GatewayServer {
     // MARK: - Authentication
 
     private func authenticate(_ req: HTTPRequest, clientIP: String = "") -> Bool {
-        // Localhost access skips auth entirely
-        if clientIP == "127.0.0.1" || clientIP == "::1" || clientIP == "localhost" { return true }
+        // Localhost access skips auth entirely.
+        // NWConnection.endpoint.debugDescription includes port (e.g. "127.0.0.1:54321"),
+        // so check with hasPrefix/contains rather than exact match.
+        if clientIP.hasPrefix("127.0.0.1") || clientIP.hasPrefix("::1") || clientIP.hasPrefix("localhost") { return true }
         guard let auth = req.headers["authorization"] ?? req.headers["Authorization"] else { return false }
         let token = auth.hasPrefix("Bearer ") ? String(auth.dropFirst(7)) : auth
         if token == KeychainManager.serverToken { return true }

@@ -260,15 +260,25 @@ actor DocumentStore {
     /// Remove a document and its chunks
     func removeDocument(path: String) async {
         guard let doc = documents.first(where: { $0.path == path }) else { return }
-        sqlite3_exec(db, "DELETE FROM document_chunks WHERE doc_id = \(doc.id)", nil, nil, nil)
-        sqlite3_exec(db, "DELETE FROM documents WHERE id = \(doc.id)", nil, nil, nil)
-        await loadIntoMemory()
+        await removeDocument(id: doc.id)
         TorboLog.info("Removed document: \(doc.name)", subsystem: "DocStore")
     }
 
     func removeDocument(id: Int64) async {
-        sqlite3_exec(db, "DELETE FROM document_chunks WHERE doc_id = \(id)", nil, nil, nil)
-        sqlite3_exec(db, "DELETE FROM documents WHERE id = \(id)", nil, nil, nil)
+        var stmt: OpaquePointer?
+        if sqlite3_prepare_v2(db, "DELETE FROM document_chunks WHERE doc_id = ?", -1, &stmt, nil) == SQLITE_OK {
+            sqlite3_bind_int64(stmt, 1, id)
+            sqlite3_step(stmt)
+        }
+        sqlite3_finalize(stmt)
+
+        stmt = nil
+        if sqlite3_prepare_v2(db, "DELETE FROM documents WHERE id = ?", -1, &stmt, nil) == SQLITE_OK {
+            sqlite3_bind_int64(stmt, 1, id)
+            sqlite3_step(stmt)
+        }
+        sqlite3_finalize(stmt)
+
         await loadIntoMemory()
     }
 
@@ -335,25 +345,27 @@ actor DocumentStore {
     }
 
     private func loadPDF(path: String) -> String? {
-        // Shell out to pdftotext or use strings extraction
+        // Shell out to pdftotext or use strings extraction.
+        // Path is passed as sys.argv[1] — never interpolated into code.
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: "/usr/bin/env")
         proc.arguments = ["python3", "-c", """
         import sys
+        path = sys.argv[1]
         try:
             import fitz  # PyMuPDF
-            doc = fitz.open('\(path.replacingOccurrences(of: "'", with: "\\'"))')
+            doc = fitz.open(path)
             text = '\\n'.join(page.get_text() for page in doc)
             print(text)
         except ImportError:
             try:
                 from pdfminer.high_level import extract_text
-                print(extract_text('\(path.replacingOccurrences(of: "'", with: "\\'"))'))
+                print(extract_text(path))
             except ImportError:
                 import subprocess
-                result = subprocess.run(['/usr/bin/strings', '\(path.replacingOccurrences(of: "'", with: "\\'"))'], capture_output=True, text=True)
+                result = subprocess.run(['/usr/bin/strings', path], capture_output=True, text=True)
                 print(result.stdout)
-        """]
+        """, path]
 
         let pipe = Pipe()
         proc.standardOutput = pipe
