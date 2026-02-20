@@ -1300,34 +1300,41 @@ function saveSettings() {
 }
 
 // --- Init ---
+var isLocal = (location.hostname === 'localhost' || location.hostname === '127.0.0.1' || location.hostname === '::1');
+
 function initApp() {
     var params = new URLSearchParams(window.location.search);
     var urlToken = params.get('token');
     var storedToken = localStorage.getItem('torbo_dashboard_token');
     var t = urlToken || storedToken || '';
-    if (!t) {
+    if (!t && !isLocal) {
         showAuth();
         return;
     }
     TOKEN = t;
     fetch('/v1/dashboard/status', {
-        headers: {'Authorization': 'Bearer ' + t}
+        headers: t ? {'Authorization': 'Bearer ' + t} : {}
     }).then(function(r) {
         if (r.ok) {
-            localStorage.setItem('torbo_dashboard_token', t);
+            if (t) localStorage.setItem('torbo_dashboard_token', t);
             hideAuth();
             if (urlToken) {
                 window.history.replaceState({}, '', window.location.pathname);
             }
             loadOverview();
             overviewTimer = setInterval(loadOverview, 30000);
-        } else {
+        } else if (!isLocal) {
             TOKEN = '';
             localStorage.removeItem('torbo_dashboard_token');
             showAuth();
+        } else {
+            hideAuth();
+            loadOverview();
+            overviewTimer = setInterval(loadOverview, 30000);
         }
     }).catch(function() {
-        showAuth();
+        if (!isLocal) showAuth();
+        else { hideAuth(); loadOverview(); overviewTimer = setInterval(loadOverview, 30000); }
     });
 }
 

@@ -674,6 +674,7 @@ enum WebChatHTML {
     <script>
     let TOKEN = localStorage.getItem('torbo_chat_token') || '';
     const BASE = window.location.origin;
+    const isLocal = (location.hostname === 'localhost' || location.hostname === '127.0.0.1' || location.hostname === '::1');
     const messagesEl = document.getElementById('messages');
     const inputEl = document.getElementById('input');
     const modelEl = document.getElementById('model');
@@ -1239,15 +1240,14 @@ enum WebChatHTML {
     });
 
     async function loadModels() {
-        if (!TOKEN) {
+        if (!TOKEN && !isLocal) {
             showAuth();
             return;
         }
         try {
-            const res = await fetch(BASE + '/v1/models', {
-                headers: { 'Authorization': 'Bearer ' + TOKEN }
-            });
-            if (res.status === 401) {
+            const hdrs = TOKEN ? { 'Authorization': 'Bearer ' + TOKEN } : {};
+            const res = await fetch(BASE + '/v1/models', { headers: hdrs });
+            if (res.status === 401 && !isLocal) {
                 TOKEN = '';
                 localStorage.removeItem('torbo_chat_token');
                 showAuth();

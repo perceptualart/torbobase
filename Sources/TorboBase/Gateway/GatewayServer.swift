@@ -630,7 +630,7 @@ actor GatewayServer {
         // Cloud mode: accept both Supabase JWT and legacy server token
         let cloudContext: CloudRequestContext? = await resolveCloudAuth(req)
 
-        guard authenticate(req) || cloudContext != nil else {
+        guard authenticate(req, clientIP: clientIP) || cloudContext != nil else {
             await audit(clientIP: clientIP, method: req.method, path: req.path,
                        required: .chatOnly, granted: false, detail: "Auth failed")
             return HTTPResponse.unauthorized()
@@ -1400,7 +1400,9 @@ actor GatewayServer {
 
     // MARK: - Authentication
 
-    private func authenticate(_ req: HTTPRequest) -> Bool {
+    private func authenticate(_ req: HTTPRequest, clientIP: String = "") -> Bool {
+        // Localhost access skips auth entirely
+        if clientIP == "127.0.0.1" || clientIP == "::1" || clientIP == "localhost" { return true }
         guard let auth = req.headers["authorization"] ?? req.headers["Authorization"] else { return false }
         let token = auth.hasPrefix("Bearer ") ? String(auth.dropFirst(7)) : auth
         if token == KeychainManager.serverToken { return true }
