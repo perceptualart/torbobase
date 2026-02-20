@@ -87,6 +87,17 @@ struct TorboBaseServer {
         TorboLog.info("Initializing agent configs...", subsystem: "Main")
         _ = await AgentConfigManager.shared.listAgents()
 
+        // Initialize cloud services (Supabase auth + Stripe billing)
+        TorboLog.info("Initializing cloud services...", subsystem: "Main")
+        await SupabaseAuth.shared.initialize()
+        await StripeManager.shared.initialize()
+        if await SupabaseAuth.shared.isEnabled {
+            TorboLog.info("Cloud auth: ENABLED (Supabase)", subsystem: "Main")
+        }
+        if await StripeManager.shared.isEnabled {
+            TorboLog.info("Stripe billing: ENABLED", subsystem: "Main")
+        }
+
         // Start the gateway server — this is the critical call that was missing
         TorboLog.info("Starting gateway server...", subsystem: "Main")
         await GatewayServer.shared.start(appState: AppState.shared)
@@ -123,6 +134,10 @@ struct TorboBaseServer {
         TorboLog.info("API:       http://\(host):\(port)/v1/", subsystem: "Main")
         TorboLog.info("Chat:      http://\(host):\(port)/chat", subsystem: "Main")
         TorboLog.info("Dashboard: http://\(host):\(port)/dashboard", subsystem: "Main")
+        if await SupabaseAuth.shared.isEnabled {
+            TorboLog.info("Auth:      POST http://\(host):\(port)/v1/auth/magic-link", subsystem: "Main")
+            TorboLog.info("Billing:   GET  http://\(host):\(port)/v1/billing/status", subsystem: "Main")
+        }
 
         // Graceful shutdown on SIGINT/SIGTERM
         // On Linux, DispatchSource signal handlers + dispatchMain() can crash

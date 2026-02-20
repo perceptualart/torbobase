@@ -1,0 +1,51 @@
+# Torbo Base Cloud — Fly.io Deployment Configuration
+# (c) 2026 Perceptual Art LLC
+#
+# Deploy:
+#   fly launch --no-deploy       # First time: creates app
+#   fly secrets set ANTHROPIC_API_KEY=sk-... SUPABASE_URL=https://...
+#   fly deploy                    # Deploy the image
+#
+# Custom domain:
+#   fly certs add cloud.torbo.app
+#   → Add the CNAME record shown to your DNS
+
+app = "torbo-base-cloud"
+primary_region = "iad"     # US East (Ashburn, VA)
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  TORBO_PORT = "4200"
+  TORBO_HOST = "0.0.0.0"
+  TORBO_ACCESS_LEVEL = "1"
+
+[http_service]
+  internal_port = 4200
+  force_https = true
+  auto_stop_machines = "suspend"
+  auto_start_machines = true
+  min_machines_running = 1
+  processes = ["app"]
+
+  [http_service.concurrency]
+    type = "connections"
+    hard_limit = 100
+    soft_limit = 80
+
+  [[http_service.checks]]
+    interval = "30s"
+    timeout = "5s"
+    grace_period = "15s"
+    method = "GET"
+    path = "/health"
+
+[[vm]]
+  size = "shared-cpu-2x"
+  memory = "1024mb"
+  cpus = 2
+
+[metrics]
+  port = 9091
+  path = "/metrics"

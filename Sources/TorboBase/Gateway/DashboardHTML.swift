@@ -330,8 +330,18 @@ tr:hover { background: rgba(255,255,255,0.02); }
         <div class="nav-item" onclick="switchTab('settings')" data-tab="settings">
             <span class="nav-icon">&#9881;</span> Arkhe
         </div>
+        <div class="nav-item" onclick="switchTab('legal')" data-tab="legal">
+            <span class="nav-icon">&#9878;</span> Legal
+        </div>
     </div>
     <div class="sidebar-footer">
+        <div style="margin-bottom:8px;">
+            <a href="#" onclick="switchTab('legal');return false;" style="color:var(--text-dim);font-size:9px;text-decoration:none;letter-spacing:0.5px;">Terms</a>
+            <span style="color:var(--text-dim);font-size:9px;margin:0 4px;">&middot;</span>
+            <a href="#" onclick="switchTab('legal');return false;" style="color:var(--text-dim);font-size:9px;text-decoration:none;letter-spacing:0.5px;">Privacy</a>
+            <span style="color:var(--text-dim);font-size:9px;margin:0 4px;">&middot;</span>
+            <a href="#" onclick="switchTab('legal');return false;" style="color:var(--text-dim);font-size:9px;text-decoration:none;letter-spacing:0.5px;">Principles</a>
+        </div>
         <span id="versionLabel">TORBO BASE</span>
     </div>
 </div>
@@ -517,6 +527,93 @@ tr:hover { background: rgba(255,255,255,0.02); }
         <div class="pagination" id="logsPagination"></div>
     </div>
 
+    <!-- Legal Tab -->
+    <div id="tab-legal" class="tab-panel">
+        <div class="page-title">Legal &amp; Principles</div>
+
+        <!-- Constitution / Our Principles -->
+        <div class="section-label">Our Principles</div>
+        <div class="card" style="border-left:3px solid var(--cyan);">
+            <div style="display:flex;align-items:center;gap:12px;margin-bottom:16px;">
+                <span style="font-size:28px;">&#9878;</span>
+                <div>
+                    <div style="font-size:16px;font-weight:700;color:var(--text-bright);">The Torbo Constitution</div>
+                    <div style="font-size:12px;color:var(--text-dim);">Built into every conversation. Cannot be overridden.</div>
+                </div>
+            </div>
+
+            <div style="margin-bottom:20px;">
+                <div style="font-size:13px;color:var(--text-dim);line-height:1.6;margin-bottom:16px;">
+                    Torbo is an AI assistant built to work for you &mdash; not on you. These principles are built into every conversation, every agent, and every interaction.
+                </div>
+
+                <div style="font-size:12px;font-weight:600;color:var(--green);letter-spacing:1px;text-transform:uppercase;margin-bottom:8px;">Torbo will always:</div>
+                <div style="font-size:13px;color:var(--text);line-height:1.8;margin-bottom:16px;padding-left:12px;border-left:2px solid rgba(34,197,94,0.3);">
+                    &#10003; Protect your privacy &mdash; your data belongs to you<br>
+                    &#10003; Be honest &mdash; truth over comfort, always<br>
+                    &#10003; Explain its reasoning &mdash; not just what, but why<br>
+                    &#10003; Respect your data &mdash; export, delete, or close anytime<br>
+                    &#10003; Work in your interest &mdash; help, not manipulate<br>
+                    &#10003; Provide help in a crisis &mdash; emergency resources, never dismissal
+                </div>
+
+                <div style="font-size:12px;font-weight:600;color:var(--red);letter-spacing:1px;text-transform:uppercase;margin-bottom:8px;">Torbo will never:</div>
+                <div style="font-size:13px;color:var(--text);line-height:1.8;margin-bottom:16px;padding-left:12px;border-left:2px solid rgba(239,68,68,0.3);">
+                    &#10007; Generate spam, scams, or malware<br>
+                    &#10007; Facilitate harassment, bullying, or abuse<br>
+                    &#10007; Generate CSAM or exploit minors<br>
+                    &#10007; Create content promoting violence or terrorism<br>
+                    &#10007; Impersonate real people for misinformation<br>
+                    &#10007; Enable illegal surveillance<br>
+                    &#10007; Claim to be human
+                </div>
+
+                <div style="font-size:12px;font-weight:600;color:var(--yellow);letter-spacing:1px;text-transform:uppercase;margin-bottom:8px;">If Torbo refuses:</div>
+                <div style="font-size:13px;color:var(--text);line-height:1.8;margin-bottom:16px;padding-left:12px;border-left:2px solid rgba(234,179,8,0.3);">
+                    It will always explain why, suggest alternatives, and never just say no without reason.
+                </div>
+
+                <div style="font-size:12px;font-weight:600;color:var(--cyan);letter-spacing:1px;text-transform:uppercase;margin-bottom:8px;">Your rights:</div>
+                <div style="font-size:13px;color:var(--text);line-height:1.8;padding-left:12px;border-left:2px solid rgba(0,229,255,0.3);">
+                    Delete your data anytime &bull; Export everything &bull; Close your account &bull; Report violations
+                </div>
+            </div>
+            <div style="font-size:11px;color:var(--text-dim);font-style:italic;">
+                Questions? Contact <span style="color:var(--cyan);">constitution@torbo.app</span>
+            </div>
+        </div>
+
+        <!-- Legal Documents -->
+        <div class="section-label" style="margin-top:32px;">Legal Documents</div>
+        <div class="card-grid">
+            <div class="card" style="cursor:pointer;" onclick="window.open('/legal/terms-of-service.html','_blank')">
+                <div style="font-size:15px;font-weight:600;color:var(--text-bright);margin-bottom:6px;">Terms of Service</div>
+                <div style="font-size:12px;color:var(--text-dim);line-height:1.5;">Service description, subscriptions, acceptable use, liability, dispute resolution.</div>
+                <div style="margin-top:10px;"><span class="badge badge-cyan">View &rarr;</span></div>
+            </div>
+            <div class="card" style="cursor:pointer;" onclick="window.open('/legal/privacy-policy.html','_blank')">
+                <div style="font-size:15px;font-weight:600;color:var(--text-bright);margin-bottom:6px;">Privacy Policy</div>
+                <div style="font-size:12px;color:var(--text-dim);line-height:1.5;">What we collect, what we don't, local vs. cloud data, your rights, third-party services.</div>
+                <div style="margin-top:10px;"><span class="badge badge-green">View &rarr;</span></div>
+            </div>
+            <div class="card" style="cursor:pointer;" onclick="window.open('/legal/acceptable-use-policy.html','_blank')">
+                <div style="font-size:15px;font-weight:600;color:var(--text-bright);margin-bottom:6px;">Acceptable Use Policy</div>
+                <div style="font-size:12px;color:var(--text-dim);line-height:1.5;">Prohibited content, infrastructure abuse, account integrity, violation consequences.</div>
+                <div style="margin-top:10px;"><span class="badge badge-yellow">View &rarr;</span></div>
+            </div>
+            <div class="card" style="cursor:pointer;" onclick="window.open('/legal/torbo-constitution.html','_blank')">
+                <div style="font-size:15px;font-weight:600;color:var(--text-bright);margin-bottom:6px;">Torbo Constitution</div>
+                <div style="font-size:12px;color:var(--text-dim);line-height:1.5;">Our principles in plain language. What Torbo will and won't do.</div>
+                <div style="margin-top:10px;"><span class="badge badge-purple">View &rarr;</span></div>
+            </div>
+        </div>
+
+        <div style="text-align:center;margin-top:24px;font-size:11px;color:var(--text-dim);">
+            &copy; 2026 Perceptual Art LLC. All rights reserved. &bull;
+            <span style="color:var(--cyan);">legal@torbo.app</span>
+        </div>
+    </div>
+
     <!-- Settings Tab -->
     <div id="tab-settings" class="tab-panel">
         <div class="page-title">Settings</div>
@@ -564,6 +661,24 @@ tr:hover { background: rgba(255,255,255,0.02); }
                 <textarea id="setSysPrompt" rows="4" placeholder="Custom system prompt..." style="margin-top:8px;"></textarea>
             </div>
             <button class="btn btn-primary" onclick="saveSettings()">Save Settings</button>
+        </div>
+
+        <div class="section-label" style="margin-top:24px;">About</div>
+        <div class="card">
+            <div style="display:flex;gap:16px;flex-wrap:wrap;">
+                <a href="#" onclick="switchTab('legal');return false;" style="text-decoration:none;display:flex;align-items:center;gap:8px;padding:10px 16px;background:rgba(0,229,255,0.06);border:1px solid rgba(0,229,255,0.15);border-radius:10px;color:var(--cyan);font-size:13px;font-weight:600;">
+                    &#9878; Our Principles
+                </a>
+                <a href="/legal/terms-of-service.html" target="_blank" style="text-decoration:none;display:flex;align-items:center;gap:8px;padding:10px 16px;background:rgba(255,255,255,0.04);border:1px solid var(--border);border-radius:10px;color:var(--text-dim);font-size:13px;font-weight:500;">
+                    Terms of Service
+                </a>
+                <a href="/legal/privacy-policy.html" target="_blank" style="text-decoration:none;display:flex;align-items:center;gap:8px;padding:10px 16px;background:rgba(255,255,255,0.04);border:1px solid var(--border);border-radius:10px;color:var(--text-dim);font-size:13px;font-weight:500;">
+                    Privacy Policy
+                </a>
+                <a href="/legal/acceptable-use-policy.html" target="_blank" style="text-decoration:none;display:flex;align-items:center;gap:8px;padding:10px 16px;background:rgba(255,255,255,0.04);border:1px solid var(--border);border-radius:10px;color:var(--text-dim);font-size:13px;font-weight:500;">
+                    Acceptable Use
+                </a>
+            </div>
         </div>
     </div>
 

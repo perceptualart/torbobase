@@ -1,0 +1,625 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Torbo — Privacy Policy</title>
+    <style>
+        *, *::before, *::after {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        html {
+            scroll-behavior: smooth;
+        }
+
+        body {
+            background-color: #0a0a0d;
+            color: #e0e0e0;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            line-height: 1.7;
+            font-size: 16px;
+        }
+
+        /* -- Header / Logo Bar -- */
+        .header {
+            border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+            padding: 1.5rem 2rem;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-direction: column;
+            gap: 1rem;
+        }
+
+        .logo-row {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+        }
+
+        .logo-row span {
+            font-size: 1.4rem;
+            font-weight: 700;
+            letter-spacing: 0.05em;
+            color: #ffffff;
+        }
+
+        /* -- Navigation -- */
+        nav {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.5rem 1.5rem;
+            justify-content: center;
+        }
+
+        nav a {
+            color: #00e5ff;
+            text-decoration: none;
+            font-size: 0.85rem;
+            font-weight: 500;
+            letter-spacing: 0.03em;
+            padding: 0.3rem 0;
+            border-bottom: 1px solid transparent;
+            transition: border-color 0.2s, color 0.2s;
+        }
+
+        nav a:hover {
+            border-bottom-color: #00e5ff;
+        }
+
+        nav a.active {
+            color: #a855f7;
+            border-bottom-color: #a855f7;
+        }
+
+        /* -- Main Content -- */
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 2.5rem 1.5rem 4rem;
+        }
+
+        /* -- Title Block -- */
+        .title-block {
+            margin-bottom: 2.5rem;
+            padding-bottom: 2rem;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+        }
+
+        h1 {
+            font-size: 2.2rem;
+            font-weight: 700;
+            color: #ffffff;
+            margin-bottom: 1rem;
+            letter-spacing: -0.01em;
+        }
+
+        .meta {
+            font-size: 0.9rem;
+            color: #888;
+            line-height: 1.8;
+        }
+
+        .meta strong {
+            color: #aaa;
+        }
+
+        /* -- Summary Box -- */
+        .summary-box {
+            background: linear-gradient(135deg, rgba(168, 85, 247, 0.08), rgba(0, 229, 255, 0.06));
+            border: 1px solid rgba(168, 85, 247, 0.2);
+            border-radius: 12px;
+            padding: 1.5rem 1.75rem;
+            margin-bottom: 2.5rem;
+        }
+
+        .summary-box p {
+            color: #d0d0d0;
+            font-size: 0.95rem;
+        }
+
+        .summary-box strong {
+            color: #a855f7;
+        }
+
+        /* -- Section Headings -- */
+        h2 {
+            font-size: 1.4rem;
+            font-weight: 700;
+            color: #00e5ff;
+            margin-top: 2.5rem;
+            margin-bottom: 1rem;
+            padding-bottom: 0.4rem;
+            border-bottom: 1px solid rgba(0, 229, 255, 0.15);
+        }
+
+        h3 {
+            font-size: 1.1rem;
+            font-weight: 600;
+            color: #a855f7;
+            margin-top: 1.5rem;
+            margin-bottom: 0.6rem;
+        }
+
+        /* -- Paragraphs -- */
+        p {
+            margin-bottom: 1rem;
+            color: #d0d0d0;
+        }
+
+        /* -- Lists -- */
+        ul {
+            margin-bottom: 1rem;
+            padding-left: 1.5rem;
+        }
+
+        ul li {
+            margin-bottom: 0.5rem;
+            color: #d0d0d0;
+        }
+
+        ul li strong {
+            color: #ffffff;
+        }
+
+        /* -- Emphasis -- */
+        strong {
+            color: #ffffff;
+            font-weight: 600;
+        }
+
+        a {
+            color: #00e5ff;
+            text-decoration: none;
+        }
+
+        a:hover {
+            text-decoration: underline;
+        }
+
+        /* -- Horizontal Rule -- */
+        hr {
+            border: none;
+            border-top: 1px solid rgba(255, 255, 255, 0.08);
+            margin: 2.5rem 0;
+        }
+
+        /* -- Table -- */
+        .table-wrapper {
+            overflow-x: auto;
+            margin: 1.5rem 0;
+            border-radius: 10px;
+            border: 1px solid rgba(255, 255, 255, 0.08);
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.9rem;
+        }
+
+        thead th {
+            background: rgba(168, 85, 247, 0.12);
+            color: #a855f7;
+            font-weight: 600;
+            text-align: left;
+            padding: 0.85rem 1rem;
+            border-bottom: 1px solid rgba(168, 85, 247, 0.2);
+            letter-spacing: 0.03em;
+            font-size: 0.8rem;
+            text-transform: uppercase;
+        }
+
+        tbody td {
+            padding: 0.75rem 1rem;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+            color: #d0d0d0;
+            vertical-align: top;
+        }
+
+        tbody tr:last-child td {
+            border-bottom: none;
+        }
+
+        tbody tr:hover {
+            background: rgba(0, 229, 255, 0.03);
+        }
+
+        tbody td strong {
+            color: #00e5ff;
+        }
+
+        /* -- Callout / Important -- */
+        .callout {
+            background: rgba(0, 229, 255, 0.05);
+            border-left: 3px solid #00e5ff;
+            padding: 1rem 1.25rem;
+            margin: 1.5rem 0;
+            border-radius: 0 8px 8px 0;
+            font-size: 0.9rem;
+        }
+
+        .callout strong {
+            color: #00e5ff;
+        }
+
+        /* -- Compliance List -- */
+        .compliance-list {
+            list-style: none;
+            padding-left: 0;
+        }
+
+        .compliance-list li {
+            padding: 0.4rem 0;
+            padding-left: 1.5rem;
+            position: relative;
+        }
+
+        .compliance-list li::before {
+            content: '';
+            position: absolute;
+            left: 0;
+            top: 0.85rem;
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: #a855f7;
+        }
+
+        /* -- Footer -- */
+        .footer {
+            text-align: center;
+            padding: 2rem 1.5rem;
+            border-top: 1px solid rgba(255, 255, 255, 0.06);
+            margin-top: 3rem;
+        }
+
+        .footer p {
+            color: #555;
+            font-size: 0.85rem;
+        }
+
+        .footer a {
+            color: #00e5ff;
+        }
+
+        /* -- Responsive -- */
+        @media (max-width: 640px) {
+            .header {
+                padding: 1rem;
+            }
+
+            .container {
+                padding: 1.5rem 1rem 3rem;
+            }
+
+            h1 {
+                font-size: 1.6rem;
+            }
+
+            h2 {
+                font-size: 1.2rem;
+            }
+
+            table {
+                font-size: 0.82rem;
+            }
+
+            thead th, tbody td {
+                padding: 0.6rem 0.7rem;
+            }
+        }
+    </style>
+</head>
+<body>
+
+    <!-- Header -->
+    <header class="header">
+        <div class="logo-row">
+            <svg width="36" height="36" viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <defs>
+                    <radialGradient id="orbGrad" cx="50%" cy="40%" r="55%">
+                        <stop offset="0%" stop-color="#a855f7" />
+                        <stop offset="60%" stop-color="#7c3aed" />
+                        <stop offset="100%" stop-color="#00e5ff" />
+                    </radialGradient>
+                    <radialGradient id="orbShine" cx="35%" cy="30%" r="40%">
+                        <stop offset="0%" stop-color="rgba(255,255,255,0.35)" />
+                        <stop offset="100%" stop-color="rgba(255,255,255,0)" />
+                    </radialGradient>
+                </defs>
+                <circle cx="18" cy="18" r="16" fill="url(#orbGrad)" />
+                <circle cx="18" cy="18" r="16" fill="url(#orbShine)" />
+                <circle cx="18" cy="18" r="16" stroke="rgba(0,229,255,0.3)" stroke-width="0.75" fill="none" />
+            </svg>
+            <span>TORBO</span>
+        </div>
+        <nav>
+            <a href="privacy-policy.html" class="active">Privacy Policy</a>
+            <a href="terms-of-service.html">Terms of Service</a>
+            <a href="acceptable-use-policy.html">Acceptable Use Policy</a>
+            <a href="torbo-constitution.html">Constitution</a>
+        </nav>
+    </header>
+
+    <!-- Main Content -->
+    <main class="container">
+
+        <!-- Title Block -->
+        <div class="title-block">
+            <h1>Privacy Policy</h1>
+            <div class="meta">
+                <strong>Effective Date:</strong> February 19, 2026<br>
+                <strong>Last Updated:</strong> February 19, 2026<br>
+                <strong>Operator:</strong> Perceptual Art LLC ("Torbo," "Company," "we," "us," or "our")
+            </div>
+        </div>
+
+        <!-- Summary -->
+        <div class="summary-box">
+            <p><strong>Your privacy is fundamental to Torbo.</strong> We collect only what is necessary to provide the Service. We never sell your data. We never use your conversations to train AI models. When you use Torbo Base locally, all your data stays on your device.</p>
+        </div>
+
+        <!-- Section 1 -->
+        <h2>1. Information We Collect</h2>
+
+        <h3>1.1 Account Information</h3>
+        <ul>
+            <li><strong>Email address:</strong> Required for authentication and account management</li>
+            <li><strong>Account creation date and subscription status</strong></li>
+            <li><strong>Payment information:</strong> Processed by Stripe &mdash; we never store your full credit card number</li>
+        </ul>
+
+        <h3>1.2 Conversation Data</h3>
+        <ul>
+            <li><strong>Cloud mode:</strong> When using cloud AI providers, your conversation history is stored in our database (Supabase) to enable cross-device sync and conversation continuity. Conversations are encrypted at rest using AES-256.</li>
+            <li><strong>Local mode (Torbo Base):</strong> When running Torbo Base, all conversation data stays on your device. We never see, access, or store your local conversations.</li>
+        </ul>
+
+        <h3>1.3 Agent Configurations</h3>
+        <ul>
+            <li>Custom agent settings, personalities, and configurations you create</li>
+            <li>Skill configurations and preferences</li>
+        </ul>
+
+        <h3>1.4 Device Information</h3>
+        <ul>
+            <li>Device type and operating system version (collected only when you submit feedback)</li>
+            <li>App version number</li>
+        </ul>
+
+        <h3>1.5 Feedback Data</h3>
+        <ul>
+            <li>If you voluntarily submit feedback: your message, feedback type, and optionally your email and device info</li>
+            <li>Stored in Supabase and used solely for product improvement</li>
+        </ul>
+
+        <!-- Section 2 -->
+        <h2>2. Information We Do NOT Collect</h2>
+        <ul>
+            <li><strong>We do not use your conversations to train AI models</strong> &mdash; ever</li>
+            <li><strong>We do not sell, rent, or share your personal data with third parties</strong> for marketing or advertising</li>
+            <li><strong>We do not collect telemetry, analytics, or usage tracking</strong> &mdash; Torbo contains zero tracking code</li>
+            <li><strong>We do not collect location data</strong></li>
+            <li><strong>We do not use cookies for tracking</strong> &mdash; only essential authentication tokens</li>
+            <li><strong>We do not collect browsing history or app usage patterns</strong></li>
+            <li><strong>We do not perform behavioral profiling</strong></li>
+        </ul>
+
+        <!-- Section 3 -->
+        <h2>3. Local vs. Cloud Data</h2>
+
+        <h3>3.1 Self-Hosted Torbo Base (Local Mode)</h3>
+        <p>When you run Torbo Base on your own computer:</p>
+        <ul>
+            <li><strong>All data stays on your device.</strong> Conversations, memories (Library of Alexandria), agent configurations, API keys, and all other data are stored locally.</li>
+            <li><strong>Network communication is local.</strong> The Torbo App communicates with Torbo Base over your local network or Tailscale VPN. No data passes through our servers.</li>
+            <li><strong>API keys are encrypted locally.</strong> Your API keys are stored in an encrypted keychain file (AES-256-CBC) on your device. We never see or have access to your keys.</li>
+            <li><strong>We have zero visibility</strong> into your local Torbo Base usage.</li>
+        </ul>
+
+        <h3>3.2 Cloud Mode</h3>
+        <p>When you use cloud AI providers through the Torbo App without a local Base:</p>
+        <ul>
+            <li>Your prompts are sent directly to the AI provider (Anthropic, OpenAI, Google, xAI) using your own API keys</li>
+            <li>Conversation history may be stored in our cloud database for sync purposes</li>
+            <li>We do not add tracking, analytics, or metadata to your AI requests</li>
+            <li>Each AI provider has its own privacy policy governing how they handle your prompts</li>
+        </ul>
+
+        <!-- Section 4 -->
+        <h2>4. Data Storage and Encryption</h2>
+        <ul>
+            <li><strong>Encryption at rest:</strong> All stored data is encrypted using AES-256 encryption</li>
+            <li><strong>Encryption in transit:</strong> All network communications use TLS/HTTPS</li>
+            <li><strong>API key storage:</strong> Encrypted with AES-256-CBC using a machine-derived key (local mode) or Supabase encrypted storage (cloud mode)</li>
+            <li><strong>Authentication tokens:</strong> Stored locally in the device's secure Keychain (iOS) or encrypted keychain file (macOS)</li>
+            <li><strong>Database:</strong> Cloud data is hosted on Supabase with row-level security and encryption at rest</li>
+        </ul>
+
+        <!-- Section 5 -->
+        <h2>5. Data Retention</h2>
+        <ul>
+            <li><strong>Conversations:</strong> Retained until you delete them. You may configure auto-deletion periods in Settings.</li>
+            <li><strong>Account data:</strong> Retained while your account is active. Deleted within 30 days of account closure.</li>
+            <li><strong>Feedback:</strong> Retained for product improvement purposes. You may request deletion at any time.</li>
+            <li><strong>Local data (Torbo Base):</strong> You control all retention. Clear from Settings or delete the application data directory.</li>
+            <li><strong>Backups:</strong> Cloud backups are retained for up to 30 days after deletion for disaster recovery, then permanently purged.</li>
+        </ul>
+
+        <!-- Section 6 -->
+        <h2>6. Third-Party Services</h2>
+        <p>Torbo integrates with the following third-party services. Your use of these services is governed by their respective privacy policies:</p>
+
+        <div class="table-wrapper">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Service</th>
+                        <th>Purpose</th>
+                        <th>Data Shared</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><strong>Supabase</strong></td>
+                        <td>Authentication, cloud database</td>
+                        <td>Email, account data, conversation history (cloud mode)</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Stripe</strong></td>
+                        <td>Payment processing</td>
+                        <td>Payment information (name, card, billing address)</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Anthropic</strong></td>
+                        <td>AI provider (Claude)</td>
+                        <td>Your prompts and conversations (when using Claude)</td>
+                    </tr>
+                    <tr>
+                        <td><strong>OpenAI</strong></td>
+                        <td>AI provider (GPT)</td>
+                        <td>Your prompts and conversations (when using GPT)</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Google</strong></td>
+                        <td>AI provider (Gemini)</td>
+                        <td>Your prompts and conversations (when using Gemini)</td>
+                    </tr>
+                    <tr>
+                        <td><strong>xAI</strong></td>
+                        <td>AI provider (Grok)</td>
+                        <td>Your prompts and conversations (when using Grok)</td>
+                    </tr>
+                    <tr>
+                        <td><strong>ElevenLabs</strong></td>
+                        <td>Text-to-speech voices</td>
+                        <td>Text content sent for voice synthesis</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <div class="callout">
+            <p><strong>Important:</strong> When you use an AI provider, your prompts are sent to that provider's servers under their privacy policy. We encourage you to review each provider's privacy policy. Running local models via Ollama through Torbo Base avoids sending data to any third party.</p>
+        </div>
+
+        <!-- Section 7 -->
+        <h2>7. Your Rights</h2>
+        <p>You have the following rights regarding your data:</p>
+
+        <h3>7.1 Access</h3>
+        <p>You may request a copy of all personal data we hold about you by contacting <a href="mailto:privacy@torbo.app">privacy@torbo.app</a>.</p>
+
+        <h3>7.2 Export</h3>
+        <p>You may export all your data (conversations, agent configurations, memories) at any time through the app or by contacting us.</p>
+
+        <h3>7.3 Deletion</h3>
+        <p>You may delete your data at any time:</p>
+        <ul>
+            <li><strong>Conversations:</strong> Delete individual conversations or clear all from Settings</li>
+            <li><strong>Memory (LoA):</strong> Clear all memories from Settings &gt; Privacy &amp; Safety</li>
+            <li><strong>Account:</strong> Request complete account deletion &mdash; all data permanently removed within 30 days</li>
+            <li><strong>Local data:</strong> Clear from Settings or delete the application data directory</li>
+        </ul>
+
+        <h3>7.4 Close Account</h3>
+        <p>You may close your account at any time by contacting <a href="mailto:privacy@torbo.app">privacy@torbo.app</a>. Upon closure:</p>
+        <ul>
+            <li>All cloud-stored data is queued for permanent deletion</li>
+            <li>Deletion completes within 30 days</li>
+            <li>We retain no copies after the deletion period</li>
+        </ul>
+
+        <h3>7.5 Report Violations</h3>
+        <p>If you believe your privacy rights have been violated, contact <a href="mailto:privacy@torbo.app">privacy@torbo.app</a> or file a complaint with your local data protection authority.</p>
+
+        <!-- Section 8 -->
+        <h2>8. GDPR Rights (EU/EEA Users)</h2>
+        <p>If you are in the EU/EEA, you additionally have the right to:</p>
+        <ul>
+            <li><strong>Rectification:</strong> Correct inaccurate personal data</li>
+            <li><strong>Restriction:</strong> Restrict processing of your data</li>
+            <li><strong>Portability:</strong> Receive your data in a portable format</li>
+            <li><strong>Object:</strong> Object to processing based on legitimate interests</li>
+            <li><strong>Withdraw consent:</strong> Withdraw consent at any time without affecting prior processing</li>
+        </ul>
+        <p>Our legal basis for processing: contractual necessity (providing the Service), legitimate interests (security, fraud prevention), and consent (optional features like feedback).</p>
+
+        <!-- Section 9 -->
+        <h2>9. CCPA/CPRA Rights (California Users)</h2>
+        <p>If you are a California resident:</p>
+        <ul>
+            <li><strong>We do not sell your personal information</strong> &mdash; we never have and never will</li>
+            <li><strong>We do not share your personal information</strong> for cross-context behavioral advertising</li>
+            <li>You have the right to know what personal information we collect and how it is used</li>
+            <li>You have the right to delete your personal information</li>
+            <li>You have the right to non-discrimination for exercising your rights</li>
+        </ul>
+
+        <!-- Section 10 -->
+        <h2>10. Children's Privacy</h2>
+        <p>Torbo is not intended for children under the age of 13. We do not knowingly collect personal information from children under 13 in compliance with the Children's Online Privacy Protection Act (COPPA).</p>
+        <p>If we become aware that a child under 13 has provided us with personal information, we will promptly delete that information. If you believe a child under 13 has used Torbo, please contact us at <a href="mailto:privacy@torbo.app">privacy@torbo.app</a>.</p>
+        <p>For users aged 13&ndash;17, parental consent is recommended.</p>
+
+        <!-- Section 11 -->
+        <h2>11. Cookie and Tracking Policy</h2>
+        <p>Torbo uses <strong>minimal cookies/tokens</strong>:</p>
+        <ul>
+            <li><strong>Authentication tokens:</strong> Required to maintain your login session. Stored locally on your device. Not shared with third parties.</li>
+            <li><strong>No tracking cookies:</strong> We do not use cookies for analytics, advertising, or behavioral tracking.</li>
+            <li><strong>No third-party trackers:</strong> We do not embed third-party tracking scripts, pixels, or beacons.</li>
+            <li><strong>No fingerprinting:</strong> We do not use browser or device fingerprinting.</li>
+        </ul>
+
+        <!-- Section 12 -->
+        <h2>12. Data Breach Notification</h2>
+        <p>In the event of a data breach affecting your personal information:</p>
+        <ul>
+            <li>We will notify affected users within 72 hours of discovery</li>
+            <li>We will notify relevant data protection authorities as required by law</li>
+            <li>We will provide details of the breach, potential impact, and steps taken to mitigate</li>
+        </ul>
+
+        <!-- Section 13 -->
+        <h2>13. Changes to This Policy</h2>
+        <p>We may update this Privacy Policy from time to time. We will provide at least <strong>30 days' notice</strong> of material changes via email or prominent notice in the Service. Your continued use after the notice period constitutes acceptance.</p>
+        <p>The "Last Updated" date at the top of this policy indicates when changes were last made.</p>
+
+        <!-- Section 14 -->
+        <h2>14. Contact</h2>
+        <p>For questions about this Privacy Policy or to exercise your data rights:</p>
+        <p>
+            <strong>Perceptual Art LLC</strong><br>
+            Email: <a href="mailto:privacy@torbo.app">privacy@torbo.app</a><br>
+            Website: <a href="https://torbo.app">https://torbo.app</a>
+        </p>
+        <p>For data protection inquiries in the EU, you may also contact your local supervisory authority.</p>
+
+        <hr>
+
+        <!-- Compliance -->
+        <h2>Compliance</h2>
+        <p>This Privacy Policy is designed to comply with:</p>
+        <ul class="compliance-list">
+            <li><strong>GDPR</strong> (EU General Data Protection Regulation)</li>
+            <li><strong>CCPA/CPRA</strong> (California Consumer Privacy Act / California Privacy Rights Act)</li>
+            <li><strong>COPPA</strong> (Children's Online Privacy Protection Act)</li>
+            <li><strong>PIPEDA</strong> (Canadian Personal Information Protection and Electronic Documents Act)</li>
+            <li><strong>Apple App Store Guidelines</strong> (Section 5.1 &mdash; Privacy)</li>
+        </ul>
+
+    </main>
+
+    <!-- Footer -->
+    <footer class="footer">
+        <p>&copy; 2026 Perceptual Art LLC. All rights reserved.</p>
+        <p style="margin-top: 0.5rem;"><a href="https://torbo.app">torbo.app</a></p>
+    </footer>
+
+</body>
+</html>

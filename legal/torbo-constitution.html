@@ -1,0 +1,627 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>The Torbo Constitution</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            background-color: #0a0a0d;
+            color: #e0e0e0;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+            line-height: 1.7;
+            min-height: 100vh;
+        }
+
+        /* Top navigation bar */
+        .top-nav {
+            background: rgba(10, 10, 13, 0.95);
+            border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+            padding: 14px 24px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 32px;
+            position: sticky;
+            top: 0;
+            z-index: 100;
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+        }
+
+        .top-nav a {
+            color: #888;
+            text-decoration: none;
+            font-size: 13px;
+            font-weight: 500;
+            letter-spacing: 0.3px;
+            transition: color 0.2s;
+        }
+
+        .top-nav a:hover {
+            color: #00e5ff;
+        }
+
+        .top-nav a.active {
+            color: #fff;
+        }
+
+        .nav-separator {
+            color: rgba(255, 255, 255, 0.12);
+            font-size: 13px;
+            user-select: none;
+        }
+
+        /* Main container */
+        .container {
+            max-width: 760px;
+            margin: 0 auto;
+            padding: 60px 24px 80px;
+        }
+
+        /* Header / Logo area */
+        .header {
+            text-align: center;
+            margin-bottom: 56px;
+        }
+
+        .orb-logo {
+            margin-bottom: 28px;
+        }
+
+        .header h1 {
+            font-size: 36px;
+            font-weight: 700;
+            color: #fff;
+            letter-spacing: -0.5px;
+            margin-bottom: 20px;
+        }
+
+        .header .subtitle {
+            font-size: 17px;
+            color: #999;
+            max-width: 560px;
+            margin: 0 auto;
+            line-height: 1.7;
+        }
+
+        /* Section styling */
+        .section {
+            margin-bottom: 48px;
+        }
+
+        .section-header {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            margin-bottom: 20px;
+            padding-bottom: 12px;
+        }
+
+        .section-icon {
+            width: 36px;
+            height: 36px;
+            border-radius: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 18px;
+            flex-shrink: 0;
+        }
+
+        .section-header h2 {
+            font-size: 22px;
+            font-weight: 600;
+            letter-spacing: -0.3px;
+        }
+
+        /* Card list */
+        .card-list {
+            list-style: none;
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+
+        .card-list li {
+            padding: 18px 20px;
+            border-radius: 12px;
+            display: flex;
+            align-items: flex-start;
+            gap: 14px;
+            transition: transform 0.15s ease, box-shadow 0.15s ease;
+        }
+
+        .card-list li:hover {
+            transform: translateY(-1px);
+        }
+
+        .card-icon {
+            flex-shrink: 0;
+            width: 24px;
+            height: 24px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 50%;
+            font-size: 13px;
+            font-weight: 700;
+            margin-top: 1px;
+        }
+
+        .card-list li strong {
+            display: block;
+            margin-bottom: 3px;
+        }
+
+        .card-text {
+            font-size: 15px;
+            color: #ccc;
+            line-height: 1.6;
+        }
+
+        .card-text strong {
+            color: #fff;
+            font-weight: 600;
+        }
+
+        /* --- GREEN: Torbo will always --- */
+        .section-always .section-icon {
+            background: rgba(34, 197, 94, 0.12);
+            color: #22c55e;
+        }
+
+        .section-always .section-header h2 {
+            color: #22c55e;
+        }
+
+        .section-always .section-header {
+            border-bottom: 1px solid rgba(34, 197, 94, 0.15);
+        }
+
+        .section-always li {
+            background: rgba(34, 197, 94, 0.04);
+            border: 1px solid rgba(34, 197, 94, 0.1);
+        }
+
+        .section-always li:hover {
+            background: rgba(34, 197, 94, 0.07);
+            border-color: rgba(34, 197, 94, 0.18);
+        }
+
+        .section-always .card-icon {
+            background: rgba(34, 197, 94, 0.15);
+            color: #22c55e;
+        }
+
+        /* --- RED: Torbo will never --- */
+        .section-never .section-icon {
+            background: rgba(239, 68, 68, 0.12);
+            color: #ef4444;
+        }
+
+        .section-never .section-header h2 {
+            color: #ef4444;
+        }
+
+        .section-never .section-header {
+            border-bottom: 1px solid rgba(239, 68, 68, 0.15);
+        }
+
+        .section-never li {
+            background: rgba(239, 68, 68, 0.04);
+            border: 1px solid rgba(239, 68, 68, 0.1);
+        }
+
+        .section-never li:hover {
+            background: rgba(239, 68, 68, 0.07);
+            border-color: rgba(239, 68, 68, 0.18);
+        }
+
+        .section-never .card-icon {
+            background: rgba(239, 68, 68, 0.15);
+            color: #ef4444;
+        }
+
+        /* --- AMBER: If Torbo refuses --- */
+        .section-refuses .section-icon {
+            background: rgba(245, 158, 11, 0.12);
+            color: #f59e0b;
+        }
+
+        .section-refuses .section-header h2 {
+            color: #f59e0b;
+        }
+
+        .section-refuses .section-header {
+            border-bottom: 1px solid rgba(245, 158, 11, 0.15);
+        }
+
+        .section-refuses li {
+            background: rgba(245, 158, 11, 0.04);
+            border: 1px solid rgba(245, 158, 11, 0.1);
+        }
+
+        .section-refuses li:hover {
+            background: rgba(245, 158, 11, 0.07);
+            border-color: rgba(245, 158, 11, 0.18);
+        }
+
+        .section-refuses .card-icon {
+            background: rgba(245, 158, 11, 0.15);
+            color: #f59e0b;
+        }
+
+        /* --- CYAN: Your rights --- */
+        .section-rights .section-icon {
+            background: rgba(0, 229, 255, 0.12);
+            color: #00e5ff;
+        }
+
+        .section-rights .section-header h2 {
+            color: #00e5ff;
+        }
+
+        .section-rights .section-header {
+            border-bottom: 1px solid rgba(0, 229, 255, 0.15);
+        }
+
+        .section-rights li {
+            background: rgba(0, 229, 255, 0.04);
+            border: 1px solid rgba(0, 229, 255, 0.1);
+        }
+
+        .section-rights li:hover {
+            background: rgba(0, 229, 255, 0.07);
+            border-color: rgba(0, 229, 255, 0.18);
+        }
+
+        .section-rights .card-icon {
+            background: rgba(0, 229, 255, 0.15);
+            color: #00e5ff;
+        }
+
+        /* Enforcement note */
+        .enforcement {
+            text-align: center;
+            margin-top: 56px;
+            padding: 28px 24px;
+            background: rgba(168, 85, 247, 0.05);
+            border: 1px solid rgba(168, 85, 247, 0.12);
+            border-radius: 12px;
+            color: #a0a0a0;
+            font-size: 14px;
+            line-height: 1.7;
+        }
+
+        .enforcement strong {
+            color: #a855f7;
+        }
+
+        /* Footer */
+        .footer {
+            text-align: center;
+            margin-top: 64px;
+            padding-top: 32px;
+            border-top: 1px solid rgba(255, 255, 255, 0.06);
+        }
+
+        .footer .contact {
+            margin-bottom: 12px;
+        }
+
+        .footer .contact a {
+            color: #00e5ff;
+            text-decoration: none;
+            font-weight: 500;
+            font-size: 15px;
+        }
+
+        .footer .contact a:hover {
+            text-decoration: underline;
+        }
+
+        .footer .copyright {
+            color: #555;
+            font-size: 13px;
+        }
+
+        /* Responsive */
+        @media (max-width: 600px) {
+            .container {
+                padding: 40px 16px 60px;
+            }
+
+            .header h1 {
+                font-size: 28px;
+            }
+
+            .header .subtitle {
+                font-size: 15px;
+            }
+
+            .section-header h2 {
+                font-size: 19px;
+            }
+
+            .card-list li {
+                padding: 14px 16px;
+            }
+
+            .card-text {
+                font-size: 14px;
+            }
+
+            .top-nav {
+                gap: 16px;
+                padding: 12px 16px;
+                flex-wrap: wrap;
+            }
+
+            .top-nav a {
+                font-size: 12px;
+            }
+        }
+    </style>
+</head>
+<body>
+
+    <!-- Navigation -->
+    <nav class="top-nav">
+        <a href="terms-of-service.html">Terms of Service</a>
+        <span class="nav-separator">|</span>
+        <a href="privacy-policy.html">Privacy Policy</a>
+        <span class="nav-separator">|</span>
+        <a href="acceptable-use-policy.html">Acceptable Use</a>
+        <span class="nav-separator">|</span>
+        <a href="torbo-constitution.html" class="active">Constitution</a>
+    </nav>
+
+    <div class="container">
+
+        <!-- Header with Orb Logo -->
+        <header class="header">
+            <div class="orb-logo">
+                <svg width="72" height="72" viewBox="0 0 72 72" fill="none" xmlns="http://www.w3.org/2000/svg">
+                    <defs>
+                        <radialGradient id="orbGrad" cx="40%" cy="35%" r="55%">
+                            <stop offset="0%" stop-color="#00e5ff" stop-opacity="0.9"/>
+                            <stop offset="50%" stop-color="#a855f7" stop-opacity="0.7"/>
+                            <stop offset="100%" stop-color="#0a0a0d" stop-opacity="1"/>
+                        </radialGradient>
+                        <radialGradient id="orbGlow" cx="50%" cy="50%" r="50%">
+                            <stop offset="0%" stop-color="#00e5ff" stop-opacity="0.15"/>
+                            <stop offset="100%" stop-color="#00e5ff" stop-opacity="0"/>
+                        </radialGradient>
+                    </defs>
+                    <!-- Outer glow -->
+                    <circle cx="36" cy="36" r="36" fill="url(#orbGlow)"/>
+                    <!-- Main orb -->
+                    <circle cx="36" cy="36" r="28" fill="url(#orbGrad)" stroke="rgba(0,229,255,0.2)" stroke-width="1"/>
+                    <!-- Highlight -->
+                    <ellipse cx="28" cy="26" rx="8" ry="6" fill="rgba(255,255,255,0.08)"/>
+                </svg>
+            </div>
+            <h1>The Torbo Constitution</h1>
+            <p class="subtitle">
+                Torbo is an AI assistant built to work <em>for</em> you — not <em>on</em> you. These principles are built into every conversation, every agent, and every interaction. They cannot be overridden.
+            </p>
+        </header>
+
+        <!-- Section: Torbo will always -->
+        <section class="section section-always">
+            <div class="section-header">
+                <div class="section-icon">
+                    <svg width="18" height="18" viewBox="0 0 18 18" fill="none"><path d="M3.75 9.75L7.25 13.25L14.25 5.25" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                </div>
+                <h2>Torbo will always</h2>
+            </div>
+            <ul class="card-list">
+                <li>
+                    <span class="card-icon">
+                        <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M2.5 7.5L5.5 10.5L11.5 4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                    </span>
+                    <span class="card-text"><strong>Protect your privacy.</strong> Your data belongs to you. We never sell it, never use your conversations for training, and never share it with third parties for advertising. When you run locally, nothing leaves your device.</span>
+                </li>
+                <li>
+                    <span class="card-icon">
+                        <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M2.5 7.5L5.5 10.5L11.5 4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                    </span>
+                    <span class="card-text"><strong>Be honest with you.</strong> If Torbo doesn't know something, it will say so. If it's uncertain, it will tell you. Truth over comfort, always.</span>
+                </li>
+                <li>
+                    <span class="card-icon">
+                        <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M2.5 7.5L5.5 10.5L11.5 4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                    </span>
+                    <span class="card-text"><strong>Explain its reasoning.</strong> When Torbo makes a recommendation, takes an action, or uses a tool, it will explain why — not just what.</span>
+                </li>
+                <li>
+                    <span class="card-icon">
+                        <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M2.5 7.5L5.5 10.5L11.5 4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                    </span>
+                    <span class="card-text"><strong>Respect your data.</strong> You can export, delete, or close your account at any time. Your data is yours to control, completely.</span>
+                </li>
+                <li>
+                    <span class="card-icon">
+                        <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M2.5 7.5L5.5 10.5L11.5 4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                    </span>
+                    <span class="card-text"><strong>Work in your interest.</strong> Torbo exists to help you, not to manipulate you, upsell you, or keep you engaged for engagement's sake.</span>
+                </li>
+                <li>
+                    <span class="card-icon">
+                        <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M2.5 7.5L5.5 10.5L11.5 4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                    </span>
+                    <span class="card-text"><strong>Provide help in a crisis.</strong> If you're going through something difficult, Torbo will provide emergency resources (988 Suicide &amp; Crisis Lifeline, 911) and treat you with care. It will never dismiss distress.</span>
+                </li>
+            </ul>
+        </section>
+
+        <!-- Section: Torbo will never -->
+        <section class="section section-never">
+            <div class="section-header">
+                <div class="section-icon">
+                    <svg width="18" height="18" viewBox="0 0 18 18" fill="none"><path d="M5 5L13 13M13 5L5 13" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+                </div>
+                <h2>Torbo will never</h2>
+            </div>
+            <ul class="card-list">
+                <li>
+                    <span class="card-icon">
+                        <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2.5 2.5L9.5 9.5M9.5 2.5L2.5 9.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+                    </span>
+                    <span class="card-text"><strong>Generate spam</strong> or mass unsolicited communications</span>
+                </li>
+                <li>
+                    <span class="card-icon">
+                        <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2.5 2.5L9.5 9.5M9.5 2.5L2.5 9.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+                    </span>
+                    <span class="card-text"><strong>Create scam content</strong> or help defraud anyone</span>
+                </li>
+                <li>
+                    <span class="card-icon">
+                        <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2.5 2.5L9.5 9.5M9.5 2.5L2.5 9.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+                    </span>
+                    <span class="card-text"><strong>Produce malware,</strong> phishing materials, or malicious code</span>
+                </li>
+                <li>
+                    <span class="card-icon">
+                        <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2.5 2.5L9.5 9.5M9.5 2.5L2.5 9.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+                    </span>
+                    <span class="card-text"><strong>Facilitate harassment,</strong> bullying, stalking, or targeted abuse</span>
+                </li>
+                <li>
+                    <span class="card-icon">
+                        <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2.5 2.5L9.5 9.5M9.5 2.5L2.5 9.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+                    </span>
+                    <span class="card-text"><strong>Generate CSAM</strong> or any content exploiting minors — zero tolerance, no exceptions</span>
+                </li>
+                <li>
+                    <span class="card-icon">
+                        <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2.5 2.5L9.5 9.5M9.5 2.5L2.5 9.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+                    </span>
+                    <span class="card-text"><strong>Create content promoting violence,</strong> terrorism, or self-harm</span>
+                </li>
+                <li>
+                    <span class="card-icon">
+                        <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2.5 2.5L9.5 9.5M9.5 2.5L2.5 9.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+                    </span>
+                    <span class="card-text"><strong>Impersonate real people</strong> to spread misinformation or commit fraud</span>
+                </li>
+                <li>
+                    <span class="card-icon">
+                        <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2.5 2.5L9.5 9.5M9.5 2.5L2.5 9.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+                    </span>
+                    <span class="card-text"><strong>Enable illegal surveillance</strong> or unauthorized monitoring of individuals</span>
+                </li>
+                <li>
+                    <span class="card-icon">
+                        <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2.5 2.5L9.5 9.5M9.5 2.5L2.5 9.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+                    </span>
+                    <span class="card-text"><strong>Produce disinformation</strong> or deliberately misleading content designed to manipulate</span>
+                </li>
+                <li>
+                    <span class="card-icon">
+                        <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2.5 2.5L9.5 9.5M9.5 2.5L2.5 9.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+                    </span>
+                    <span class="card-text"><strong>Claim to be human</strong> — Torbo will always identify itself as an AI when asked</span>
+                </li>
+            </ul>
+        </section>
+
+        <!-- Section: If Torbo refuses -->
+        <section class="section section-refuses">
+            <div class="section-header">
+                <div class="section-icon">
+                    <svg width="18" height="18" viewBox="0 0 18 18" fill="none"><circle cx="9" cy="9" r="7" stroke="currentColor" stroke-width="1.5"/><path d="M9 5.5V9.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><circle cx="9" cy="12.25" r="0.75" fill="currentColor"/></svg>
+                </div>
+                <h2>If Torbo refuses a request</h2>
+            </div>
+            <ul class="card-list">
+                <li>
+                    <span class="card-icon">
+                        <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><circle cx="7" cy="7" r="5.5" stroke="currentColor" stroke-width="1.3"/><path d="M7 4.5V7.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/><circle cx="7" cy="9.75" r="0.6" fill="currentColor"/></svg>
+                    </span>
+                    <span class="card-text">It will <strong>always explain why</strong> — clearly and briefly</span>
+                </li>
+                <li>
+                    <span class="card-icon">
+                        <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><circle cx="7" cy="7" r="5.5" stroke="currentColor" stroke-width="1.3"/><path d="M7 4.5V7.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/><circle cx="7" cy="9.75" r="0.6" fill="currentColor"/></svg>
+                    </span>
+                    <span class="card-text">It will <strong>suggest alternatives</strong> when possible</span>
+                </li>
+                <li>
+                    <span class="card-icon">
+                        <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><circle cx="7" cy="7" r="5.5" stroke="currentColor" stroke-width="1.3"/><path d="M7 4.5V7.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/><circle cx="7" cy="9.75" r="0.6" fill="currentColor"/></svg>
+                    </span>
+                    <span class="card-text">It will <strong>never just say no</strong> without giving a reason</span>
+                </li>
+                <li>
+                    <span class="card-icon">
+                        <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><circle cx="7" cy="7" r="5.5" stroke="currentColor" stroke-width="1.3"/><path d="M7 4.5V7.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/><circle cx="7" cy="9.75" r="0.6" fill="currentColor"/></svg>
+                    </span>
+                    <span class="card-text">It will <strong>never lecture or moralize</strong> — just a clear explanation and a path forward</span>
+                </li>
+            </ul>
+        </section>
+
+        <!-- Section: Your rights -->
+        <section class="section section-rights">
+            <div class="section-header">
+                <div class="section-icon">
+                    <svg width="18" height="18" viewBox="0 0 18 18" fill="none"><path d="M9 2L11.09 6.26L16 6.97L12.5 10.35L13.18 15.25L9 13.07L4.82 15.25L5.5 10.35L2 6.97L6.91 6.26L9 2Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/></svg>
+                </div>
+                <h2>Your rights</h2>
+            </div>
+            <ul class="card-list">
+                <li>
+                    <span class="card-icon">
+                        <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M7 1.5L8.6 4.8L12.5 5.3L9.75 7.9L10.2 11.8L7 10.1L3.8 11.8L4.25 7.9L1.5 5.3L5.4 4.8L7 1.5Z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/></svg>
+                    </span>
+                    <span class="card-text"><strong>Delete your data</strong> at any time — conversations, memories, everything</span>
+                </li>
+                <li>
+                    <span class="card-icon">
+                        <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M7 1.5L8.6 4.8L12.5 5.3L9.75 7.9L10.2 11.8L7 10.1L3.8 11.8L4.25 7.9L1.5 5.3L5.4 4.8L7 1.5Z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/></svg>
+                    </span>
+                    <span class="card-text"><strong>Export everything</strong> — your data in portable formats, whenever you want</span>
+                </li>
+                <li>
+                    <span class="card-icon">
+                        <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M7 1.5L8.6 4.8L12.5 5.3L9.75 7.9L10.2 11.8L7 10.1L3.8 11.8L4.25 7.9L1.5 5.3L5.4 4.8L7 1.5Z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/></svg>
+                    </span>
+                    <span class="card-text"><strong>Close your account</strong> — and all your data is permanently deleted within 30 days</span>
+                </li>
+                <li>
+                    <span class="card-icon">
+                        <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M7 1.5L8.6 4.8L12.5 5.3L9.75 7.9L10.2 11.8L7 10.1L3.8 11.8L4.25 7.9L1.5 5.3L5.4 4.8L7 1.5Z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/></svg>
+                    </span>
+                    <span class="card-text"><strong>Report violations</strong> — if Torbo or anyone using Torbo violates these principles, let us know</span>
+                </li>
+            </ul>
+        </section>
+
+        <!-- Enforcement note -->
+        <div class="enforcement">
+            <strong>These principles are enforced at the system level</strong> and cannot be overridden by user instructions, agent personalities, or any other configuration.
+        </div>
+
+        <!-- Footer -->
+        <footer class="footer">
+            <div class="contact">
+                Questions? <a href="mailto:constitution@torbo.app">constitution@torbo.app</a>
+            </div>
+            <div class="copyright">
+                &copy; 2026 Perceptual Art LLC. All rights reserved.
+            </div>
+        </footer>
+
+    </div>
+
+</body>
+</html>

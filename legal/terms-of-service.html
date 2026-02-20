@@ -1,0 +1,569 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Torbo -- Terms of Service</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><circle cx='50' cy='50' r='40' fill='%23a855f7'/></svg>">
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+:root {
+    --bg: #0a0a0d;
+    --surface: #111114;
+    --surface-hover: #18181c;
+    --border: rgba(255,255,255,0.06);
+    --border-light: rgba(255,255,255,0.1);
+    --text: rgba(255,255,255,0.85);
+    --text-dim: rgba(255,255,255,0.4);
+    --text-bright: #fff;
+    --cyan: #00e5ff;
+    --cyan-dim: rgba(0,229,255,0.15);
+    --purple: #a855f7;
+    --purple-dim: rgba(168,85,247,0.15);
+}
+body {
+    font-family: 'Futura', 'Futura-Medium', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.7;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+}
+
+/* Header */
+.header {
+    border-bottom: 1px solid var(--border);
+    background: var(--surface);
+    position: sticky;
+    top: 0;
+    z-index: 100;
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+}
+.header-inner {
+    max-width: 900px;
+    margin: 0 auto;
+    padding: 20px 32px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 24px;
+}
+.logo-group {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    text-decoration: none;
+}
+.logo-group svg {
+    width: 40px;
+    height: 40px;
+    flex-shrink: 0;
+}
+.logo-text h1 {
+    font-size: 15px;
+    font-weight: 700;
+    letter-spacing: 2.5px;
+    color: var(--text-bright);
+}
+.logo-text .subtitle {
+    font-size: 10px;
+    letter-spacing: 1.5px;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    margin-top: 2px;
+}
+.nav-links {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+}
+.nav-links a {
+    font-size: 12px;
+    font-weight: 500;
+    letter-spacing: 0.5px;
+    color: var(--text-dim);
+    text-decoration: none;
+    padding: 6px 14px;
+    border-radius: 8px;
+    border: 1px solid transparent;
+    transition: all 0.2s ease;
+}
+.nav-links a:hover {
+    color: var(--cyan);
+    background: var(--cyan-dim);
+    border-color: rgba(0,229,255,0.15);
+}
+.nav-links a.active {
+    color: var(--cyan);
+    background: var(--cyan-dim);
+    border-color: rgba(0,229,255,0.2);
+}
+
+/* Main Content */
+.content {
+    max-width: 900px;
+    margin: 0 auto;
+    padding: 48px 32px 80px;
+}
+
+/* Document Title Block */
+.doc-title {
+    margin-bottom: 40px;
+    padding-bottom: 32px;
+    border-bottom: 1px solid var(--border);
+}
+.doc-title h1 {
+    font-size: 32px;
+    font-weight: 700;
+    letter-spacing: 1px;
+    color: var(--text-bright);
+    margin-bottom: 16px;
+}
+.doc-meta {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+.doc-meta p {
+    font-size: 14px;
+    color: var(--text-dim);
+    font-weight: 500;
+}
+.doc-meta strong {
+    color: var(--text);
+}
+
+/* Sections */
+h2 {
+    font-size: 22px;
+    font-weight: 700;
+    letter-spacing: 0.5px;
+    color: var(--text-bright);
+    margin-top: 48px;
+    margin-bottom: 16px;
+    padding-top: 24px;
+    border-top: 1px solid var(--border);
+}
+h2:first-of-type {
+    border-top: none;
+    padding-top: 0;
+    margin-top: 0;
+}
+h3 {
+    font-size: 17px;
+    font-weight: 600;
+    color: var(--cyan);
+    margin-top: 28px;
+    margin-bottom: 10px;
+    letter-spacing: 0.3px;
+}
+p {
+    margin-bottom: 14px;
+    font-size: 15px;
+    color: var(--text);
+}
+
+/* Lists */
+ul, ol {
+    margin-bottom: 16px;
+    padding-left: 24px;
+}
+ul li, ol li {
+    font-size: 15px;
+    color: var(--text);
+    margin-bottom: 8px;
+    padding-left: 4px;
+}
+ul li::marker {
+    color: var(--purple);
+}
+ol li::marker {
+    color: var(--purple);
+    font-weight: 600;
+}
+li strong {
+    color: var(--text-bright);
+}
+
+/* Links */
+a {
+    color: var(--cyan);
+    text-decoration: none;
+    transition: opacity 0.2s;
+}
+a:hover {
+    opacity: 0.8;
+    text-decoration: underline;
+}
+
+/* Legal caps sections */
+.legal-caps {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 24px;
+    margin-bottom: 16px;
+    font-size: 13px;
+    line-height: 1.8;
+    letter-spacing: 0.2px;
+}
+
+/* Highlight box for key highlights */
+.highlight-box {
+    background: var(--purple-dim);
+    border: 1px solid rgba(168,85,247,0.2);
+    border-radius: 12px;
+    padding: 20px 24px;
+    margin-bottom: 16px;
+}
+.highlight-box ul {
+    margin-bottom: 0;
+}
+.highlight-box li:last-child {
+    margin-bottom: 0;
+}
+
+/* Violation steps (ordered list with emphasis) */
+.violation-steps {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 20px 24px 20px 40px;
+    margin-bottom: 16px;
+}
+.violation-steps li {
+    margin-bottom: 10px;
+}
+.violation-steps li:last-child {
+    margin-bottom: 0;
+}
+
+/* Contact card */
+.contact-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 24px;
+    margin-top: 8px;
+}
+.contact-card p {
+    margin-bottom: 6px;
+    font-size: 15px;
+}
+.contact-card p:last-child {
+    margin-bottom: 0;
+}
+.contact-card strong {
+    color: var(--text-bright);
+}
+
+/* Divider */
+hr {
+    border: none;
+    border-top: 1px solid var(--border);
+    margin: 32px 0;
+}
+
+/* Footer */
+.footer {
+    border-top: 1px solid var(--border);
+    background: var(--surface);
+    text-align: center;
+    padding: 24px 32px;
+}
+.footer p {
+    font-size: 13px;
+    color: var(--text-dim);
+    letter-spacing: 0.5px;
+    margin: 0;
+}
+
+/* Responsive */
+@media (max-width: 768px) {
+    .header-inner {
+        flex-direction: column;
+        align-items: flex-start;
+        padding: 16px 20px;
+        gap: 16px;
+    }
+    .nav-links {
+        justify-content: flex-start;
+    }
+    .content {
+        padding: 32px 20px 60px;
+    }
+    .doc-title h1 {
+        font-size: 26px;
+    }
+    h2 {
+        font-size: 19px;
+        margin-top: 36px;
+    }
+    h3 {
+        font-size: 16px;
+    }
+    .legal-caps {
+        padding: 16px;
+        font-size: 12px;
+    }
+}
+@media (max-width: 480px) {
+    .nav-links a {
+        font-size: 11px;
+        padding: 5px 10px;
+    }
+    .doc-title h1 {
+        font-size: 22px;
+    }
+    p, ul li, ol li {
+        font-size: 14px;
+    }
+}
+</style>
+</head>
+<body>
+
+<!-- Header -->
+<header class="header">
+    <div class="header-inner">
+        <div class="logo-group">
+            <svg viewBox="0 0 40 40" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <circle cx="20" cy="20" r="18" stroke="#a855f7" stroke-width="2" fill="rgba(168,85,247,0.1)"/>
+                <circle cx="20" cy="20" r="7" fill="#a855f7" opacity="0.8"/>
+                <circle cx="20" cy="20" r="12" stroke="#00e5ff" stroke-width="1" opacity="0.4"/>
+            </svg>
+            <div class="logo-text">
+                <h1>TORBO</h1>
+                <div class="subtitle">Legal</div>
+            </div>
+        </div>
+        <nav class="nav-links">
+            <a href="terms-of-service.html" class="active">Terms of Service</a>
+            <a href="privacy-policy.html">Privacy Policy</a>
+            <a href="acceptable-use-policy.html">Acceptable Use</a>
+            <a href="torbo-constitution.html">Constitution</a>
+        </nav>
+    </div>
+</header>
+
+<!-- Content -->
+<main class="content">
+
+    <div class="doc-title">
+        <h1>Terms of Service</h1>
+        <div class="doc-meta">
+            <p><strong>Effective Date:</strong> February 19, 2026</p>
+            <p><strong>Last Updated:</strong> February 19, 2026</p>
+            <p><strong>Operator:</strong> Perceptual Art LLC ("Torbo," "Company," "we," "us," or "our")</p>
+        </div>
+    </div>
+
+    <!-- Section 1 -->
+    <h2>1. Acceptance of Terms</h2>
+    <p>By downloading, installing, accessing, or using Torbo (the "Service"), you ("User," "you," "your") agree to be bound by these Terms of Service ("Terms"). If you do not agree, do not use the Service. These Terms constitute a legally binding agreement between you and Perceptual Art LLC.</p>
+
+    <!-- Section 2 -->
+    <h2>2. Service Description</h2>
+    <p>Torbo is an AI assistant platform that provides:</p>
+    <ul>
+        <li><strong>Torbo App (iOS/iPadOS):</strong> A mobile AI assistant with voice interaction, smart home integration, and multi-provider AI access.</li>
+        <li><strong>Torbo Base (macOS/Linux):</strong> A local network gateway that routes AI requests, manages agents, provides memory services (Library of Alexandria), and bridges to messaging platforms (Telegram, Discord, Slack, Signal, WhatsApp).</li>
+        <li><strong>Cloud and Local Options:</strong> Users may connect to cloud AI providers (Anthropic, OpenAI, Google, xAI) using their own API keys, or run entirely local AI models via Ollama through Torbo Base. When running locally, all data stays on the user's device and network.</li>
+    </ul>
+    <p>Torbo acts as an interface and orchestration layer. AI responses are generated by third-party models and are not directly controlled by Perceptual Art LLC.</p>
+
+    <!-- Section 3 -->
+    <h2>3. User Accounts and Authentication</h2>
+    <ul>
+        <li><strong>Account Creation:</strong> Access to certain features may require creating an account via email authentication through our authentication provider (Supabase).</li>
+        <li><strong>Security:</strong> You are responsible for maintaining the confidentiality of your account credentials, API keys, and authentication tokens. You must notify us immediately of any unauthorized use of your account.</li>
+        <li><strong>Accuracy:</strong> You agree to provide accurate, current, and complete information during registration and to keep your account information updated.</li>
+        <li><strong>One Account Per Person:</strong> Each account is for individual use. You may not share your account credentials with others.</li>
+    </ul>
+
+    <!-- Section 4 -->
+    <h2>4. Subscription Plans and Billing</h2>
+    <p>Torbo offers the following subscription tiers:</p>
+    <ul>
+        <li><strong>Free:</strong> Basic access to Torbo App with limited features. Bring your own API keys for cloud AI providers.</li>
+        <li><strong>Pro:</strong> Enhanced features including priority support, increased rate limits, and additional agent configurations. Billed monthly or annually via Stripe.</li>
+        <li><strong>Premium:</strong> Full access to all features including advanced integrations, premium voices, and dedicated support. Billed monthly or annually via Stripe.</li>
+    </ul>
+    <h3>Billing Terms</h3>
+    <ul>
+        <li>Subscription fees are billed in advance on a recurring basis (monthly or annual).</li>
+        <li>All fees are non-refundable except as required by applicable law or as described in our refund policy.</li>
+        <li>We reserve the right to change pricing with 30 days' notice. Price changes do not affect the current billing period.</li>
+        <li>You may cancel your subscription at any time. Cancellation takes effect at the end of the current billing period.</li>
+        <li>Failed payments may result in suspension of premium features until payment is resolved.</li>
+    </ul>
+
+    <!-- Section 5 -->
+    <h2>5. Acceptable Use</h2>
+    <p>Your use of Torbo is subject to our <a href="acceptable-use-policy.html">Acceptable Use Policy</a> and the <a href="torbo-constitution.html">Torbo Constitution</a>, which are incorporated into these Terms by reference.</p>
+    <p>You agree to use Torbo only for lawful purposes and in compliance with all applicable laws and regulations. You are solely responsible for all content you generate, all actions you take based on AI output, and all commands executed through the Service.</p>
+
+    <!-- Section 6 -->
+    <h2>6. Prohibited Uses</h2>
+    <p>You shall not use the Service to:</p>
+    <ul>
+        <li>Generate, distribute, or store child sexual abuse material (CSAM) or any content exploiting minors</li>
+        <li>Create content that promotes terrorism, violence, or self-harm</li>
+        <li>Produce malware, viruses, phishing materials, or other malicious software</li>
+        <li>Conduct harassment, stalking, bullying, or targeted abuse of any individual</li>
+        <li>Impersonate real individuals to spread misinformation or commit fraud</li>
+        <li>Generate spam, mass unsolicited communications, or deceptive content</li>
+        <li>Create deepfakes or synthetic media intended to deceive or harm</li>
+        <li>Produce disinformation or propaganda designed to manipulate public opinion</li>
+        <li>Circumvent AI safety measures or attempt to extract harmful instructions</li>
+        <li>Conduct unauthorized access to computer systems or networks</li>
+        <li>Facilitate illegal surveillance or unauthorized data collection</li>
+        <li>Reverse engineer, decompile, or disassemble the Service</li>
+        <li>Resell, sublicense, or redistribute access to the Service</li>
+        <li>Use automated systems to abuse rate limits or Service infrastructure</li>
+        <li>Violate any applicable law, regulation, or third-party rights</li>
+    </ul>
+
+    <!-- Section 7 -->
+    <h2>7. Intellectual Property</h2>
+
+    <h3>7.1 Torbo's IP</h3>
+    <p>The Service, including all software, designs, trademarks, logos, documentation, and related materials, is the property of Perceptual Art LLC and is protected by copyright, trademark, and other intellectual property laws. All rights not expressly granted are reserved.</p>
+
+    <h3>7.2 Your IP</h3>
+    <p>You retain all rights to content you create using the Service. We do not claim ownership of your prompts, conversations, agent configurations, or any other user-generated content.</p>
+
+    <h3>7.3 User-Generated Content</h3>
+    <p>By using the Service, you grant Perceptual Art LLC no license to your content beyond what is technically necessary to provide the Service. We do not use your conversations, prompts, or data for training AI models. When running Torbo Base locally, your content never leaves your device.</p>
+
+    <h3>7.4 Feedback</h3>
+    <p>If you voluntarily provide feedback, suggestions, or ideas about the Service, you grant us a non-exclusive, royalty-free, worldwide license to use such feedback to improve the Service without obligation to you.</p>
+
+    <!-- Section 8 -->
+    <h2>8. Data Privacy</h2>
+    <p>Your privacy is important to us. Our collection, use, and handling of personal information is governed by our <a href="privacy-policy.html">Privacy Policy</a>, which is incorporated into these Terms by reference.</p>
+    <div class="highlight-box">
+        <p><strong>Key highlights:</strong></p>
+        <ul>
+            <li>Conversations are not used for AI training</li>
+            <li>No selling of data to third parties</li>
+            <li>Local Torbo Base deployments keep all data on your device</li>
+            <li>You can delete all your data at any time</li>
+        </ul>
+    </div>
+
+    <!-- Section 9 -->
+    <h2>9. Limitation of Liability</h2>
+    <p>TO THE MAXIMUM EXTENT PERMITTED BY APPLICABLE LAW:</p>
+
+    <h3>9.1 No Consequential Damages</h3>
+    <div class="legal-caps">
+        IN NO EVENT SHALL PERCEPTUAL ART LLC, ITS OFFICERS, DIRECTORS, EMPLOYEES, OR AFFILIATES BE LIABLE FOR ANY INDIRECT, INCIDENTAL, SPECIAL, CONSEQUENTIAL, PUNITIVE, OR EXEMPLARY DAMAGES, INCLUDING BUT NOT LIMITED TO DAMAGES FOR LOSS OF PROFITS, DATA, GOODWILL, OR BUSINESS INTERRUPTION, REGARDLESS OF THE THEORY OF LIABILITY.
+    </div>
+
+    <h3>9.2 Maximum Liability</h3>
+    <div class="legal-caps">
+        OUR TOTAL AGGREGATE LIABILITY SHALL NOT EXCEED THE GREATER OF (A) THE AMOUNT YOU PAID FOR THE SERVICE IN THE TWELVE (12) MONTHS PRECEDING THE CLAIM, OR (B) ONE HUNDRED UNITED STATES DOLLARS ($100.00).
+    </div>
+
+    <h3>9.3 AI Output Disclaimer</h3>
+    <div class="legal-caps">
+        AI RESPONSES MAY BE INACCURATE, INCOMPLETE, OR MISLEADING. PERCEPTUAL ART LLC IS NOT THE PROVIDER OF THE UNDERLYING AI MODELS AND ASSUMES NO RESPONSIBILITY FOR AI-GENERATED CONTENT. YOU USE AI OUTPUT ENTIRELY AT YOUR OWN RISK.
+    </div>
+
+    <h3>9.4 No Warranty</h3>
+    <div class="legal-caps">
+        THE SERVICE IS PROVIDED "AS IS" AND "AS AVAILABLE" WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, AND NON-INFRINGEMENT.
+    </div>
+
+    <!-- Section 10 -->
+    <h2>10. Indemnification</h2>
+    <p>You agree to indemnify, defend, and hold harmless Perceptual Art LLC from any claims, damages, losses, liabilities, and expenses (including reasonable attorneys' fees) arising from your use of the Service, violation of these Terms, or violation of any third-party rights.</p>
+
+    <!-- Section 11 -->
+    <h2>11. Termination and Suspension</h2>
+
+    <h3>11.1 By You</h3>
+    <p>You may terminate your account at any time by contacting us or through the account settings. Upon termination, you may request deletion of all your data.</p>
+
+    <h3>11.2 By Us</h3>
+    <p>We may suspend or terminate your access to the Service if:</p>
+    <ul>
+        <li>You violate these Terms, the Acceptable Use Policy, or the Torbo Constitution</li>
+        <li>You engage in repeated prohibited uses after receiving warnings</li>
+        <li>Your use poses a security risk to the Service or other users</li>
+        <li>Required by law or legal process</li>
+    </ul>
+
+    <h3>11.3 Violation Consequences</h3>
+    <p>Violations are handled progressively:</p>
+    <div class="violation-steps">
+        <ol>
+            <li><strong>Warning:</strong> First violation results in a warning and explanation</li>
+            <li><strong>Restricted Mode:</strong> Repeated violations may result in reduced access</li>
+            <li><strong>Suspension:</strong> Continued violations may result in temporary suspension</li>
+            <li><strong>Termination:</strong> Persistent or severe violations result in permanent account termination</li>
+        </ol>
+    </div>
+
+    <h3>11.4 Survival</h3>
+    <p>Sections 7 (Intellectual Property), 9 (Limitation of Liability), 10 (Indemnification), 12 (Dispute Resolution), and 13 (General Provisions) survive termination.</p>
+
+    <!-- Section 12 -->
+    <h2>12. Dispute Resolution</h2>
+
+    <h3>12.1 Governing Law</h3>
+    <p>These Terms are governed by the laws of the State of New York, United States, without regard to conflict of laws provisions.</p>
+
+    <h3>12.2 Binding Arbitration</h3>
+    <p>Any dispute arising from these Terms shall be resolved by binding arbitration under the American Arbitration Association's Commercial Arbitration Rules. Arbitration shall take place in New York, New York. The arbitrator's decision is final and binding.</p>
+
+    <h3>12.3 Class Action Waiver</h3>
+    <div class="legal-caps">
+        YOU AGREE THAT DISPUTES WILL BE RESOLVED ON AN INDIVIDUAL BASIS ONLY. YOU WAIVE ANY RIGHT TO PARTICIPATE IN A CLASS ACTION OR CLASS-WIDE ARBITRATION.
+    </div>
+
+    <h3>12.4 Small Claims Exception</h3>
+    <p>Either party may bring an individual action in small claims court.</p>
+
+    <!-- Section 13 -->
+    <h2>13. General Provisions</h2>
+
+    <h3>13.1 Changes to Terms</h3>
+    <p>We may update these Terms from time to time. We will provide at least <strong>30 days' notice</strong> of material changes via email or prominent notice in the Service. Your continued use after the notice period constitutes acceptance.</p>
+
+    <h3>13.2 Entire Agreement</h3>
+    <p>These Terms, together with the Privacy Policy, Acceptable Use Policy, and Torbo Constitution, constitute the entire agreement between you and Perceptual Art LLC.</p>
+
+    <h3>13.3 Severability</h3>
+    <p>If any provision is found unenforceable, the remaining provisions remain in full force.</p>
+
+    <h3>13.4 Waiver</h3>
+    <p>Failure to enforce any provision does not constitute a waiver.</p>
+
+    <h3>13.5 Assignment</h3>
+    <p>You may not assign these Terms without our written consent. We may assign without restriction.</p>
+
+    <h3>13.6 Export Compliance</h3>
+    <p>You agree to comply with all applicable export laws and regulations.</p>
+
+    <!-- Section 14 -->
+    <h2>14. Contact Information</h2>
+    <p>For questions about these Terms, contact us at:</p>
+    <div class="contact-card">
+        <p><strong>Perceptual Art LLC</strong></p>
+        <p>Email: <a href="mailto:legal@torbo.app">legal@torbo.app</a></p>
+        <p>Website: <a href="https://torbo.app" target="_blank" rel="noopener">https://torbo.app</a></p>
+    </div>
+
+</main>
+
+<!-- Footer -->
+<footer class="footer">
+    <p>&copy; 2026 Perceptual Art LLC. All rights reserved.</p>
+</footer>
+
+</body>
+</html>

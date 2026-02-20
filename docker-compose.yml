@@ -1,4 +1,4 @@
-# Torbo Base — Docker Compose
+# Torbo Base Cloud — Docker Compose
 # (c) 2026 Perceptual Art LLC — Apache 2.0
 #
 # Usage:
@@ -28,6 +28,20 @@ services:
       - ELEVENLABS_API_KEY=${ELEVENLABS_API_KEY:-}
       # Ollama (if running on host or separate container)
       - OLLAMA_HOST=${OLLAMA_HOST:-http://host.docker.internal:11434}
+      # Supabase (cloud auth)
+      - SUPABASE_URL=${SUPABASE_URL:-}
+      - SUPABASE_ANON_KEY=${SUPABASE_ANON_KEY:-}
+      - SUPABASE_SERVICE_KEY=${SUPABASE_SERVICE_KEY:-}
+      - SUPABASE_JWT_SECRET=${SUPABASE_JWT_SECRET:-}
+      # Stripe (subscription billing)
+      - STRIPE_SECRET_KEY=${STRIPE_SECRET_KEY:-}
+      - STRIPE_WEBHOOK_SECRET=${STRIPE_WEBHOOK_SECRET:-}
+      - STRIPE_TORBO_PRICE_ID=${STRIPE_TORBO_PRICE_ID:-}
+      - STRIPE_TORBO_MAX_PRICE_ID=${STRIPE_TORBO_MAX_PRICE_ID:-}
+      # Cloud config
+      - CLOUD_BASE_URL=${CLOUD_BASE_URL:-https://cloud.torbo.app}
+      # Redis
+      - REDIS_URL=redis://redis:6379
       # Messaging bridges (optional)
       - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
       - DISCORD_BOT_TOKEN=${DISCORD_BOT_TOKEN:-}
@@ -39,7 +53,26 @@ services:
     extra_hosts:
       # Allow container to reach host services (Ollama, etc.)
       - "host.docker.internal:host-gateway"
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  redis:
+    image: redis:7-alpine
+    container_name: torbo-redis
+    restart: unless-stopped
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+    # Redis only accessible from within the Docker network
+    # No ports exposed to host
 
 volumes:
   torbo-data:
+    driver: local
+  redis-data:
     driver: local
