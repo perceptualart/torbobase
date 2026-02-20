@@ -2171,6 +2171,7 @@ actor GatewayServer {
                             currentToolId = contentBlock["id"] as? String ?? "call_\(UUID().uuidString.prefix(8))"
                             currentToolName = contentBlock["name"] as? String ?? ""
                             currentToolArgs = ""
+                            TorboLog.info("⚙ Tool call START: \(currentToolName) (id: \(currentToolId), index: \(toolCallIndex))", subsystem: "Gateway")
                             // Emit start chunk with name only — args come on content_block_stop
                             let toolDelta: [String: Any] = [
                                 "tool_calls": [[
@@ -2190,7 +2191,6 @@ actor GatewayServer {
                                let chunkStr = String(data: chunkData, encoding: .utf8) {
                                 writer.sendSSEChunk(chunkStr)
                             }
-                            TorboLog.info("Anthropic tool_use start: \(currentToolName) (id: \(currentToolId))", subsystem: "Gateway")
                         } else if type == "content_block_stop" {
                             // Emit complete tool args on block stop — NOT per-delta.
                             // Per-delta emission used JSONSerialization on partial JSON fragments
@@ -2198,7 +2198,10 @@ actor GatewayServer {
                             // Complete JSON strings serialize reliably.
                             if hasToolCalls && !currentToolId.isEmpty {
                                 let args = currentToolArgs.isEmpty ? "{}" : currentToolArgs
-                                TorboLog.info("Anthropic tool_use complete: \(currentToolName) args=\(args.prefix(200)) (\(args.count) chars)", subsystem: "Gateway")
+                                let argBytes = args.data(using: .utf8)?.count ?? 0
+                                TorboLog.info("⚙ Tool call COMPLETE: \(currentToolName)", subsystem: "Gateway")
+                                TorboLog.info("  ↳ Arguments JSON: \(args)", subsystem: "Gateway")
+                                TorboLog.info("  ↳ Byte count: \(argBytes) bytes (\(args.count) chars)", subsystem: "Gateway")
                                 let toolDelta: [String: Any] = [
                                     "tool_calls": [[
                                         "index": toolCallIndex,
@@ -2215,7 +2218,7 @@ actor GatewayServer {
                                    let chunkStr = String(data: chunkData, encoding: .utf8) {
                                     writer.sendSSEChunk(chunkStr)
                                 } else {
-                                    TorboLog.error("Failed to serialize tool args chunk for \(currentToolName) — args: \(args.prefix(200))", subsystem: "Gateway")
+                                    TorboLog.error("⚙ Tool call SERIALIZE FAILED: \(currentToolName) — args (\(argBytes) bytes): \(args)", subsystem: "Gateway")
                                 }
                                 currentToolId = ""
                                 currentToolName = ""
