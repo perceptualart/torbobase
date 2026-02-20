@@ -321,7 +321,7 @@ tr:hover { background: rgba(255,255,255,0.02); }
     </div>
     <div class="sidebar-nav">
         <div class="nav-item active" onclick="switchTab('overview')" data-tab="overview">
-            <span class="nav-icon">&#9673;</span> Overview
+            <span class="nav-icon">&#9673;</span> Dashboard
         </div>
         <div class="nav-item" onclick="switchTab('apikeys')" data-tab="apikeys">
             <span class="nav-icon">&#9919;</span> API Keys
@@ -368,9 +368,10 @@ tr:hover { background: rgba(255,255,255,0.02); }
 <!-- Main Content -->
 <div class="main">
 
-    <!-- Overview Tab -->
+    <!-- Dashboard Tab -->
     <div id="tab-overview" class="tab-panel active">
-        <div class="page-title">Overview</div>
+        <div class="page-title">Dashboard</div>
+        <div style="font-size:13px;color:var(--text-dim);margin-bottom:24px;margin-top:-20px;">overview</div>
         <div id="overviewError" class="error-msg" style="display:none;"></div>
 
         <!-- Animated Orb -->
