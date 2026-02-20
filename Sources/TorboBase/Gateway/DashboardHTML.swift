@@ -790,6 +790,25 @@ tr:hover { background: rgba(255,255,255,0.02); }
         </div>
     </div>
 
+    <!-- Lexis Tab -->
+    <div id="tab-lexis" class="tab-panel">
+        <div class="page-title">Lexis</div>
+        <div style="font-size:13px;color:var(--text-dim);margin-bottom:24px;">Conversation history organized by day</div>
+        <div id="lexisError" class="error-msg" style="display:none;"></div>
+        <div class="search-bar">
+            <input type="text" id="lexisSearch" placeholder="Search conversations..." onkeydown="if(event.key==='Enter')loadLexis()">
+            <button class="btn btn-primary" onclick="loadLexis()">Search</button>
+        </div>
+        <div id="lexisContent"><div class="empty-state"><span class="spinner"></span></div></div>
+    </div>
+
+    <!-- Skills Tab -->
+    <div id="tab-skills" class="tab-panel">
+        <div class="page-title">Skills</div>
+        <div id="skillsError" class="error-msg" style="display:none;"></div>
+        <div id="skillsList"><div class="empty-state"><span class="spinner"></span></div></div>
+    </div>
+
 </div>
 
 <!-- Agent Create Modal -->
@@ -938,6 +957,8 @@ function switchTab(tab) {
     if (tab === 'logs') { logsOffset = 0; loadLogs(); }
     if (tab === 'security') { loadSecurity(); }
     if (tab === 'settings') { loadSettings(); }
+    if (tab === 'lexis') { loadLexis(); }
+    if (tab === 'skills') { loadSkills(); }
 }
 
 // --- Kill Switch ---
@@ -1670,6 +1691,83 @@ function saveSettings() {
         showSuccess('settingsSuccess', 'Settings saved.');
     }).catch(function(e) {
         if (e.message !== 'Unauthorized') showError('settingsError', 'Failed to save settings: ' + e.message);
+    });
+}
+
+// --- Lexis ---
+function loadLexis() {
+    hideError('lexisError');
+    var q = document.getElementById('lexisSearch').value.trim();
+    var wrap = document.getElementById('lexisContent');
+    wrap.innerHTML = '<div class="empty-state"><span class="spinner"></span> Loading...</div>';
+    var url = '/v1/conversations';
+    if (q) url += '?q=' + encodeURIComponent(q);
+    api('GET', url).then(function(data) {
+        var convos = data.conversations || data.spaces || data || [];
+        if (!Array.isArray(convos) || !convos.length) {
+            wrap.innerHTML = '<div class="empty-state">No conversations found.</div>';
+            return;
+        }
+        var byDay = {};
+        for (var i = 0; i < convos.length; i++) {
+            var c = convos[i];
+            var d = c.date || c.createdAt || c.created_at || '';
+            var day = d ? d.substring(0, 10) : 'Unknown';
+            if (!byDay[day]) byDay[day] = [];
+            byDay[day].push(c);
+        }
+        var days = Object.keys(byDay).sort().reverse();
+        var html = '';
+        for (var di = 0; di < days.length; di++) {
+            html += '<div class="section-label">' + esc(days[di]) + '</div>';
+            var items = byDay[days[di]];
+            for (var ci = 0; ci < items.length; ci++) {
+                var cv = items[ci];
+                html += '<div class="card" style="padding:14px 16px;">';
+                html += '<div style="font-size:14px;font-weight:600;color:var(--text-bright);">' + esc(cv.title || cv.agent || cv.agentId || 'Conversation') + '</div>';
+                if (cv.preview || cv.lastMessage) {
+                    html += '<div style="font-size:12px;color:var(--text-dim);margin-top:4px;max-height:40px;overflow:hidden;">' + esc(cv.preview || cv.lastMessage) + '</div>';
+                }
+                html += '<div style="font-size:11px;color:var(--text-dim);margin-top:6px;">' + esc(cv.messageCount ? cv.messageCount + ' messages' : '') + '</div>';
+                html += '</div>';
+            }
+        }
+        wrap.innerHTML = html;
+    }).catch(function(e) {
+        if (e.message !== 'Unauthorized') {
+            wrap.innerHTML = '<div class="empty-state">No conversation data available.</div>';
+        }
+    });
+}
+
+// --- Skills ---
+function loadSkills() {
+    hideError('skillsError');
+    var wrap = document.getElementById('skillsList');
+    api('GET', '/v1/skills').then(function(data) {
+        var skills = data.skills || data || [];
+        if (!Array.isArray(skills) || !skills.length) {
+            wrap.innerHTML = '<div class="empty-state">No skills installed.</div>';
+            return;
+        }
+        var html = '';
+        for (var i = 0; i < skills.length; i++) {
+            var s = skills[i];
+            html += '<div class="card" style="display:flex;align-items:center;gap:16px;">';
+            html += '<div style="flex:1;">';
+            html += '<div style="font-size:14px;font-weight:600;color:var(--text-bright);">' + esc(s.name || s.id) + '</div>';
+            if (s.description) html += '<div style="font-size:12px;color:var(--text-dim);margin-top:4px;">' + esc(s.description) + '</div>';
+            html += '</div>';
+            if (s.enabled !== undefined) {
+                html += '<span class="badge ' + (s.enabled ? 'badge-green' : 'badge-gray') + '">' + (s.enabled ? 'Active' : 'Inactive') + '</span>';
+            }
+            html += '</div>';
+        }
+        wrap.innerHTML = html;
+    }).catch(function(e) {
+        if (e.message !== 'Unauthorized') {
+            wrap.innerHTML = '<div class="empty-state">No skills data available.</div>';
+        }
     });
 }
 
