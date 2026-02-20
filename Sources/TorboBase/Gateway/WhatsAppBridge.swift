@@ -177,7 +177,8 @@ actor WhatsAppBridge {
             await MainActor.run { AppState.shared.addMessage(assistantMsg) }
             await send(content, to: phone)
         } catch {
-            await send("Error: \(error.localizedDescription)", to: phone)
+            TorboLog.error("Chat error: \(error.localizedDescription)", subsystem: "WhatsApp")
+            await send("Sorry, something went wrong. Please try again.", to: phone)
         }
     }
 }

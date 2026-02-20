@@ -221,7 +221,8 @@ actor SlackBridge {
             await MainActor.run { AppState.shared.addMessage(assistantMsg) }
             await send(content, threadTS: threadTS)
         } catch {
-            await send("⚠️ Error: \(error.localizedDescription)", threadTS: threadTS)
+            TorboLog.error("Chat error: \(error.localizedDescription)", subsystem: "Slack")
+            await send("Sorry, something went wrong. Please try again.", threadTS: threadTS)
         }
     }
 }

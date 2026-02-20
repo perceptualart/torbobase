@@ -553,8 +553,15 @@ actor AgentConfigManager {
         }
     }
 
+    /// Valid agent ID: lowercase alphanumeric, hyphens, underscores only
+    private static let validIDPattern = try! NSRegularExpression(pattern: "^[a-z0-9_-]+$")
+
     func createAgent(_ config: AgentConfig) throws {
         guard !config.id.isEmpty else { throw AgentError.invalidID }
+        // Validate ID format — prevent path traversal and special characters
+        guard Self.validIDPattern.firstMatch(in: config.id, range: NSRange(config.id.startIndex..., in: config.id)) != nil else {
+            throw AgentError.invalidID
+        }
         guard configs[config.id] == nil else { throw AgentError.idAlreadyExists }
         var stamped = config
         stamped.lastModifiedAt = Date()
@@ -615,7 +622,15 @@ actor AgentConfigManager {
     }
 
     func importAgent(_ data: Data) -> Bool {
-        guard let imported = try? decoder.decode(AgentConfig.self, from: data) else { return false }
+        guard var imported = try? decoder.decode(AgentConfig.self, from: data) else { return false }
+        // Validate ID format
+        guard Self.validIDPattern.firstMatch(in: imported.id, range: NSRange(imported.id.startIndex..., in: imported.id)) != nil else { return false }
+        // Never overwrite built-in agents via import
+        if let existing = configs[imported.id], existing.isBuiltIn {
+            TorboLog.warn("Import blocked: cannot overwrite built-in agent '\(imported.id)'", subsystem: "Agents")
+            return false
+        }
+        imported.isBuiltIn = false  // Imported agents are never built-in
         configs[imported.id] = imported
         saveAgent(imported.id)
         TorboLog.info("Imported agent: \(imported.name) (id: \(imported.id))", subsystem: "Agents")

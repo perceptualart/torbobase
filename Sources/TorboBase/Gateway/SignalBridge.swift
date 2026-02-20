@@ -194,7 +194,8 @@ actor SignalBridge {
             await MainActor.run { AppState.shared.addMessage(assistantMsg) }
             await send(content, to: sender)
         } catch {
-            await send("Error: \(error.localizedDescription)", to: sender)
+            TorboLog.error("Chat error: \(error.localizedDescription)", subsystem: "Signal")
+            await send("Sorry, something went wrong. Please try again.", to: sender)
         }
     }
 }

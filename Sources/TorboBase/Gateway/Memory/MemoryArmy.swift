@@ -494,10 +494,17 @@ actor MemoryArmy {
         return []
     }
 
+    // M-24: Only accept known categories from LLM output — reject arbitrary values
+    private static let allowedCategories: Set<String> = [
+        "fact", "personal", "identity", "preference", "project",
+        "technical", "episode", "reflection"
+    ]
+
     private func parseExtracted(_ array: [[String: Any]]) -> [ExtractedMemory] {
         return array.compactMap { item in
             guard let text = item["text"] as? String, text.count >= 10 else { return nil }
-            let category = item["category"] as? String ?? "fact"
+            let rawCategory = item["category"] as? String ?? "fact"
+            let category = Self.allowedCategories.contains(rawCategory) ? rawCategory : "fact"
             let importance = Float(item["importance"] as? Double ?? 0.5)
             let entities = item["entities"] as? [String] ?? []
             return ExtractedMemory(text: text, category: category, importance: importance, entities: entities)

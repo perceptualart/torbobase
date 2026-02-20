@@ -124,10 +124,20 @@ actor DocumentStore {
         }
     }
 
+    /// M-25: Maximum file size for ingestion (50 MB)
+    private let maxIngestFileSize: Int = 50 * 1024 * 1024
+
     /// Ingest a single file
     private func ingestFile(_ path: String) async -> String {
         let name = (path as NSString).lastPathComponent
         let ext = (name as NSString).pathExtension.lowercased()
+
+        // M-25: Check file size before reading
+        if let attrs = try? FileManager.default.attributesOfItem(atPath: path),
+           let size = attrs[.size] as? Int, size > maxIngestFileSize {
+            TorboLog.warn("Rejecting '\(name)' — \(size / (1024*1024))MB exceeds \(maxIngestFileSize / (1024*1024))MB limit", subsystem: "DocStore")
+            return "File too large: \(name) (\(size / (1024*1024))MB, max \(maxIngestFileSize / (1024*1024))MB)"
+        }
 
         // Check if already ingested
         if documents.contains(where: { $0.path == path }) {

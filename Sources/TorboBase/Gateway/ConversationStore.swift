@@ -76,9 +76,9 @@ actor ConversationStore {
             if let data = try? encoder.encode(msg) {
                 if let encrypted = KeychainManager.encryptData(data) {
                     lines += encrypted.base64EncodedString() + "\n"
-                } else if let line = String(data: data, encoding: .utf8) {
-                    // Fallback to plaintext if encryption fails
-                    lines += line + "\n"
+                } else {
+                    // Never fall back to plaintext — drop the message and log the failure
+                    TorboLog.error("Encryption failed — dropping message to protect privacy", subsystem: "ConvStore")
                 }
             }
         }

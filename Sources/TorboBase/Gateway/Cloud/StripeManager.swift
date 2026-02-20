@@ -128,7 +128,8 @@ actor StripeManager {
                 return (nil, "Failed to create checkout session")
             }
 
-            TorboLog.info("Checkout session created for \(email) → \(tier.rawValue)", subsystem: "Stripe")
+            let maskedEmail = email.contains("@") ? String(email.prefix(2)) + "***" + email[email.firstIndex(of: "@")!...] : "***"
+            TorboLog.info("Checkout session created for \(maskedEmail) → \(tier.rawValue)", subsystem: "Stripe")
             return (sessionURL, nil)
         } catch {
             TorboLog.error("Checkout session request failed: \(error)", subsystem: "Stripe")

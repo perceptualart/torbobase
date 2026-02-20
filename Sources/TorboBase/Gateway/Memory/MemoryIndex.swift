@@ -629,6 +629,14 @@ actor MemoryIndex {
             ))
         }
 
+        // M-23: Cap in-memory cache — keep highest-importance entries when exceeding limit
+        let maxCacheEntries = 50_000
+        if loaded.count > maxCacheEntries {
+            loaded.sort { $0.importance > $1.importance }
+            loaded = Array(loaded.prefix(maxCacheEntries))
+            TorboLog.warn("Memory cache capped at \(maxCacheEntries) entries (total in DB: \(loaded.count))", subsystem: "LoA·Index")
+        }
+
         entries = loaded
     }
 

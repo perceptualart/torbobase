@@ -171,7 +171,8 @@ actor TelegramBridge {
                 await send(content)
             }
         } catch {
-            await send("Error: \(error.localizedDescription)")
+            TorboLog.error("Chat error: \(error.localizedDescription)", subsystem: "Telegram")
+            await send("Sorry, something went wrong. Please try again.")
         }
     }
 }

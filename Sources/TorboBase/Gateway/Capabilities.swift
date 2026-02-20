@@ -1993,6 +1993,9 @@ actor SystemAccessEngine {
         "|",               // Piping (could bypass blocklist)
         "\n",              // Newline injection
         "\\x", "\\u",     // Hex/unicode escape injection
+        "$'",              // M-6: zsh ANSI-C quoting ($'\x41' executes as 'A')
+        "<(",  ">(",       // M-6: zsh process substitution
+        "=(", "=(",        // M-6: zsh process substitution (=(...))
     ]
 
     /// Commands that can execute arbitrary code even without blocked command names

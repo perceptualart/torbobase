@@ -229,7 +229,7 @@ actor SupabaseAuth {
             let statusCode = httpResponse?.statusCode ?? 0
 
             if statusCode == 200 || statusCode == 204 {
-                TorboLog.info("Magic link sent to \(email)", subsystem: "CloudAuth")
+                TorboLog.info("Magic link sent to \(Self.maskEmail(email))", subsystem: "CloudAuth")
                 return (true, nil)
             } else {
                 let errorMsg = String(data: data, encoding: .utf8) ?? "Unknown error"
@@ -466,7 +466,7 @@ actor SupabaseAuth {
 
         await upsertUserRecord(newUser)
         userCache[userID] = (newUser, Date())
-        TorboLog.info("Created cloud user: \(email) (\(userID))", subsystem: "CloudAuth")
+        TorboLog.info("Created cloud user: \(Self.maskEmail(email)) (\(userID))", subsystem: "CloudAuth")
         return newUser
     }
 
@@ -653,5 +653,14 @@ actor SupabaseAuth {
             base64 += String(repeating: "=", count: 4 - remainder)
         }
         return Data(base64Encoded: base64)
+    }
+
+    // M-28: Mask email addresses in logs to protect PII
+    private static func maskEmail(_ email: String) -> String {
+        guard let atIndex = email.firstIndex(of: "@") else { return "***" }
+        let local = email[email.startIndex..<atIndex]
+        let domain = email[atIndex...]
+        let visible = min(2, local.count)
+        return String(local.prefix(visible)) + "***" + domain
     }
 }

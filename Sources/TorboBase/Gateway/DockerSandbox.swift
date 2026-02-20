@@ -83,12 +83,14 @@ actor DockerSandbox {
         // Check Docker availability
         let dockerAvailable = await checkDocker()
 
-        // Fallback to process sandbox
+        // Fallback to process sandbox — WARNING: loses Docker security guarantees
+        // (read-only fs, cap-drop ALL, pids-limit, memory limit, no-new-privileges)
         guard dockerAvailable else {
-            TorboLog.info("Falling back to process sandbox", subsystem: "Docker")
+            TorboLog.warn("Docker unavailable — falling back to process sandbox (reduced isolation)", subsystem: "Docker")
             var sandboxConfig = SandboxConfig()
             sandboxConfig.timeout = config.timeout
             sandboxConfig.maxOutputSize = config.maxOutputSize
+            sandboxConfig.allowNetwork = false  // Force no-network in fallback
             return await CodeSandbox.shared.execute(code: code, language: language, config: sandboxConfig)
         }
 
@@ -113,7 +115,9 @@ actor DockerSandbox {
         // Resource limits
         dockerArgs += ["--memory", config.memoryLimit]
         dockerArgs += ["--cpus", String(config.cpuLimit)]
-        dockerArgs += ["--network", config.networkMode]
+        // Validate network mode — only allow safe values
+        let safeNetwork = ["none", "bridge"].contains(config.networkMode) ? config.networkMode : "none"
+        dockerArgs += ["--network", safeNetwork]
 
         // Security: read-only filesystem except /tmp and working dir
         dockerArgs += ["--read-only"]

@@ -929,6 +929,9 @@ var LEVELS = [
     {num: 5, name: 'Full', color: 'red', desc: 'Full system access. Agents can perform any operation without restrictions.'}
 ];
 
+// --- HTML Escape Helper ---
+function esc(s) { var d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+
 // --- API Helper ---
 function api(method, path, body) {
     var opts = {
@@ -945,6 +948,7 @@ function api(method, path, body) {
         if (r.status === 401) {
             TOKEN = '';
             localStorage.removeItem('torbo_dashboard_token');
+            localStorage.removeItem('torbo_dashboard_token_ts');
             showAuth();
             return Promise.reject(new Error('Unauthorized'));
         }
@@ -1000,6 +1004,7 @@ function doAuth() {
     }).then(function(r) {
         if (r.ok) {
             localStorage.setItem('torbo_dashboard_token', t);
+            localStorage.setItem('torbo_dashboard_token_ts', Date.now().toString());
             hideAuth();
             loadOverview();
         } else {
@@ -1068,10 +1073,11 @@ function loadModels() {
         grid.innerHTML = models.map(function(m) {
             var name = typeof m === 'string' ? m : (m.name || m.model || 'Unknown');
             var size = m.size ? (m.size / 1e9).toFixed(1) + ' GB' : '';
+            var safeName = esc(name);
             return '<div class="stat-card" style="position:relative;">' +
-                '<div class="stat-label">' + name + '</div>' +
+                '<div class="stat-label">' + safeName + '</div>' +
                 (size ? '<div class="stat-value" style="font-size:12px;">' + size + '</div>' : '') +
-                '<button onclick="deleteModel(\\'' + name.replace(/'/g, "\\\\'") + '\\')" style="position:absolute;top:8px;right:8px;background:none;border:none;color:var(--text-dim);cursor:pointer;font-size:14px;" title="Delete model">&times;</button>' +
+                '<button onclick="deleteModel(\\'' + name.replace(/[^a-zA-Z0-9._:-]/g, '') + '\\')" style="position:absolute;top:8px;right:8px;background:none;border:none;color:var(--text-dim);cursor:pointer;font-size:14px;" title="Delete model">&times;</button>' +
                 '</div>';
         }).join('');
     }).catch(function() {
@@ -1155,8 +1161,8 @@ function loadSecurity() {
         area.innerHTML = blocked.map(function(e) {
             return '<div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid var(--border);font-size:12px;">' +
                 '<div><span style="color:#ff4444;font-weight:600;">BLOCKED</span> ' +
-                '<span style="color:var(--text);">' + (e.method || '') + ' ' + (e.path || '') + '</span></div>' +
-                '<div style="color:var(--text-dim);">' + (e.ip || '') + ' &bull; ' + (e.time || '') + '</div>' +
+                '<span style="color:var(--text);">' + esc(e.method || '') + ' ' + esc(e.path || '') + '</span></div>' +
+                '<div style="color:var(--text-dim);">' + esc(e.ip || '') + ' &bull; ' + esc(e.time || '') + '</div>' +
                 '</div>';
         }).join('');
     }).catch(function() {});
@@ -2030,7 +2036,14 @@ var isLocal = (location.hostname === 'localhost' || location.hostname === '127.0
 
 function initApp() {
     // Never accept tokens from URL query parameters — they leak via browser history, Referer headers, and logs.
+    // M-11: Expire stored tokens after 24 hours
     var storedToken = localStorage.getItem('torbo_dashboard_token');
+    var tokenTs = parseInt(localStorage.getItem('torbo_dashboard_token_ts') || '0', 10);
+    if (storedToken && (Date.now() - tokenTs > 86400000)) {
+        localStorage.removeItem('torbo_dashboard_token');
+        localStorage.removeItem('torbo_dashboard_token_ts');
+        storedToken = null;
+    }
     var t = storedToken || '';
     if (!t && !isLocal) {
         showAuth();
@@ -2045,13 +2058,14 @@ function initApp() {
         headers: t ? {'Authorization': 'Bearer ' + t} : {}
     }).then(function(r) {
         if (r.ok) {
-            if (t) localStorage.setItem('torbo_dashboard_token', t);
+            if (t) { localStorage.setItem('torbo_dashboard_token', t); localStorage.setItem('torbo_dashboard_token_ts', Date.now().toString()); }
             hideAuth();
             loadOverview();
             overviewTimer = setInterval(loadOverview, 30000);
         } else if (!isLocal) {
             TOKEN = '';
             localStorage.removeItem('torbo_dashboard_token');
+            localStorage.removeItem('torbo_dashboard_token_ts');
             showAuth();
         } else {
             hideAuth();

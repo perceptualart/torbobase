@@ -673,20 +673,19 @@ actor GatewayServer {
 
         let agentID = req.headers["x-torbo-agent-id"] ?? req.headers["X-Torbo-Agent-Id"] ?? "sid"
         let platform = req.headers["x-torbo-platform"] ?? req.headers["X-Torbo-Platform"]
-        // Client can request an access level; cap it by global level for safety
-        let clientLevel: AccessLevel? = {
-            let raw = req.headers["x-torbo-access-level"] ?? req.headers["X-Torbo-Access-Level"]
-            guard let str = raw, let val = Int(str) else { return nil }
-            return AccessLevel(rawValue: val)
-        }()
+        // Resolve access level: use the per-agent level from config, capped by global.
+        // The x-torbo-access-level header can only LOWER the level, never raise it.
         let currentLevel: AccessLevel = await MainActor.run {
             guard let state = stateRef else { return .off }
             if state.accessLevel == .off { return .off }
-            if let requested = clientLevel {
-                // Client-requested level, capped by global
-                return AccessLevel(rawValue: min(requested.rawValue, state.accessLevel.rawValue)) ?? .chatOnly
+            let agentLevel = state.accessLevel(for: agentID)
+            // Client header can request a lower level (e.g. for testing), but never higher
+            if let raw = req.headers["x-torbo-access-level"] ?? req.headers["X-Torbo-Access-Level"],
+               let val = Int(raw), let requested = AccessLevel(rawValue: val),
+               requested.rawValue < agentLevel.rawValue {
+                return requested
             }
-            return state.accessLevel(for: agentID)
+            return agentLevel
         }
 
         if currentLevel == .off {
@@ -1097,12 +1096,14 @@ actor GatewayServer {
                 return HTTPResponse(statusCode: 200, headers: ["Content-Type": "application/json"], body: data)
             }
         case ("POST", "/v1/agents"):
-            return await guardedRoute(level: .chatOnly, current: currentLevel, clientIP: clientIP, req: req) {
+            return await guardedRoute(level: .writeFiles, current: currentLevel, clientIP: clientIP, req: req) {
                 guard let body = req.jsonBody,
                       let jsonData = try? JSONSerialization.data(withJSONObject: body),
-                      let config = try? JSONDecoder.torboBase.decode(AgentConfig.self, from: jsonData) else {
+                      var config = try? JSONDecoder.torboBase.decode(AgentConfig.self, from: jsonData) else {
                     return HTTPResponse.badRequest("Invalid agent config")
                 }
+                // Cap the new agent's access level to the caller's level
+                config.accessLevel = min(config.accessLevel, currentLevel.rawValue)
                 do {
                     try await AgentConfigManager.shared.createAgent(config)
                     let appState = self.appState
@@ -1112,7 +1113,7 @@ actor GatewayServer {
                     }
                     return HTTPResponse(statusCode: 201, headers: ["Content-Type": "application/json"], body: responseData)
                 } catch {
-                    return HTTPResponse.badRequest(error.localizedDescription)
+                    return HTTPResponse.badRequest("Failed to create agent")
                 }
             }
 
@@ -1304,14 +1305,14 @@ actor GatewayServer {
 
                     // DELETE /v1/agents/{id} — delete agent (not SiD)
                     if components.count == 1 && req.method == "DELETE" {
-                        return await guardedRoute(level: .chatOnly, current: currentLevel, clientIP: clientIP, req: req) {
+                        return await guardedRoute(level: .writeFiles, current: currentLevel, clientIP: clientIP, req: req) {
                             do {
                                 try await AgentConfigManager.shared.deleteAgent(targetAgentID)
                                 let appState = self.appState
                                 await MainActor.run { appState?.refreshAgentLevels() }
                                 return HTTPResponse.json(["status": "deleted", "id": targetAgentID])
                             } catch {
-                                return HTTPResponse.badRequest(error.localizedDescription)
+                                return HTTPResponse.badRequest("Failed to delete agent")
                             }
                         }
                     }
@@ -1885,6 +1886,9 @@ actor GatewayServer {
         do { urlReq.httpBody = try JSONSerialization.data(withJSONObject: body) }
         catch { writer.sendResponse(.badRequest("JSON encode error")); return }
 
+        // Wall-clock deadline for the entire streaming pipeline (5 minutes max)
+        let streamDeadline = Date().addingTimeInterval(300)
+
         do {
             let (bytes, resp) = try await URLSession.shared.bytes(for: urlReq)
             let httpResp = resp as? HTTPURLResponse
@@ -1898,7 +1902,7 @@ actor GatewayServer {
             var fullContent = ""
             var buffer = ""
 
-            for try await byte in bytes where !Task.isCancelled {
+            for try await byte in bytes where !Task.isCancelled && Date() < streamDeadline {
                 let char = Character(UnicodeScalar(byte))
                 if char == "\n" {
                     let line = buffer.trimmingCharacters(in: .whitespaces)

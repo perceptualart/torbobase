@@ -2119,7 +2119,11 @@ enum WebChatHTML {
         const urlParams = new URLSearchParams(window.location.search);
         const roomParam = urlParams.get('room');
         const nickParam = urlParams.get('nick');
-        if (nickParam) { myNickname = nickParam; localStorage.setItem(NICK_KEY, nickParam); }
+        if (nickParam) {
+            // Sanitize: alphanumeric + spaces + basic punctuation, max 30 chars
+            var safeNick = nickParam.replace(/[<>&"'\\\\]/g, '').substring(0, 30).trim();
+            if (safeNick) { myNickname = safeNick; localStorage.setItem(NICK_KEY, safeNick); }
+        }
 
         if (roomParam) {
             // Joining a shared room

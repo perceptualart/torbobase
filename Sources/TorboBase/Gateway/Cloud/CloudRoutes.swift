@@ -36,17 +36,16 @@ enum CloudRoutes {
             return HTTPResponse.badRequest("Invalid email address")
         }
 
+        // M-7: Always return success to prevent email enumeration
+        // Log the actual result server-side but return uniform response to client
         let (success, error) = await SupabaseAuth.shared.sendMagicLink(email: email)
-
-        if success {
-            return HTTPResponse.json([
-                "status": "sent",
-                "message": "Check your email for a magic link to sign in."
-            ])
-        } else {
-            return HTTPResponse(statusCode: 400, headers: ["Content-Type": "application/json"],
-                              body: Data("{\"error\":\"\(error ?? "Unknown error")\"}".utf8))
+        if !success {
+            TorboLog.warn("Magic link failed for request (not revealed to client): \(error ?? "unknown")", subsystem: "CloudAuth")
         }
+        return HTTPResponse.json([
+            "status": "sent",
+            "message": "If an account exists for that email, a magic link has been sent."
+        ])
     }
 
     /// POST /v1/auth/verify

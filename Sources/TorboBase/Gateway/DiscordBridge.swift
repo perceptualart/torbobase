@@ -217,7 +217,8 @@ actor DiscordBridge {
             await MainActor.run { AppState.shared.addMessage(assistantMsg) }
             await send(content)
         } catch {
-            await send("⚠️ Error: \(error.localizedDescription)")
+            TorboLog.error("Chat error: \(error.localizedDescription)", subsystem: "Discord")
+            await send("Sorry, something went wrong. Please try again.")
         }
     }
 
