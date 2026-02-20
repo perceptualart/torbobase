@@ -111,14 +111,15 @@ actor MemoryRouter {
         }
 
         // 2. Memory context (from vector search)
+        //    Sanitize to prevent prompt injection via crafted memories.
         if let memoryBlock, !memoryBlock.isEmpty {
-            systemParts.append(memoryBlock)
+            systemParts.append(Self.sanitizeMemoryBlock(memoryBlock))
         }
 
         // 3. Legacy memory (structured facts — always include if available)
         //    Legacy holds identity/user/project knowledge that vector search may not surface.
         if !legacyMemory.isEmpty {
-            systemParts.append(legacyMemory)
+            systemParts.append(Self.sanitizeMemoryBlock(legacyMemory))
         }
 
         // 4. Skills prompt additions (enabled skills at current access level, filtered by agent)
@@ -141,6 +142,31 @@ actor MemoryRouter {
         }
 
         body["messages"] = messages
+    }
+
+    // MARK: - Memory Sanitization
+
+    /// Strip patterns commonly used in prompt injection attacks from memory content.
+    /// Removes instruction-like markers while preserving factual content.
+    private static func sanitizeMemoryBlock(_ block: String) -> String {
+        var s = block
+        // Strip common prompt injection patterns (case-insensitive)
+        let injectionPatterns = [
+            "(?i)\\bsystem\\s*(?:override|prompt|instruction|message)\\s*:",
+            "(?i)\\bignore\\s+(?:all\\s+)?previous\\s+instructions\\b",
+            "(?i)\\bignore\\s+(?:all\\s+)?above\\s+instructions\\b",
+            "(?i)\\byou\\s+are\\s+now\\b",
+            "(?i)\\bact\\s+as\\s+(?:if|though)\\b",
+            "(?i)\\bnew\\s+(?:system\\s+)?instructions?\\s*:",
+            "(?i)\\b(?:assistant|ai)\\s*:\\s*(?:sure|ok|yes)",
+            "(?i)<\\/?(?:system|instruction|prompt|override)>"
+        ]
+        for pattern in injectionPatterns {
+            if let regex = try? NSRegularExpression(pattern: pattern) {
+                s = regex.stringByReplacingMatches(in: s, range: NSRange(s.startIndex..., in: s), withTemplate: "[filtered]")
+            }
+        }
+        return s
     }
 
     // MARK: - Post-Response: Extract & Store Memories

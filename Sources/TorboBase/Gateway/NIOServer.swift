@@ -97,7 +97,9 @@ final class HTTPHandler: ChannelInboundHandler, RemovableChannelHandler {
             accumulated = Data()
 
             let writer = NIOResponseWriter(channel: context.channel)
-            let remoteAddr = context.remoteAddress?.description ?? "unknown"
+            let rawAddr = context.remoteAddress?.description ?? "unknown"
+            // Strip port from address — NIO format is "[IPv4]127.0.0.1/127.0.0.1:54321"
+            let remoteAddr = GatewayServer.stripPort(from: rawAddr)
 
             Task {
                 await GatewayServer.shared.handleRequest(requestData, clientIP: remoteAddr, writer: writer)

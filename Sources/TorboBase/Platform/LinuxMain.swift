@@ -103,7 +103,8 @@ struct TorboBaseServer {
         await GatewayServer.shared.start(appState: AppState.shared)
         TorboLog.info("Gateway running on port \(port)", subsystem: "Main")
         TorboLog.info("Dashboard: http://127.0.0.1:\(port)/dashboard", subsystem: "Main")
-        TorboLog.info("Bearer token: \(AppConfig.serverToken)", subsystem: "Main")
+        let masked = String(AppConfig.serverToken.prefix(4)) + "****"
+        TorboLog.info("Bearer token: \(masked)", subsystem: "Main")
 
         // Start background services
         TorboLog.info("Starting proactive agent...", subsystem: "Main")

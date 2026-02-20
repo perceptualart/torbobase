@@ -1037,19 +1037,24 @@ enum WebChatHTML {
     function saveConversation() {
         try {
             localStorage.setItem(HISTORY_KEY + currentAgentID, JSON.stringify(conversationHistory));
-            // Save rendered messages HTML
-            const html = messagesEl.innerHTML;
-            localStorage.setItem(MESSAGES_KEY + currentAgentID, html);
         } catch(e) {} // quota exceeded — fail silently
     }
     function loadConversation() {
         try {
             const saved = localStorage.getItem(HISTORY_KEY + currentAgentID);
-            const savedHtml = localStorage.getItem(MESSAGES_KEY + currentAgentID);
-            if (saved && savedHtml) {
+            // Legacy: remove raw HTML cache (stored XSS risk)
+            localStorage.removeItem(MESSAGES_KEY + currentAgentID);
+            if (saved) {
                 conversationHistory = JSON.parse(saved);
                 if (conversationHistory.length > 0) {
-                    messagesEl.innerHTML = savedHtml;
+                    // Re-render from conversation history (safe — goes through escapeHtml + renderMarkdown)
+                    messagesEl.innerHTML = '';
+                    for (const msg of conversationHistory) {
+                        const div = document.createElement('div');
+                        div.className = 'message ' + (msg.role === 'assistant' ? 'assistant' : 'user');
+                        div.innerHTML = '<div class="bubble">' + renderMarkdown(msg.content || '') + '</div>';
+                        messagesEl.appendChild(div);
+                    }
                     setOrbCompact(true);
                     messagesEl.scrollTop = messagesEl.scrollHeight;
                     return true;
@@ -1535,7 +1540,11 @@ enum WebChatHTML {
         html = html.replace(/^[\\-\\*] (.+)$/gm, '<li>$1</li>');
         html = html.replace(/(<li>[\\s\\S]*?<\\/li>)/g, '<ul>$1</ul>');
         html = html.replace(/^\\d+\\. (.+)$/gm, '<li>$1</li>');
-        html = html.replace(/\\[([^\\]]+)\\]\\((https?:\\/\\/[^)]+)\\)/g, '<a href="$2" target="_blank">$1</a>');
+        html = html.replace(/\\[([^\\]]+)\\]\\((https?:\\/\\/[^)]+)\\)/g, function(_, text, url) {
+            // Sanitize URL: strip any HTML entities that could break out of the attribute
+            var safeUrl = url.replace(/&quot;/g, '').replace(/&amp;/g, '&').replace(/&lt;/g, '').replace(/&gt;/g, '').replace(/[\\x00-\\x1f]/g, '');
+            return '<a href="' + safeUrl + '" target="_blank" rel="noopener">' + text + '</a>';
+        });
         html = html.replace(/^---$/gm, '<hr style="border:none;border-top:1px solid rgba(255,255,255,0.1);margin:8px 0">');
         html = html.replace(/\\n/g, '<br>');
         html = html.replace(/<\\/(pre|h[123]|ul|ol|li|hr)><br>/g, '</$1>');

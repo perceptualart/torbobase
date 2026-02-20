@@ -148,8 +148,9 @@ actor WebhookManager {
 
     // MARK: - Trigger Webhook
 
-    /// Process an incoming webhook event
-    func trigger(webhookID: String, payload: [String: Any], headers: [String: String] = [:]) async -> (success: Bool, message: String) {
+    /// Process an incoming webhook event.
+    /// `rawBody` is the original request body bytes — used for HMAC verification (must not be re-serialized).
+    func trigger(webhookID: String, payload: [String: Any], headers: [String: String] = [:], rawBody: Data? = nil) async -> (success: Bool, message: String) {
         guard var webhook = webhooks[webhookID] else {
             return (false, "Webhook not found")
         }
@@ -163,9 +164,14 @@ actor WebhookManager {
             if sig.isEmpty {
                 return (false, "Missing signature header")
             }
-            // Compute HMAC-SHA256 of the body using the webhook secret
-            let bodyString = (try? JSONSerialization.data(withJSONObject: payload)).flatMap { String(data: $0, encoding: .utf8) } ?? ""
-            let bodyData = Data(bodyString.utf8)
+            // Use original raw body bytes for HMAC — never re-serialize parsed JSON (key order/formatting changes break signatures)
+            let bodyData: Data
+            if let raw = rawBody {
+                bodyData = raw
+            } else {
+                // Fallback: re-serialize (lossy but better than nothing)
+                bodyData = (try? JSONSerialization.data(withJSONObject: payload)) ?? Data()
+            }
             let keyData = Data(secret.utf8)
             let expectedSig: String
             #if canImport(CommonCrypto)
@@ -181,14 +187,15 @@ actor WebhookManager {
             let mac = HMAC<SHA256>.authenticationCode(for: bodyData, using: symmetricKey)
             expectedSig = "sha256=" + Data(mac).map { String(format: "%02x", $0) }.joined()
             #else
-            expectedSig = ""
+            // No crypto library available — reject all HMAC-protected webhooks rather than silently bypassing
+            TorboLog.error("HMAC verification unavailable — no crypto library. Rejecting webhook '\(webhook.name)'", subsystem: "Webhook")
+            return (false, "HMAC verification not available on this platform")
             #endif
             // Constant-time comparison to prevent timing attacks
             let sigBytes = Array(sig.utf8)
             let expectedBytes = Array(expectedSig.utf8)
             let hmacMatch = sigBytes.count == expectedBytes.count && zip(sigBytes, expectedBytes).reduce(0) { $0 | ($1.0 ^ $1.1) } == 0
-            // Also accept exact secret match for simple webhook providers (NOT substring match)
-            if !hmacMatch && sig != secret {
+            if !hmacMatch {
                 TorboLog.error("Signature mismatch for '\(webhook.name)'", subsystem: "Webhook")
                 return (false, "Invalid signature")
             }

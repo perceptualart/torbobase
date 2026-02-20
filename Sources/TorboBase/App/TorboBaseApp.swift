@@ -149,7 +149,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             TorboLog.info("Gateway running on port \(AppState.shared.serverPort)", subsystem: "App")
             TorboLog.info("Access level: \(AppState.shared.accessLevel.rawValue) (\(AppState.shared.accessLevel.name))", subsystem: "App")
             TorboLog.info("Dashboard: http://127.0.0.1:\(AppState.shared.serverPort)/dashboard", subsystem: "App")
-            TorboLog.info("Bearer token: \(AppConfig.serverToken)", subsystem: "App")
+            let masked = String(AppConfig.serverToken.prefix(4)) + "****"
+            TorboLog.info("Bearer token: \(masked)", subsystem: "App")
 
             // Start ProactiveAgent — background task executor
             // ProactiveAgent starts via AppState.proactiveAgentEnabled toggle

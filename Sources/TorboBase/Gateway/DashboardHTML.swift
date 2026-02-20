@@ -2029,24 +2029,24 @@ requestAnimationFrame(orbAnimLoop);
 var isLocal = (location.hostname === 'localhost' || location.hostname === '127.0.0.1' || location.hostname === '::1');
 
 function initApp() {
-    var params = new URLSearchParams(window.location.search);
-    var urlToken = params.get('token');
+    // Never accept tokens from URL query parameters — they leak via browser history, Referer headers, and logs.
     var storedToken = localStorage.getItem('torbo_dashboard_token');
-    var t = urlToken || storedToken || '';
+    var t = storedToken || '';
     if (!t && !isLocal) {
         showAuth();
         return;
     }
     TOKEN = t;
+    // Clean any leftover token from URL (in case of old bookmarks)
+    if (window.location.search.includes('token=')) {
+        window.history.replaceState({}, '', window.location.pathname);
+    }
     fetch('/v1/dashboard/status', {
         headers: t ? {'Authorization': 'Bearer ' + t} : {}
     }).then(function(r) {
         if (r.ok) {
             if (t) localStorage.setItem('torbo_dashboard_token', t);
             hideAuth();
-            if (urlToken) {
-                window.history.replaceState({}, '', window.location.pathname);
-            }
             loadOverview();
             overviewTimer = setInterval(loadOverview, 30000);
         } else if (!isLocal) {

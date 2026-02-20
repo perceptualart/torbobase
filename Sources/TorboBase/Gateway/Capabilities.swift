@@ -2101,13 +2101,14 @@ actor SystemAccessEngine {
     func readFile(path: String, maxChars: Int = 50000, scopes: [String] = [], accessLevel: AccessLevel = .chatOnly) -> String {
         let p = NSString(string: path).expandingTildeInPath
         let vip = accessLevel == .fullAccess
-        // VIP (level 5) bypasses all path restrictions
+        // Sensitive paths (SSH keys, credentials, keychain) are ALWAYS blocked — even at fullAccess.
+        // This prevents a compromised level-5 agent from exfiltrating secrets.
+        if Self.isSensitiveReadPath(p) {
+            TorboLog.warn("BLOCKED read of sensitive path: \(path)", subsystem: "Tools")
+            return "BLOCKED: Access to sensitive system files is not permitted."
+        }
+        // VIP (level 5) bypasses scope and protected-path restrictions, but not sensitive paths above.
         if !vip {
-            // Block sensitive paths (SSH keys, API keys, credentials)
-            if Self.isSensitiveReadPath(p) {
-                TorboLog.warn("BLOCKED read of sensitive path: \(path)", subsystem: "Tools")
-                return "BLOCKED: Access to sensitive system files is not permitted."
-            }
             // Block protected system paths
             if Self.isProtectedPath(p) { return "BLOCKED: protected system path" }
             // Enforce agent directory scopes
@@ -2125,16 +2126,16 @@ actor SystemAccessEngine {
     func writeFile(path: String, content: String, append: Bool = false, scopes: [String] = [], accessLevel: AccessLevel = .chatOnly) -> String {
         let p = NSString(string: path).expandingTildeInPath
         let vip = accessLevel == .fullAccess
+        // Sensitive paths are ALWAYS blocked — even at fullAccess
+        if Self.isSensitiveReadPath(p) {
+            TorboLog.warn("BLOCKED write to sensitive path: \(path)", subsystem: "Tools")
+            return "BLOCKED: Cannot write to sensitive system files."
+        }
         if !vip {
             if Self.isProtectedPath(p) { return "BLOCKED: protected system path" }
             if Self.isCoreFile(p) {
                 TorboLog.warn("BLOCKED write to core file: \(path)", subsystem: "Tools")
                 return "BLOCKED: \(URL(fileURLWithPath: p).lastPathComponent) is a core infrastructure file. Create a NEW file instead, or ask MM to modify it manually."
-            }
-            // Block writes to sensitive paths
-            if Self.isSensitiveReadPath(p) {
-                TorboLog.warn("BLOCKED write to sensitive path: \(path)", subsystem: "Tools")
-                return "BLOCKED: Cannot write to sensitive system files."
             }
             // Enforce agent directory scopes
             if !Self.isPathAllowed(p, scopes: scopes) {

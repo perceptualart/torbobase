@@ -442,10 +442,32 @@ actor GatewayServer {
 
     // MARK: - Request Processing
 
+    /// Extract just the IP address from an endpoint description, stripping port and brackets.
+    /// NWConnection.endpoint.debugDescription produces "127.0.0.1:54321" or "[::1]:54321".
+    /// NIO's SocketAddress.description produces "[IPv4]127.0.0.1/127.0.0.1:54321".
+    nonisolated static func stripPort(from address: String) -> String {
+        var s = address
+        // NIO format: "[IPv4]127.0.0.1/127.0.0.1:54321" — take after last "/"
+        if let slash = s.lastIndex(of: "/") {
+            s = String(s[s.index(after: slash)...])
+        }
+        // Bracketed IPv6: "[::1]:54321" → "::1"
+        if s.hasPrefix("["), let close = s.firstIndex(of: "]") {
+            return String(s[s.index(after: s.startIndex)..<close])
+        }
+        // IPv4:port — exactly one colon means "ip:port"
+        let colons = s.filter { $0 == ":" }.count
+        if colons == 1, let colon = s.firstIndex(of: ":") {
+            return String(s[s.startIndex..<colon])
+        }
+        // Pure IPv6 or already clean — return as-is
+        return s
+    }
+
     #if canImport(Network)
     private func processRequest(_ data: Data, on conn: NWConnection) async {
         let writer = NWConnectionWriter(connection: conn)
-        let clientIP = conn.endpoint.debugDescription
+        let clientIP = Self.stripPort(from: conn.endpoint.debugDescription)
         await processRequest(data, clientIP: clientIP, writer: writer)
     }
     #endif
@@ -754,6 +776,14 @@ actor GatewayServer {
                     if let data = try? JSONSerialization.data(withJSONObject: errorBody) {
                         return HTTPResponse(statusCode: 429, headers: ["Content-Type": "application/json"], body: data)
                     }
+                }
+            }
+            // Token budget enforcement: check if agent has exceeded configured limits
+            if let agentConfig = await AgentConfigManager.shared.agent(agentID) {
+                let budget = await TokenTracker.shared.budgetStatus(agentID: agentID, config: agentConfig)
+                if budget.overBudget && agentConfig.hardStopOnBudget {
+                    return HTTPResponse(statusCode: 429, headers: ["Content-Type": "application/json"],
+                                      body: Data("{\"error\":\"Agent '\(agentID)' has exceeded its token budget\"}".utf8))
                 }
             }
             // Check if client wants streaming
@@ -1397,7 +1427,7 @@ actor GatewayServer {
                 let webhookID = String(req.path.dropFirst("/v1/webhooks/".count))
                 if !webhookID.isEmpty && webhookID != "stats" {
                     let payload = req.jsonBody ?? [:]
-                    let result = await WebhookManager.shared.trigger(webhookID: webhookID, payload: payload, headers: req.headers)
+                    let result = await WebhookManager.shared.trigger(webhookID: webhookID, payload: payload, headers: req.headers, rawBody: req.body)
                     if result.success {
                         return HTTPResponse.json(["success": true, "message": result.message])
                     } else {
@@ -1477,9 +1507,8 @@ actor GatewayServer {
 
     private func authenticate(_ req: HTTPRequest, clientIP: String = "") -> Bool {
         // Localhost access skips auth entirely.
-        // NWConnection.endpoint.debugDescription includes port (e.g. "127.0.0.1:54321"),
-        // so check with hasPrefix/contains rather than exact match.
-        if clientIP.hasPrefix("127.0.0.1") || clientIP.hasPrefix("::1") || clientIP.hasPrefix("localhost") { return true }
+        // clientIP is pre-stripped of port by stripPort() at extraction point.
+        if clientIP == "127.0.0.1" || clientIP == "::1" || clientIP == "localhost" { return true }
         guard let auth = req.headers["authorization"] ?? req.headers["Authorization"] else { return false }
         let token = auth.hasPrefix("Bearer ") ? String(auth.dropFirst(7)) : auth
         if token == KeychainManager.serverToken { return true }
@@ -1869,7 +1898,7 @@ actor GatewayServer {
             var fullContent = ""
             var buffer = ""
 
-            for try await byte in bytes {
+            for try await byte in bytes where !Task.isCancelled {
                 let char = Character(UnicodeScalar(byte))
                 if char == "\n" {
                     let line = buffer.trimmingCharacters(in: .whitespaces)
