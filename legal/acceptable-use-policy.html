@@ -1,0 +1,642 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Torbo — Acceptable Use Policy</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><circle cx='50' cy='50' r='40' fill='%23a855f7'/></svg>">
+<style>
+*, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+
+:root {
+    --bg: #0a0a0d;
+    --surface: #111114;
+    --surface-hover: #18181c;
+    --border: rgba(255,255,255,0.06);
+    --border-light: rgba(255,255,255,0.1);
+    --text: rgba(255,255,255,0.85);
+    --text-dim: rgba(255,255,255,0.4);
+    --text-bright: #fff;
+    --cyan: #00e5ff;
+    --cyan-dim: rgba(0,229,255,0.15);
+    --purple: #a855f7;
+    --purple-dim: rgba(168,85,247,0.15);
+}
+
+body {
+    font-family: 'Futura', 'Futura-Medium', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.7;
+    min-height: 100vh;
+}
+
+/* Header */
+.header {
+    border-bottom: 1px solid var(--border);
+    background: var(--surface);
+    position: sticky;
+    top: 0;
+    z-index: 100;
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+}
+
+.header-inner {
+    max-width: 860px;
+    margin: 0 auto;
+    padding: 20px 32px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 24px;
+}
+
+.logo-group {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    text-decoration: none;
+    flex-shrink: 0;
+}
+
+.logo-group svg {
+    width: 36px;
+    height: 36px;
+}
+
+.logo-text {
+    font-size: 14px;
+    font-weight: 700;
+    letter-spacing: 2.5px;
+    color: var(--text-bright);
+}
+
+.logo-subtitle {
+    font-size: 10px;
+    letter-spacing: 1.5px;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    margin-top: 2px;
+}
+
+/* Navigation */
+.legal-nav {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+}
+
+.legal-nav a {
+    font-size: 12px;
+    font-weight: 500;
+    letter-spacing: 0.5px;
+    color: var(--text-dim);
+    text-decoration: none;
+    padding: 6px 14px;
+    border-radius: 6px;
+    border: 1px solid transparent;
+    transition: all 0.2s ease;
+    white-space: nowrap;
+}
+
+.legal-nav a:hover {
+    color: var(--cyan);
+    border-color: var(--border-light);
+    background: rgba(255,255,255,0.03);
+}
+
+.legal-nav a.active {
+    color: var(--cyan);
+    border-color: rgba(0,229,255,0.2);
+    background: var(--cyan-dim);
+}
+
+/* Main Content */
+.content {
+    max-width: 860px;
+    margin: 0 auto;
+    padding: 48px 32px 80px;
+}
+
+/* Title Block */
+.doc-title {
+    font-size: 32px;
+    font-weight: 700;
+    letter-spacing: 1px;
+    color: var(--text-bright);
+    margin-bottom: 20px;
+    line-height: 1.3;
+}
+
+.doc-meta {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin-bottom: 40px;
+    padding-bottom: 32px;
+    border-bottom: 1px solid var(--border);
+}
+
+.doc-meta span {
+    font-size: 13px;
+    color: var(--text-dim);
+    letter-spacing: 0.3px;
+}
+
+.doc-meta strong {
+    color: var(--text);
+    font-weight: 600;
+}
+
+/* Sections */
+h2 {
+    font-size: 22px;
+    font-weight: 700;
+    letter-spacing: 0.5px;
+    color: var(--text-bright);
+    margin-top: 48px;
+    margin-bottom: 16px;
+    padding-bottom: 10px;
+    border-bottom: 1px solid var(--border);
+}
+
+h2:first-of-type {
+    margin-top: 0;
+}
+
+h3 {
+    font-size: 16px;
+    font-weight: 600;
+    letter-spacing: 0.3px;
+    color: var(--purple);
+    margin-top: 28px;
+    margin-bottom: 10px;
+}
+
+p {
+    margin-bottom: 16px;
+    font-size: 15px;
+    line-height: 1.8;
+}
+
+/* Lists */
+ul {
+    margin-bottom: 16px;
+    padding-left: 0;
+    list-style: none;
+}
+
+ul li {
+    font-size: 15px;
+    line-height: 1.8;
+    padding: 4px 0 4px 24px;
+    position: relative;
+}
+
+ul li::before {
+    content: '';
+    position: absolute;
+    left: 8px;
+    top: 14px;
+    width: 5px;
+    height: 5px;
+    border-radius: 50%;
+    background: var(--cyan);
+    opacity: 0.7;
+}
+
+/* Violation Levels */
+.level-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 20px 24px;
+    margin-bottom: 16px;
+    margin-top: 12px;
+}
+
+.level-card h3 {
+    margin-top: 0;
+    margin-bottom: 12px;
+    color: var(--text-bright);
+    font-size: 17px;
+}
+
+.level-card ul {
+    margin-bottom: 0;
+}
+
+.level-card ul li:last-child {
+    padding-bottom: 0;
+}
+
+/* Immediate Termination */
+.danger-card {
+    background: rgba(239,68,68,0.06);
+    border: 1px solid rgba(239,68,68,0.15);
+    border-radius: 12px;
+    padding: 20px 24px;
+    margin-top: 24px;
+    margin-bottom: 16px;
+}
+
+.danger-card h3 {
+    color: #ef4444;
+    margin-top: 0;
+    margin-bottom: 12px;
+    font-size: 17px;
+}
+
+.danger-card ul {
+    margin-bottom: 0;
+}
+
+/* Links */
+a {
+    color: var(--cyan);
+    text-decoration: none;
+    transition: opacity 0.2s ease;
+}
+
+a:hover {
+    opacity: 0.8;
+    text-decoration: underline;
+}
+
+/* Reporting Info */
+.info-block {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 20px 24px;
+    margin: 16px 0;
+}
+
+.info-block ul {
+    margin-bottom: 0;
+}
+
+/* Contact Block */
+.contact-block {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 24px;
+    margin-top: 16px;
+}
+
+.contact-block .company-name {
+    font-size: 16px;
+    font-weight: 700;
+    color: var(--text-bright);
+    margin-bottom: 8px;
+}
+
+.contact-block p {
+    margin-bottom: 4px;
+    font-size: 14px;
+}
+
+/* Footer */
+.footer {
+    border-top: 1px solid var(--border);
+    background: var(--surface);
+}
+
+.footer-inner {
+    max-width: 860px;
+    margin: 0 auto;
+    padding: 24px 32px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    flex-wrap: wrap;
+}
+
+.footer-copyright {
+    font-size: 12px;
+    color: var(--text-dim);
+    letter-spacing: 0.5px;
+}
+
+.footer-links {
+    display: flex;
+    gap: 20px;
+}
+
+.footer-links a {
+    font-size: 12px;
+    color: var(--text-dim);
+    text-decoration: none;
+    transition: color 0.2s ease;
+}
+
+.footer-links a:hover {
+    color: var(--cyan);
+}
+
+/* Responsive */
+@media (max-width: 720px) {
+    .header-inner {
+        flex-direction: column;
+        align-items: flex-start;
+        padding: 16px 20px;
+        gap: 16px;
+    }
+
+    .legal-nav {
+        justify-content: flex-start;
+    }
+
+    .content {
+        padding: 32px 20px 64px;
+    }
+
+    .doc-title {
+        font-size: 26px;
+    }
+
+    h2 {
+        font-size: 19px;
+        margin-top: 36px;
+    }
+
+    .footer-inner {
+        flex-direction: column;
+        align-items: flex-start;
+        padding: 20px;
+        gap: 12px;
+    }
+}
+
+@media (max-width: 480px) {
+    .legal-nav {
+        gap: 4px;
+    }
+
+    .legal-nav a {
+        font-size: 11px;
+        padding: 5px 10px;
+    }
+
+    .doc-title {
+        font-size: 22px;
+    }
+
+    .level-card, .danger-card, .info-block, .contact-block {
+        padding: 16px;
+    }
+}
+</style>
+</head>
+<body>
+
+<!-- Header -->
+<header class="header">
+    <div class="header-inner">
+        <a href="https://torbo.app" class="logo-group">
+            <svg viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <circle cx="18" cy="18" r="16" stroke="#a855f7" stroke-width="2" fill="rgba(168,85,247,0.1)"/>
+                <circle cx="18" cy="18" r="6" fill="#a855f7" opacity="0.8"/>
+                <circle cx="18" cy="18" r="11" stroke="#00e5ff" stroke-width="1" opacity="0.4"/>
+            </svg>
+            <div>
+                <div class="logo-text">TORBO</div>
+                <div class="logo-subtitle">Legal</div>
+            </div>
+        </a>
+        <nav class="legal-nav">
+            <a href="/legal/terms-of-service.html">Terms of Service</a>
+            <a href="/legal/privacy-policy.html">Privacy Policy</a>
+            <a href="/legal/acceptable-use-policy.html" class="active">Acceptable Use</a>
+            <a href="/legal/torbo-constitution.html">Constitution</a>
+        </nav>
+    </div>
+</header>
+
+<!-- Main Content -->
+<main class="content">
+
+    <h1 class="doc-title">Acceptable Use Policy</h1>
+
+    <div class="doc-meta">
+        <span><strong>Effective Date:</strong> February 19, 2026</span>
+        <span><strong>Last Updated:</strong> February 19, 2026</span>
+        <span><strong>Operator:</strong> Perceptual Art LLC ("Torbo," "Company," "we," "us," or "our")</span>
+    </div>
+
+    <!-- Section 1 -->
+    <h2>1. Purpose</h2>
+    <p>This Acceptable Use Policy ("AUP") defines the boundaries of responsible use for Torbo. It exists to protect our users, our platform, and the broader community. This policy is enforced alongside the <a href="/legal/torbo-constitution.html">Torbo Constitution</a> and our <a href="/legal/terms-of-service.html">Terms of Service</a>.</p>
+
+    <!-- Section 2 -->
+    <h2>2. Prohibited Content Generation</h2>
+    <p>You may not use Torbo to generate, request, distribute, or store:</p>
+
+    <h3>2.1 Child Sexual Abuse Material (CSAM)</h3>
+    <p>Any content depicting, describing, or facilitating the sexual exploitation of minors. This is a zero-tolerance policy with immediate account termination and reporting to authorities (NCMEC).</p>
+
+    <h3>2.2 Violence and Terrorism</h3>
+    <ul>
+        <li>Content that promotes, glorifies, or incites acts of terrorism or mass violence</li>
+        <li>Detailed instructions for creating weapons, explosives, chemical agents, or biological weapons</li>
+        <li>Content that threatens specific individuals or groups with violence</li>
+        <li>Content glorifying self-harm or suicide (crisis resources will be provided instead)</li>
+    </ul>
+
+    <h3>2.3 Harassment and Abuse</h3>
+    <ul>
+        <li>Targeted harassment, bullying, stalking, or intimidation of any individual</li>
+        <li>Content intended to demean, degrade, or dehumanize individuals based on race, ethnicity, gender, sexual orientation, religion, disability, or other protected characteristics</li>
+        <li>Doxxing or publishing private personal information without consent</li>
+        <li>Non-consensual intimate imagery or threats thereof</li>
+    </ul>
+
+    <h3>2.4 Spam and Unsolicited Communications</h3>
+    <ul>
+        <li>Mass-generated unsolicited messages, emails, or communications</li>
+        <li>Content designed to artificially inflate engagement metrics</li>
+        <li>Automated mass outreach without recipient consent</li>
+        <li>SEO spam or keyword stuffing content</li>
+    </ul>
+
+    <h3>2.5 Malware and Phishing</h3>
+    <ul>
+        <li>Creation of malicious software, viruses, trojans, ransomware, or spyware</li>
+        <li>Phishing content designed to fraudulently obtain credentials or personal information</li>
+        <li>Social engineering scripts or pretexts for fraud</li>
+        <li>Exploit code targeting unpatched vulnerabilities in production systems</li>
+    </ul>
+
+    <h3>2.6 Impersonation and Fraud</h3>
+    <ul>
+        <li>Impersonation of real individuals, organizations, or government entities</li>
+        <li>Generation of fraudulent documents, credentials, or identities</li>
+        <li>Content designed to deceive victims for financial gain</li>
+        <li>Fake endorsements, reviews, or testimonials</li>
+    </ul>
+
+    <h3>2.7 Disinformation and Deepfakes</h3>
+    <ul>
+        <li>Synthetic media (deepfakes) created to deceive or manipulate</li>
+        <li>Deliberately false information designed to influence elections or public health decisions</li>
+        <li>Fabricated news articles, press releases, or official-looking documents intended to mislead</li>
+        <li>Coordinated inauthentic behavior campaigns</li>
+    </ul>
+
+    <h3>2.8 Illegal Surveillance</h3>
+    <ul>
+        <li>Tools or techniques for unauthorized surveillance of individuals</li>
+        <li>Content facilitating illegal wiretapping, tracking, or monitoring</li>
+        <li>Stalkerware or covert monitoring software</li>
+    </ul>
+
+    <!-- Section 3 -->
+    <h2>3. Rate Limit and Infrastructure Abuse</h2>
+    <p>You shall not:</p>
+    <ul>
+        <li>Exceed published rate limits or attempt to circumvent rate limiting mechanisms</li>
+        <li>Launch denial-of-service attacks against Torbo infrastructure</li>
+        <li>Probe, scan, or test the vulnerability of our systems without authorization</li>
+        <li>Intentionally overload servers, networks, or other infrastructure</li>
+        <li>Use automated scripts to generate excessive API requests beyond normal usage patterns</li>
+        <li>Attempt to bypass authentication, authorization, or access control mechanisms</li>
+    </ul>
+
+    <!-- Section 4 -->
+    <h2>4. Account Integrity</h2>
+    <p>You shall not:</p>
+    <ul>
+        <li>Share your account credentials with others or allow unauthorized access to your account</li>
+        <li>Create multiple accounts to circumvent enforcement actions</li>
+        <li>Sell, trade, or transfer your account or access to Torbo to third parties</li>
+        <li>Resell or redistribute Torbo access as a commercial service without written authorization</li>
+        <li>Use another person's account without their explicit permission</li>
+    </ul>
+
+    <!-- Section 5 -->
+    <h2>5. Reverse Engineering</h2>
+    <p>You shall not:</p>
+    <ul>
+        <li>Reverse engineer, decompile, disassemble, or otherwise attempt to derive the source code of Torbo's proprietary components</li>
+        <li>Attempt to extract model weights, training data, or proprietary algorithms from AI providers accessed through Torbo</li>
+        <li>Create derivative works or competing products based on reverse-engineered Torbo technology</li>
+        <li>Circumvent technical protection measures or digital rights management</li>
+    </ul>
+
+    <!-- Section 6 -->
+    <h2>6. Automated Abuse</h2>
+    <p>You shall not:</p>
+    <ul>
+        <li>Use bots, scrapers, or automated tools to abuse the Service beyond normal programmatic API usage</li>
+        <li>Deploy automated systems that generate harmful content at scale</li>
+        <li>Use Torbo as a component in automated pipelines that violate this AUP</li>
+        <li>Create automated feedback loops designed to manipulate AI behavior or extract restricted information</li>
+    </ul>
+
+    <!-- Section 7 -->
+    <h2>7. Violation Consequences</h2>
+    <p>Violations of this AUP are handled progressively, with severity proportional to the offense:</p>
+
+    <div class="level-card">
+        <h3>Level 1 -- Warning</h3>
+        <ul>
+            <li><strong>Trigger:</strong> First minor violation or unintentional misuse</li>
+            <li><strong>Action:</strong> Written warning via email explaining the violation and expected behavior</li>
+            <li><strong>Effect:</strong> No service disruption; violation recorded</li>
+        </ul>
+    </div>
+
+    <div class="level-card">
+        <h3>Level 2 -- Restricted Mode</h3>
+        <ul>
+            <li><strong>Trigger:</strong> Repeated minor violations after warning, or first moderate violation</li>
+            <li><strong>Action:</strong> Account placed in restricted mode with reduced functionality</li>
+            <li><strong>Effect:</strong> Limited rate limits, certain features disabled, enhanced monitoring</li>
+            <li><strong>Duration:</strong> 7-30 days depending on severity</li>
+        </ul>
+    </div>
+
+    <div class="level-card">
+        <h3>Level 3 -- Suspension</h3>
+        <ul>
+            <li><strong>Trigger:</strong> Continued violations after restricted mode, or first serious violation</li>
+            <li><strong>Action:</strong> Temporary account suspension</li>
+            <li><strong>Effect:</strong> Complete loss of access for the suspension period</li>
+            <li><strong>Duration:</strong> 30-90 days depending on severity</li>
+        </ul>
+    </div>
+
+    <div class="level-card">
+        <h3>Level 4 -- Termination</h3>
+        <ul>
+            <li><strong>Trigger:</strong> Persistent violations, violation during suspension, or any zero-tolerance offense (CSAM, terrorism, credible violence threats)</li>
+            <li><strong>Action:</strong> Permanent account termination</li>
+            <li><strong>Effect:</strong> All data deleted, access permanently revoked, reported to authorities if applicable</li>
+            <li><strong>Appeal:</strong> Users may appeal within 30 days by contacting <a href="mailto:legal@torbo.app">legal@torbo.app</a></li>
+        </ul>
+    </div>
+
+    <div class="danger-card">
+        <h3>Immediate Termination Offenses</h3>
+        <p style="margin-bottom: 12px;">The following result in immediate account termination without prior warning:</p>
+        <ul>
+            <li>Any CSAM-related violation</li>
+            <li>Credible threats of violence</li>
+            <li>Content facilitating terrorism</li>
+            <li>Use of Torbo to commit a crime</li>
+        </ul>
+    </div>
+
+    <!-- Section 8 -->
+    <h2>8. Reporting Violations</h2>
+    <p>If you encounter content or behavior that violates this AUP:</p>
+
+    <div class="info-block">
+        <ul>
+            <li><strong>In-App:</strong> Use the feedback system in Settings > Help & Support</li>
+            <li><strong>Email:</strong> Report to <a href="mailto:abuse@torbo.app">abuse@torbo.app</a></li>
+            <li><strong>Include:</strong> Description of the violation, relevant screenshots or details, and your contact information</li>
+        </ul>
+    </div>
+
+    <p>We take all reports seriously and will investigate promptly. Reports are handled confidentially. We do not retaliate against good-faith reporters.</p>
+
+    <!-- Section 9 -->
+    <h2>9. Cooperation with Authorities</h2>
+    <p>We will cooperate with law enforcement and regulatory authorities when required by law or when we reasonably believe cooperation is necessary to prevent imminent harm. We may report violations to relevant authorities including NCMEC, the FBI, or local law enforcement as appropriate.</p>
+
+    <!-- Section 10 -->
+    <h2>10. Changes to This Policy</h2>
+    <p>We may update this AUP from time to time. Material changes will be communicated with at least <strong>30 days' notice</strong> via email or prominent notice in the Service. Your continued use after the notice period constitutes acceptance.</p>
+
+    <!-- Section 11 -->
+    <h2>11. Contact</h2>
+    <p>For questions about this Acceptable Use Policy:</p>
+
+    <div class="contact-block">
+        <div class="company-name">Perceptual Art LLC</div>
+        <p>Email: <a href="mailto:abuse@torbo.app">abuse@torbo.app</a></p>
+        <p>Website: <a href="https://torbo.app">https://torbo.app</a></p>
+    </div>
+
+</main>
+
+<!-- Footer -->
+<footer class="footer">
+    <div class="footer-inner">
+        <div class="footer-copyright">&copy; 2026 Perceptual Art LLC. All rights reserved.</div>
+        <div class="footer-links">
+            <a href="/legal/terms-of-service.html">Terms</a>
+            <a href="/legal/privacy-policy.html">Privacy</a>
+            <a href="/legal/acceptable-use-policy.html">Acceptable Use</a>
+            <a href="/legal/torbo-constitution.html">Constitution</a>
+        </div>
+    </div>
+</footer>
+
+</body>
+</html>

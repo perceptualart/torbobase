@@ -577,6 +577,11 @@ actor GatewayServer {
                               body: Data(DashboardHTML.page.utf8))
         }
 
+        // Legal documents — serve static HTML (no auth required)
+        if req.method == "GET" && req.path.hasPrefix("/legal/") {
+            return serveLegalPage(path: req.path)
+        }
+
         // Access level — no auth
         if req.method == "GET" && req.path == "/level" {
             let s = appState
@@ -605,9 +610,27 @@ actor GatewayServer {
             return await handleAutoPair(req, clientIP: clientIP)
         }
 
-        // --- Everything below requires auth ---
+        // ── Cloud Auth Routes (no auth required) ──
+        if req.method == "POST" && req.path == "/v1/auth/magic-link" {
+            return await CloudRoutes.handleMagicLink(req)
+        }
+        if req.method == "POST" && req.path == "/v1/auth/verify" {
+            return await CloudRoutes.handleVerify(req)
+        }
+        if req.method == "POST" && req.path == "/v1/auth/refresh" {
+            return await CloudRoutes.handleRefresh(req)
+        }
 
-        guard authenticate(req) else {
+        // ── Stripe Webhook (no auth — signature verified) ──
+        if req.method == "POST" && req.path == "/v1/billing/webhook" {
+            return await CloudRoutes.handleStripeWebhook(req)
+        }
+
+        // --- Everything below requires auth ---
+        // Cloud mode: accept both Supabase JWT and legacy server token
+        let cloudContext: CloudRequestContext? = await resolveCloudAuth(req)
+
+        guard authenticate(req) || cloudContext != nil else {
             await audit(clientIP: clientIP, method: req.method, path: req.path,
                        required: .chatOnly, granted: false, detail: "Auth failed")
             return HTTPResponse.unauthorized()
@@ -651,6 +674,52 @@ actor GatewayServer {
                               body: Data("{\"error\":\"Gateway is OFF\"}".utf8))
         }
 
+        // ── Cloud Auth Routes (require cloud JWT) ──
+        if let ctx = cloudContext {
+            if req.method == "GET" && req.path == "/v1/auth/me" {
+                return await CloudRoutes.handleMe(ctx)
+            }
+            if req.method == "POST" && req.path == "/v1/billing/checkout" {
+                return await CloudRoutes.handleCheckout(req, ctx: ctx)
+            }
+            if req.method == "POST" && req.path == "/v1/billing/portal" {
+                return await CloudRoutes.handlePortal(ctx)
+            }
+            if req.method == "GET" && req.path == "/v1/billing/status" {
+                return await CloudRoutes.handleBillingStatus(ctx)
+            }
+        }
+
+        // Cloud stats (admin only — requires server token, not cloud JWT)
+        if req.method == "GET" && req.path == "/v1/cloud/stats" {
+            return await guardedRoute(level: .fullAccess, current: currentLevel, clientIP: clientIP, req: req) {
+                await CloudRoutes.handleCloudStats()
+            }
+        }
+
+        // ── Cloud Tier Enforcement ──
+        if let ctx = cloudContext {
+            let tierCheck = TierEnforcer.check(ctx: ctx, path: req.path, agentID: agentID, accessLevel: currentLevel.rawValue)
+            switch tierCheck {
+            case .allowed:
+                break
+            case .denied:
+                let errorBody = TierEnforcer.errorResponse(tierCheck)
+                if let data = try? JSONSerialization.data(withJSONObject: errorBody) {
+                    return HTTPResponse(statusCode: 403, headers: ["Content-Type": "application/json"], body: data)
+                }
+                return HTTPResponse(statusCode: 403, headers: ["Content-Type": "application/json"],
+                                  body: Data("{\"error\":\"Tier limit exceeded\"}".utf8))
+            case .rateLimited:
+                let errorBody = TierEnforcer.errorResponse(tierCheck)
+                if let data = try? JSONSerialization.data(withJSONObject: errorBody) {
+                    return HTTPResponse(statusCode: 429, headers: ["Content-Type": "application/json"], body: data)
+                }
+                return HTTPResponse(statusCode: 429, headers: ["Content-Type": "application/json"],
+                                  body: Data("{\"error\":\"Rate limited\"}".utf8))
+            }
+        }
+
         // MARK: - Security Self-Audit
         if req.method == "GET" && req.path == "/v1/security/audit" {
             return await guardedRoute(level: .fullAccess, current: currentLevel, clientIP: clientIP, req: req) {
@@ -677,6 +746,16 @@ actor GatewayServer {
 
         // --- Level 1: Chat ---
         case ("POST", "/v1/chat/completions"):
+            // Cloud tier: check daily message limit
+            if let ctx = cloudContext {
+                let msgCheck = await TierEnforcer.checkMessageLimit(ctx: ctx)
+                if case .rateLimited = msgCheck {
+                    let errorBody = TierEnforcer.errorResponse(msgCheck)
+                    if let data = try? JSONSerialization.data(withJSONObject: errorBody) {
+                        return HTTPResponse(statusCode: 429, headers: ["Content-Type": "application/json"], body: data)
+                    }
+                }
+            }
             // Check if client wants streaming
             if let body = req.jsonBody, body["stream"] as? Bool == true, let writer {
                 // Access check first
@@ -1326,6 +1405,23 @@ actor GatewayServer {
         let token = auth.hasPrefix("Bearer ") ? String(auth.dropFirst(7)) : auth
         if token == KeychainManager.serverToken { return true }
         return PairedDeviceStore.isAuthorized(token: token)
+    }
+
+    /// Resolve cloud authentication from a Supabase JWT.
+    /// Returns nil if cloud auth is not enabled or the JWT is invalid.
+    /// This runs in parallel with legacy auth — if either succeeds, the request proceeds.
+    private func resolveCloudAuth(_ req: HTTPRequest) async -> CloudRequestContext? {
+        guard await SupabaseAuth.shared.isEnabled else { return nil }
+
+        guard let auth = req.headers["authorization"] ?? req.headers["Authorization"] else { return nil }
+        let token = auth.hasPrefix("Bearer ") ? String(auth.dropFirst(7)) : auth
+
+        // Don't try cloud auth for legacy server tokens or paired device tokens
+        if token == KeychainManager.serverToken { return nil }
+        if PairedDeviceStore.isAuthorized(token: token) { return nil }
+
+        // Try to resolve as Supabase JWT
+        return await CloudUserManager.shared.resolveContext(fromJWT: token)
     }
 
     // MARK: - Pairing
@@ -3151,6 +3247,19 @@ actor GatewayServer {
         }
 
         return HTTPResponse.json(result)
+    }
+
+    /// Serve legal HTML pages from the embedded LegalHTML enum
+    private func serveLegalPage(path: String) -> HTTPResponse {
+        let htmlHeaders = [
+            "Content-Type": "text/html; charset=utf-8",
+            "X-Frame-Options": "DENY",
+            "X-Content-Type-Options": "nosniff"
+        ]
+        if let html = LegalHTML.page(for: path) {
+            return HTTPResponse(statusCode: 200, headers: htmlHeaders, body: Data(html.utf8))
+        }
+        return HTTPResponse(statusCode: 404, headers: ["Content-Type": "text/plain"], body: Data("Not found".utf8))
     }
 
     /// Dashboard management endpoints for the web UI.

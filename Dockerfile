@@ -46,7 +46,8 @@ RUN mkdir -p .config/torbobase/agents \
              .config/torbobase/memory \
              .config/torbobase/documents \
              .config/torbobase/logs \
-             .config/torbobase/mcp && \
+             .config/torbobase/mcp \
+             .config/torbobase/users && \
     chown -R torbo:torbo /home/torbo
 
 USER torbo

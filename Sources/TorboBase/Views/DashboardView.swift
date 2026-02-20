@@ -1856,6 +1856,15 @@ struct SettingsView: View {
                     Text("This permanently deletes all stored conversation history. This cannot be undone.")
                 }
 
+                // MARK: Legal & Principles
+                SectionHeader(title: "LEGAL & PRINCIPLES")
+                VStack(alignment: .leading, spacing: 8) {
+                    legalLinkRow(icon: "shield.checkmark.fill", title: "Our Principles", subtitle: "The Torbo Constitution", color: .cyan, path: "/legal/torbo-constitution.html")
+                    legalLinkRow(icon: "doc.text.fill", title: "Terms of Service", subtitle: "Service agreement", color: .white.opacity(0.5), path: "/legal/terms-of-service.html")
+                    legalLinkRow(icon: "lock.fill", title: "Privacy Policy", subtitle: "How we handle your data", color: .green, path: "/legal/privacy-policy.html")
+                    legalLinkRow(icon: "exclamationmark.triangle.fill", title: "Acceptable Use", subtitle: "Usage guidelines", color: .yellow, path: "/legal/acceptable-use-policy.html")
+                }
+
                 // MARK: About
                 SectionHeader(title: "ABOUT")
                 Text(Legal.aboutText)
@@ -1959,6 +1968,32 @@ struct SettingsView: View {
             AppConfig.serverPort = port
             portNeedsRestart = true
         }
+    }
+
+    private func legalLinkRow(icon: String, title: String, subtitle: String, color: Color, path: String) -> some View {
+        Button {
+            let urlStr = "http://\(state.localIP):\(state.serverPort)\(path)"
+            if let url = URL(string: urlStr) { NSWorkspace.shared.open(url) }
+        } label: {
+            HStack(spacing: 10) {
+                Image(systemName: icon)
+                    .font(.system(size: 12))
+                    .foregroundStyle(color)
+                    .frame(width: 20)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(title).font(.system(size: 12, weight: .medium)).foregroundStyle(.white.opacity(0.7))
+                    Text(subtitle).font(.system(size: 10)).foregroundStyle(.white.opacity(0.3))
+                }
+                Spacer()
+                Image(systemName: "arrow.up.right")
+                    .font(.system(size: 10))
+                    .foregroundStyle(.white.opacity(0.2))
+            }
+            .padding(.horizontal, 10).padding(.vertical, 8)
+            .background(Color.white.opacity(0.03))
+            .cornerRadius(8)
+        }
+        .buttonStyle(.plain)
     }
 }
 
