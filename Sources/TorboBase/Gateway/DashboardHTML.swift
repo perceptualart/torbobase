@@ -287,12 +287,142 @@ tr:hover { background: rgba(255,255,255,0.02); }
     margin-bottom: 24px;
 }
 .home-orb-wrap canvas { width: 200px; height: 200px; }
+/* --- Mission Control --- */
+.mc-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.mc-grid-full { grid-column: 1 / -1; }
+.mc-panel {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 12px; padding: 20px; min-height: 200px;
+}
+.mc-panel-header {
+    display: flex; align-items: center; justify-content: space-between;
+    margin-bottom: 16px;
+}
+.mc-panel-title {
+    font-size: 11px; text-transform: uppercase; letter-spacing: 2px;
+    font-family: 'SF Mono', 'Menlo', monospace; color: var(--text-dim); font-weight: 500;
+}
+.mc-health-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
+.mc-health-item {
+    background: var(--bg); border: 1px solid var(--border); border-radius: 8px;
+    padding: 12px; text-align: center;
+}
+.mc-health-val { font-size: 20px; font-weight: 700; color: var(--text-bright); }
+.mc-health-label {
+    font-size: 10px; text-transform: uppercase; letter-spacing: 1.5px;
+    font-family: 'SF Mono', 'Menlo', monospace; color: var(--text-dim); margin-top: 4px;
+}
+.mc-task-list { max-height: 400px; overflow-y: auto; }
+.mc-task-item {
+    display: flex; align-items: center; gap: 10px; padding: 10px 0;
+    border-bottom: 1px solid var(--border); font-size: 12px;
+}
+.mc-task-item:last-child { border-bottom: none; }
+.mc-task-status {
+    width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0;
+}
+.mc-task-status.pending { background: var(--yellow); box-shadow: 0 0 6px var(--yellow); }
+.mc-task-status.inProgress { background: var(--cyan); box-shadow: 0 0 6px var(--cyan); animation: pulse 1.5s ease infinite; }
+.mc-task-status.completed { background: var(--green); }
+.mc-task-status.failed { background: var(--red); }
+.mc-task-status.cancelled { background: var(--gray); }
+@keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.4; } }
+.mc-task-title { flex: 1; color: var(--text); font-family: 'SF Mono', 'Menlo', monospace; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mc-task-agent {
+    font-size: 10px; padding: 2px 6px; border-radius: 4px;
+    background: var(--purple-dim); color: var(--purple); font-weight: 600;
+    text-transform: uppercase; letter-spacing: 0.5px; flex-shrink: 0;
+}
+.mc-task-time { color: var(--text-dim); font-size: 10px; flex-shrink: 0; white-space: nowrap; }
+.mc-task-priority { font-size: 9px; font-weight: 700; padding: 1px 5px; border-radius: 3px; flex-shrink: 0; }
+.mc-task-priority.p0 { background: rgba(255,255,255,0.06); color: var(--text-dim); }
+.mc-task-priority.p1 { background: rgba(255,255,255,0.06); color: var(--text-dim); }
+.mc-task-priority.p2 { background: var(--orange-dim); color: var(--orange); }
+.mc-task-priority.p3 { background: var(--red-dim); color: var(--red); }
+.mc-activity-item {
+    display: flex; align-items: flex-start; gap: 10px; padding: 8px 0;
+    border-bottom: 1px solid var(--border); font-size: 12px;
+}
+.mc-activity-item:last-child { border-bottom: none; }
+.mc-activity-dot {
+    width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; margin-top: 5px;
+}
+.mc-activity-text { color: var(--text); line-height: 1.4; flex: 1; }
+.mc-activity-time { color: var(--text-dim); font-size: 10px; flex-shrink: 0; white-space: nowrap; }
+/* Calendar */
+.mc-calendar { display: grid; grid-template-columns: repeat(7, 1fr); gap: 2px; }
+.mc-cal-header {
+    text-align: center; font-size: 10px; color: var(--text-dim); padding: 4px;
+    font-family: 'SF Mono', 'Menlo', monospace; letter-spacing: 1px;
+}
+.mc-cal-day {
+    background: var(--bg); border: 1px solid var(--border); border-radius: 4px;
+    padding: 4px; min-height: 56px; font-size: 10px; position: relative;
+    cursor: default; transition: border-color 0.15s;
+}
+.mc-cal-day:hover { border-color: var(--border-light); }
+.mc-cal-day.today { border-color: var(--cyan); }
+.mc-cal-day.other-month { opacity: 0.3; }
+.mc-cal-num { font-weight: 600; color: var(--text-dim); margin-bottom: 2px; }
+.mc-cal-dot {
+    display: inline-block; width: 5px; height: 5px; border-radius: 50%;
+    margin: 0 1px;
+}
+.mc-cal-nav { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
+.mc-cal-nav-title { font-size: 13px; font-weight: 600; color: var(--text-bright); }
+/* Schedule card */
+.mc-sched-item {
+    display: flex; align-items: center; gap: 12px; padding: 10px 12px;
+    background: var(--bg); border: 1px solid var(--border); border-radius: 8px;
+    margin-bottom: 8px; font-size: 12px;
+}
+.mc-sched-item.disabled { opacity: 0.5; }
+.mc-sched-info { flex: 1; min-width: 0; }
+.mc-sched-name { font-weight: 600; color: var(--text-bright); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mc-sched-meta { font-size: 10px; color: var(--text-dim); margin-top: 2px; }
+.mc-sched-actions { display: flex; gap: 6px; flex-shrink: 0; }
+.mc-sched-actions .btn { padding: 3px 8px; font-size: 10px; }
+/* Quick launch */
+.quick-launch { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 20px; }
+.quick-btn {
+    display: flex; align-items: center; gap: 8px; padding: 10px 16px;
+    background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
+    cursor: pointer; font-size: 12px; font-weight: 600; color: var(--text);
+    transition: all 0.15s; letter-spacing: 0.5px;
+    font-family: 'Futura', 'Futura-Medium', -apple-system, sans-serif;
+}
+.quick-btn:hover { border-color: var(--cyan); color: var(--cyan); background: var(--cyan-dim); }
+.quick-btn .qb-icon { font-size: 16px; }
+/* Home activity feed */
+.home-feed { max-height: 300px; overflow-y: auto; }
+.home-feed-item {
+    display: flex; align-items: center; gap: 10px; padding: 8px 0;
+    border-bottom: 1px solid var(--border); font-size: 12px;
+}
+.home-feed-item:last-child { border-bottom: none; }
+/* Live indicator */
+.live-dot {
+    display: inline-block; width: 6px; height: 6px; border-radius: 50%;
+    background: var(--green); animation: pulse 2s ease infinite; margin-right: 6px;
+}
+/* Agent color helpers */
+.agent-color-sid { color: #e040a0; }
+.agent-color-ada { color: #00e5ff; }
+.agent-color-mira { color: #22c55e; }
+.agent-color-orion { color: #a855f7; }
+.agent-dot-sid { background: #e040a0; }
+.agent-dot-ada { background: #00e5ff; }
+.agent-dot-mira { background: #22c55e; }
+.agent-dot-orion { background: #a855f7; }
+.agent-dot-default { background: var(--cyan); }
 @media (max-width: 768px) {
     .sidebar { display: none; }
     .main { padding: 16px; }
     .card-grid { grid-template-columns: 1fr; }
     .bridge-grid { grid-template-columns: repeat(3, 1fr); }
     .level-selector { flex-direction: column; }
+    .mc-grid { grid-template-columns: 1fr; }
+    .mc-health-grid { grid-template-columns: repeat(2, 1fr); }
 }
 </style>
 </head>
@@ -322,6 +452,9 @@ tr:hover { background: rgba(255,255,255,0.02); }
     <div class="sidebar-nav">
         <div class="nav-item active" onclick="switchTab('overview')" data-tab="overview">
             <span class="nav-icon">&#9673;</span> Dashboard
+        </div>
+        <div class="nav-item" onclick="switchTab('mission')" data-tab="mission">
+            <span class="nav-icon">&#9678;</span> Mission Control
         </div>
         <div class="nav-item" onclick="switchTab('vox')" data-tab="vox">
             <span class="nav-icon">&#9835;</span> Vox
@@ -420,6 +553,46 @@ tr:hover { background: rgba(255,255,255,0.02); }
                 <div class="stat-sub" id="ovAccessName"></div>
             </div>
         </div>
+        <!-- Quick Launch -->
+        <div class="section-label">Quick Launch</div>
+        <div class="quick-launch">
+            <div class="quick-btn" onclick="switchTab('logos')">
+                <span class="qb-icon">&#9993;</span> Chat with Agent
+            </div>
+            <div class="quick-btn" onclick="switchTab('mission')">
+                <span class="qb-icon">&#9678;</span> Mission Control
+            </div>
+            <div class="quick-btn" onclick="switchTab('library')">
+                <span class="qb-icon">&#9782;</span> Search Library
+            </div>
+            <div class="quick-btn" onclick="switchTab('agents')">
+                <span class="qb-icon">&#9830;</span> Manage Agents
+            </div>
+        </div>
+
+        <!-- Active Scheduled Tasks -->
+        <div class="section-label">Scheduled Tasks</div>
+        <div class="card" id="homeScheduleCard" style="cursor:pointer;" onclick="switchTab('mission')">
+            <div style="display:flex;align-items:center;justify-content:space-between;">
+                <div>
+                    <div style="font-size:24px;font-weight:700;color:var(--text-bright);" id="homeSchedCount">--</div>
+                    <div style="font-size:12px;color:var(--text-dim);margin-top:2px;">active scheduled tasks</div>
+                </div>
+                <div style="display:flex;align-items:center;gap:8px;">
+                    <div id="homeSchedNext" style="font-size:11px;color:var(--text-dim);font-family:'SF Mono','Menlo',monospace;"></div>
+                    <span class="badge badge-cyan">View &rarr;</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Recent Activity Feed -->
+        <div class="section-label">Recent Activity</div>
+        <div class="card">
+            <div class="home-feed" id="homeActivityFeed">
+                <div class="empty-state" style="padding:16px;">No recent activity</div>
+            </div>
+        </div>
+
         <div class="section-label">Bridges</div>
         <div class="bridge-grid" id="bridgeGrid">
             <div class="bridge-item"><span class="status-dot gray" id="bridgeTelegram"></span><div class="bridge-name">Telegram</div></div>
@@ -427,6 +600,87 @@ tr:hover { background: rgba(255,255,255,0.02); }
             <div class="bridge-item"><span class="status-dot gray" id="bridgeSlack"></span><div class="bridge-name">Slack</div></div>
             <div class="bridge-item"><span class="status-dot gray" id="bridgeSignal"></span><div class="bridge-name">Signal</div></div>
             <div class="bridge-item"><span class="status-dot gray" id="bridgeWhatsapp"></span><div class="bridge-name">WhatsApp</div></div>
+        </div>
+    </div>
+
+    <!-- Mission Control Tab -->
+    <div id="tab-mission" class="tab-panel">
+        <div class="page-title">Mission Control</div>
+        <div style="font-size:13px;color:var(--text-dim);margin-bottom:24px;margin-top:-20px;"><span class="live-dot"></span> live</div>
+        <div id="missionError" class="error-msg" style="display:none;"></div>
+        <div id="missionSuccess" class="success-msg" style="display:none;"></div>
+
+        <!-- System Health -->
+        <div class="section-label">System Health</div>
+        <div class="mc-health-grid" id="mcHealthGrid">
+            <div class="mc-health-item">
+                <div class="mc-health-val" id="mcUptime">--</div>
+                <div class="mc-health-label">Uptime</div>
+            </div>
+            <div class="mc-health-item">
+                <div class="mc-health-val" id="mcConnections">--</div>
+                <div class="mc-health-label">Connections</div>
+            </div>
+            <div class="mc-health-item">
+                <div class="mc-health-val" id="mcRequests">--</div>
+                <div class="mc-health-label">Total Requests</div>
+            </div>
+            <div class="mc-health-item">
+                <div class="mc-health-val" id="mcBlocked">--</div>
+                <div class="mc-health-label">Blocked</div>
+            </div>
+        </div>
+
+        <div class="mc-grid" style="margin-top:20px;">
+            <!-- Task Queue -->
+            <div class="mc-panel">
+                <div class="mc-panel-header">
+                    <div class="mc-panel-title">Task Queue</div>
+                    <div style="display:flex;gap:8px;">
+                        <span class="badge badge-yellow" id="mcPendingBadge">0 pending</span>
+                        <span class="badge badge-cyan" id="mcActiveBadge">0 active</span>
+                    </div>
+                </div>
+                <div class="mc-task-list" id="mcTaskList">
+                    <div class="empty-state" style="padding:24px;"><span class="spinner"></span></div>
+                </div>
+            </div>
+
+            <!-- Agent Activity Feed -->
+            <div class="mc-panel">
+                <div class="mc-panel-header">
+                    <div class="mc-panel-title">Agent Activity</div>
+                    <span class="badge badge-green"><span class="live-dot" style="margin-right:2px;"></span> Live</span>
+                </div>
+                <div class="mc-task-list" id="mcActivityFeed">
+                    <div class="empty-state" style="padding:24px;">Waiting for agent activity...</div>
+                </div>
+            </div>
+
+            <!-- Scheduled Tasks Calendar -->
+            <div class="mc-panel mc-grid-full">
+                <div class="mc-panel-header">
+                    <div class="mc-panel-title">Scheduled Tasks</div>
+                    <div class="mc-cal-nav">
+                        <button class="btn btn-secondary btn-sm" onclick="mcCalPrev()" style="padding:2px 8px;">&larr;</button>
+                        <span class="mc-cal-nav-title" id="mcCalTitle">--</span>
+                        <button class="btn btn-secondary btn-sm" onclick="mcCalNext()" style="padding:2px 8px;">&rarr;</button>
+                        <button class="btn btn-secondary btn-sm" onclick="mcCalToday()" style="padding:2px 8px;font-size:10px;">Today</button>
+                    </div>
+                </div>
+                <div class="mc-calendar" id="mcCalendar"></div>
+            </div>
+
+            <!-- Scheduled Tasks List -->
+            <div class="mc-panel mc-grid-full">
+                <div class="mc-panel-header">
+                    <div class="mc-panel-title">Scheduled Tasks</div>
+                    <span class="badge badge-purple" id="mcSchedCount">0 tasks</span>
+                </div>
+                <div id="mcSchedulesList">
+                    <div class="empty-state" style="padding:24px;">No scheduled tasks</div>
+                </div>
+            </div>
         </div>
     </div>
 
@@ -917,6 +1171,11 @@ var TOKEN = '';
 var BASE = window.location.origin;
 var currentTab = 'overview';
 var overviewTimer = null;
+var mcTimer = null;
+var mcCalMonth = new Date().getMonth();
+var mcCalYear = new Date().getFullYear();
+var mcScheduleCache = [];
+var mcActivityLog = [];
 var logsOffset = 0;
 var logsTotal = 0;
 var loaBrowseOffset = 0;
@@ -1031,7 +1290,9 @@ function switchTab(tab) {
         navs[j].classList.toggle('active', navs[j].getAttribute('data-tab') === tab);
     }
     if (overviewTimer) { clearInterval(overviewTimer); overviewTimer = null; }
+    if (mcTimer) { clearInterval(mcTimer); mcTimer = null; }
     if (tab === 'overview') { loadOverview(); overviewTimer = setInterval(loadOverview, 30000); }
+    if (tab === 'mission') { loadMissionControl(); mcTimer = setInterval(loadMissionControl, 5000); }
     if (tab === 'apikeys') { loadApiKeys(); }
     if (tab === 'access') { loadAccess(); }
     if (tab === 'agents') { loadAgents(); }
@@ -1210,6 +1471,8 @@ function loadOverview() {
     }).catch(function(e) {
         if (e.message !== 'Unauthorized') showError('overviewError', 'Failed to load status: ' + e.message);
     });
+    loadHomeScheduleData();
+    loadHomeActivity();
 }
 
 function setBridgeDot(id, active) {
@@ -1950,6 +2213,337 @@ function loadSkills() {
     });
 }
 
+// --- Mission Control ---
+var AGENT_COLORS = {
+    'sid': {color: '#e040a0', dim: 'rgba(224,64,160,0.15)'},
+    'ada': {color: '#00e5ff', dim: 'rgba(0,229,255,0.15)'},
+    'mira': {color: '#22c55e', dim: 'rgba(34,197,94,0.15)'},
+    'orion': {color: '#a855f7', dim: 'rgba(168,85,247,0.15)'}
+};
+
+function agentColor(id) {
+    var lower = (id || '').toLowerCase();
+    return AGENT_COLORS[lower] || {color: 'var(--cyan)', dim: 'var(--cyan-dim)'};
+}
+
+function agentBadge(id) {
+    var c = agentColor(id);
+    return '<span style="font-size:10px;padding:2px 6px;border-radius:4px;background:' + c.dim + ';color:' + c.color + ';font-weight:600;text-transform:uppercase;letter-spacing:0.5px;">' + esc(id || '?') + '</span>';
+}
+
+var PRIORITY_LABELS = ['LOW', 'NORM', 'HIGH', 'CRIT'];
+
+function priorityBadge(p) {
+    var cls = 'p' + (p || 0);
+    return '<span class="mc-task-priority ' + cls + '">' + (PRIORITY_LABELS[p] || '?') + '</span>';
+}
+
+function relTime(iso) {
+    if (!iso) return '';
+    try {
+        var d = new Date(iso);
+        var now = Date.now();
+        var diff = Math.floor((now - d.getTime()) / 1000);
+        if (diff < 0) {
+            diff = Math.abs(diff);
+            if (diff < 60) return 'in ' + diff + 's';
+            if (diff < 3600) return 'in ' + Math.floor(diff/60) + 'm';
+            if (diff < 86400) return 'in ' + Math.floor(diff/3600) + 'h';
+            return 'in ' + Math.floor(diff/86400) + 'd';
+        }
+        if (diff < 60) return diff + 's ago';
+        if (diff < 3600) return Math.floor(diff/60) + 'm ago';
+        if (diff < 86400) return Math.floor(diff/3600) + 'h ago';
+        return Math.floor(diff/86400) + 'd ago';
+    } catch(e) { return ''; }
+}
+
+function loadMissionControl() {
+    hideError('missionError');
+    api('GET', '/v1/mission-control').then(function(data) {
+        renderMCHealth(data.health || {});
+        renderMCTasks(data.tasks || [], data.task_counts || {});
+        renderMCSchedules(data.schedules || []);
+        mcScheduleCache = data.schedules || [];
+        renderMCCalendar();
+        buildActivityFromTasks(data.tasks || [], data.agents || []);
+    }).catch(function(e) {
+        if (e.message !== 'Unauthorized') showError('missionError', 'Failed to load Mission Control: ' + e.message);
+    });
+}
+
+function renderMCHealth(h) {
+    var upSec = h.uptime_seconds || 0;
+    var hrs = Math.floor(upSec / 3600);
+    var mins = Math.floor((upSec % 3600) / 60);
+    document.getElementById('mcUptime').textContent = hrs + 'h ' + mins + 'm';
+    document.getElementById('mcConnections').textContent = h.active_connections || 0;
+    document.getElementById('mcRequests').textContent = h.total_requests || 0;
+    document.getElementById('mcBlocked').textContent = h.blocked_requests || 0;
+}
+
+function renderMCTasks(tasks, counts) {
+    document.getElementById('mcPendingBadge').textContent = (counts.pending || 0) + ' pending';
+    document.getElementById('mcActiveBadge').textContent = (counts.active || 0) + ' active';
+
+    var wrap = document.getElementById('mcTaskList');
+    // Sort: active first, then pending, then recent completed/failed
+    var sorted = tasks.slice().sort(function(a, b) {
+        var order = {inProgress: 0, pending: 1, failed: 2, completed: 3, cancelled: 4};
+        var oa = order[a.status] !== undefined ? order[a.status] : 5;
+        var ob = order[b.status] !== undefined ? order[b.status] : 5;
+        if (oa !== ob) return oa - ob;
+        return new Date(b.created_at || 0) - new Date(a.created_at || 0);
+    });
+
+    if (!sorted.length) {
+        wrap.innerHTML = '<div class="empty-state" style="padding:24px;">No tasks in queue</div>';
+        return;
+    }
+
+    var html = '';
+    var shown = Math.min(sorted.length, 30);
+    for (var i = 0; i < shown; i++) {
+        var t = sorted[i];
+        var timeStr = t.status === 'completed' || t.status === 'failed' ? relTime(t.completed_at) : relTime(t.created_at);
+        html += '<div class="mc-task-item">';
+        html += '<div class="mc-task-status ' + esc(t.status) + '"></div>';
+        html += priorityBadge(t.priority);
+        html += '<div class="mc-task-title" title="' + esc(t.description || t.title) + '">' + esc(t.title) + '</div>';
+        html += agentBadge(t.assigned_to);
+        html += '<div class="mc-task-time">' + timeStr + '</div>';
+        html += '</div>';
+    }
+    if (sorted.length > 30) {
+        html += '<div style="text-align:center;padding:8px;font-size:11px;color:var(--text-dim);">+ ' + (sorted.length - 30) + ' more tasks</div>';
+    }
+    wrap.innerHTML = html;
+}
+
+function buildActivityFromTasks(tasks, agents) {
+    // Build activity feed from task state changes
+    var events = [];
+    for (var i = 0; i < tasks.length; i++) {
+        var t = tasks[i];
+        if (t.completed_at && t.status === 'completed') {
+            events.push({time: t.completed_at, agent: t.assigned_to, text: 'Completed: ' + t.title, type: 'completed'});
+        }
+        if (t.completed_at && t.status === 'failed') {
+            events.push({time: t.completed_at, agent: t.assigned_to, text: 'Failed: ' + t.title + (t.error ? ' — ' + t.error : ''), type: 'failed'});
+        }
+        if (t.started_at && (t.status === 'inProgress' || t.status === 'completed' || t.status === 'failed')) {
+            events.push({time: t.started_at, agent: t.assigned_to, text: 'Started: ' + t.title, type: 'started'});
+        }
+        if (t.status === 'pending') {
+            events.push({time: t.created_at, agent: t.assigned_to, text: 'Queued: ' + t.title, type: 'queued'});
+        }
+    }
+    events.sort(function(a, b) { return new Date(b.time || 0) - new Date(a.time || 0); });
+
+    var wrap = document.getElementById('mcActivityFeed');
+    if (!events.length) {
+        wrap.innerHTML = '<div class="empty-state" style="padding:24px;">Waiting for agent activity...</div>';
+        return;
+    }
+
+    var html = '';
+    var shown = Math.min(events.length, 25);
+    for (var j = 0; j < shown; j++) {
+        var ev = events[j];
+        var c = agentColor(ev.agent);
+        var dotColor = ev.type === 'completed' ? 'var(--green)' : ev.type === 'failed' ? 'var(--red)' : ev.type === 'started' ? 'var(--cyan)' : 'var(--yellow)';
+        html += '<div class="mc-activity-item">';
+        html += '<div class="mc-activity-dot" style="background:' + dotColor + ';"></div>';
+        html += '<div class="mc-activity-text">' + agentBadge(ev.agent) + ' ' + esc(ev.text) + '</div>';
+        html += '<div class="mc-activity-time">' + relTime(ev.time) + '</div>';
+        html += '</div>';
+    }
+    wrap.innerHTML = html;
+
+    // Also update home activity feed
+    var homeFeed = document.getElementById('homeActivityFeed');
+    if (homeFeed) {
+        var hhtml = '';
+        var hShown = Math.min(events.length, 10);
+        for (var k = 0; k < hShown; k++) {
+            var he = events[k];
+            var hDotColor = he.type === 'completed' ? 'var(--green)' : he.type === 'failed' ? 'var(--red)' : he.type === 'started' ? 'var(--cyan)' : 'var(--yellow)';
+            hhtml += '<div class="home-feed-item">';
+            hhtml += '<div style="width:6px;height:6px;border-radius:50%;background:' + hDotColor + ';flex-shrink:0;"></div>';
+            hhtml += '<div style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text);">' + agentBadge(he.agent) + ' ' + esc(he.text) + '</div>';
+            hhtml += '<div style="color:var(--text-dim);font-size:10px;flex-shrink:0;">' + relTime(he.time) + '</div>';
+            hhtml += '</div>';
+        }
+        if (!hhtml) hhtml = '<div class="empty-state" style="padding:16px;">No recent activity</div>';
+        homeFeed.innerHTML = hhtml;
+    }
+}
+
+function renderMCSchedules(schedules) {
+    document.getElementById('mcSchedCount').textContent = schedules.length + ' task' + (schedules.length !== 1 ? 's' : '');
+
+    var wrap = document.getElementById('mcSchedulesList');
+    if (!schedules.length) {
+        wrap.innerHTML = '<div class="empty-state" style="padding:24px;">No scheduled tasks. Create them via the iOS app or voice command.</div>';
+        return;
+    }
+
+    var html = '';
+    for (var i = 0; i < schedules.length; i++) {
+        var s = schedules[i];
+        var nextStr = s.next_run ? relTime(s.next_run) : 'N/A';
+        var lastStr = s.last_run ? relTime(s.last_run) : 'Never';
+        html += '<div class="mc-sched-item' + (s.enabled ? '' : ' disabled') + '">';
+        html += '<label class="toggle" style="flex-shrink:0;">';
+        html += '<input type="checkbox" ' + (s.enabled ? 'checked' : '') + ' onchange="mcToggleSchedule(\\'' + esc(s.id) + '\\', this.checked)">';
+        html += '<span class="slider"></span>';
+        html += '</label>';
+        html += '<div class="mc-sched-info">';
+        html += '<div class="mc-sched-name">' + esc(s.name) + '</div>';
+        html += '<div class="mc-sched-meta">' + agentBadge(s.assigned_to) + ' &bull; Next: ' + nextStr + ' &bull; Last: ' + lastStr + ' &bull; Runs: ' + (s.run_count || 0) + '</div>';
+        html += '</div>';
+        html += '<div class="mc-sched-actions">';
+        html += '<button class="btn btn-primary btn-sm" onclick="mcRunSchedule(\\'' + esc(s.id) + '\\')" title="Run now">&#9654;</button>';
+        html += '<button class="btn btn-danger btn-sm" onclick="mcDeleteSchedule(\\'' + esc(s.id) + '\\')" title="Delete">&times;</button>';
+        html += '</div>';
+        html += '</div>';
+    }
+    wrap.innerHTML = html;
+
+    // Update home schedule count
+    var activeCount = schedules.filter(function(s) { return s.enabled; }).length;
+    var homeCount = document.getElementById('homeSchedCount');
+    if (homeCount) homeCount.textContent = activeCount;
+    var nextSched = schedules.filter(function(s) { return s.enabled && s.next_run; }).sort(function(a, b) { return new Date(a.next_run) - new Date(b.next_run); });
+    var homeNext = document.getElementById('homeSchedNext');
+    if (homeNext && nextSched.length) {
+        homeNext.textContent = 'Next: ' + relTime(nextSched[0].next_run);
+    } else if (homeNext) {
+        homeNext.textContent = '';
+    }
+}
+
+function mcToggleSchedule(id, enabled) {
+    api('PUT', '/v1/schedules/' + encodeURIComponent(id) + '/toggle', {enabled: enabled}).then(function() {
+        loadMissionControl();
+    }).catch(function(e) {
+        showError('missionError', 'Toggle failed: ' + e.message);
+    });
+}
+
+function mcRunSchedule(id) {
+    api('POST', '/v1/schedules/' + encodeURIComponent(id) + '/run').then(function(data) {
+        var taskId = data.task_id || '';
+        showSuccess('missionSuccess', 'Task triggered' + (taskId ? ' (' + taskId.substring(0, 8) + '...)' : ''));
+        loadMissionControl();
+    }).catch(function(e) {
+        showError('missionError', 'Run failed: ' + e.message);
+    });
+}
+
+function mcDeleteSchedule(id) {
+    if (!confirm('Delete this scheduled task?')) return;
+    api('DELETE', '/v1/schedules/' + encodeURIComponent(id)).then(function() {
+        loadMissionControl();
+    }).catch(function(e) {
+        showError('missionError', 'Delete failed: ' + e.message);
+    });
+}
+
+// --- Mission Control Calendar ---
+var MC_DAYS = ['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT'];
+var MC_MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+
+function mcCalPrev() { mcCalMonth--; if (mcCalMonth < 0) { mcCalMonth = 11; mcCalYear--; } renderMCCalendar(); }
+function mcCalNext() { mcCalMonth++; if (mcCalMonth > 11) { mcCalMonth = 0; mcCalYear++; } renderMCCalendar(); }
+function mcCalToday() { var now = new Date(); mcCalMonth = now.getMonth(); mcCalYear = now.getFullYear(); renderMCCalendar(); }
+
+function renderMCCalendar() {
+    document.getElementById('mcCalTitle').textContent = MC_MONTHS[mcCalMonth] + ' ' + mcCalYear;
+
+    var cal = document.getElementById('mcCalendar');
+    var html = '';
+
+    // Header row
+    for (var d = 0; d < 7; d++) {
+        html += '<div class="mc-cal-header">' + MC_DAYS[d] + '</div>';
+    }
+
+    // Build day grid
+    var firstDay = new Date(mcCalYear, mcCalMonth, 1).getDay();
+    var daysInMonth = new Date(mcCalYear, mcCalMonth + 1, 0).getDate();
+    var daysInPrev = new Date(mcCalYear, mcCalMonth, 0).getDate();
+    var today = new Date();
+    var todayStr = today.getFullYear() + '-' + String(today.getMonth() + 1).padStart(2, '0') + '-' + String(today.getDate()).padStart(2, '0');
+
+    // Map schedules to dates (rough: map next_run to a date)
+    var schedByDate = {};
+    for (var si = 0; si < mcScheduleCache.length; si++) {
+        var s = mcScheduleCache[si];
+        if (!s.enabled || !s.next_run) continue;
+        var sDate = s.next_run.substring(0, 10);
+        if (!schedByDate[sDate]) schedByDate[sDate] = [];
+        schedByDate[sDate].push(s);
+    }
+
+    // Previous month trailing days
+    for (var p = firstDay - 1; p >= 0; p--) {
+        var pDay = daysInPrev - p;
+        html += '<div class="mc-cal-day other-month"><div class="mc-cal-num">' + pDay + '</div></div>';
+    }
+
+    // Current month days
+    for (var i = 1; i <= daysInMonth; i++) {
+        var dateStr = mcCalYear + '-' + String(mcCalMonth + 1).padStart(2, '0') + '-' + String(i).padStart(2, '0');
+        var isToday = dateStr === todayStr;
+        var dayScheds = schedByDate[dateStr] || [];
+        html += '<div class="mc-cal-day' + (isToday ? ' today' : '') + '">';
+        html += '<div class="mc-cal-num">' + i + '</div>';
+        if (dayScheds.length) {
+            for (var ds = 0; ds < Math.min(dayScheds.length, 3); ds++) {
+                var sc = dayScheds[ds];
+                var ac = agentColor(sc.assigned_to);
+                html += '<div class="mc-cal-dot" style="background:' + ac.color + ';" title="' + esc(sc.name) + '"></div>';
+            }
+            if (dayScheds.length > 3) {
+                html += '<div style="font-size:8px;color:var(--text-dim);">+' + (dayScheds.length - 3) + '</div>';
+            }
+        }
+        html += '</div>';
+    }
+
+    // Next month leading days
+    var totalCells = firstDay + daysInMonth;
+    var remaining = (7 - (totalCells % 7)) % 7;
+    for (var n = 1; n <= remaining; n++) {
+        html += '<div class="mc-cal-day other-month"><div class="mc-cal-num">' + n + '</div></div>';
+    }
+
+    cal.innerHTML = html;
+}
+
+// --- Home Overview Upgrade ---
+function loadHomeScheduleData() {
+    api('GET', '/v1/schedules').then(function(data) {
+        var schedules = data.schedules || [];
+        var activeCount = schedules.filter(function(s) { return s.enabled; }).length;
+        var homeCount = document.getElementById('homeSchedCount');
+        if (homeCount) homeCount.textContent = activeCount;
+        var nextSched = schedules.filter(function(s) { return s.enabled && s.next_run; }).sort(function(a, b) { return new Date(a.next_run) - new Date(b.next_run); });
+        var homeNext = document.getElementById('homeSchedNext');
+        if (homeNext && nextSched.length) {
+            homeNext.textContent = 'Next: ' + relTime(nextSched[0].next_run);
+        }
+    }).catch(function() {});
+}
+
+function loadHomeActivity() {
+    api('GET', '/v1/tasks').then(function(data) {
+        var tasks = data.tasks || [];
+        buildActivityFromTasks(tasks, []);
+    }).catch(function() {});
+}
+
 // --- Orb Renderer ---
 var orbLayers = [
     { hue:306, sat:80, bri:90,  rMul:1.15, ph:0.08, wv:0.25, sx:1.1,  sy:0.45, rot:0.015, blur:21,   op:0.05,  po:0, wo:0, ro:0 },
@@ -2026,6 +2620,9 @@ function orbAnimLoop() {
     renderOrbCanvas(document.getElementById('sidebarOrb'), 0.06);
     if (currentTab === 'overview') {
         renderOrbCanvas(document.getElementById('homeOrb'), 0.08);
+    }
+    if (currentTab === 'mission') {
+        renderOrbCanvas(document.getElementById('sidebarOrb'), 0.1);
     }
     requestAnimationFrame(orbAnimLoop);
 }

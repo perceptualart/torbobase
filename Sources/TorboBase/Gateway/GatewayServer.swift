@@ -1076,11 +1076,139 @@ actor GatewayServer {
                     ["id": ev.id, "name": ev.name, "description": ev.description,
                      "assigned_to": ev.assignedTo, "enabled": ev.enabled,
                      "run_count": ev.runCount,
-                     "next_run": ev.nextRunAt.map { df.string(from: $0) } ?? ""]
+                     "last_run": ev.lastRunAt.map { df.string(from: $0) } ?? "",
+                     "next_run": ev.nextRunAt.map { df.string(from: $0) } ?? "",
+                     "created_at": df.string(from: ev.createdAt)]
                 }
                 return HTTPResponse.json(["schedules": items, "count": items.count])
             }
 
+        // --- Schedule Management Routes (Mission Control) ---
+        default: break
+        }
+
+        // Schedule toggle/delete/run (dynamic path)
+        if req.path.hasPrefix("/v1/schedules/") {
+            let pathParts = req.path.split(separator: "/")
+            if pathParts.count >= 3 {
+                let scheduleID = String(pathParts[2])
+
+                // PUT /v1/schedules/{id}/toggle — Toggle schedule on/off
+                if req.method == "PUT" && req.path.hasSuffix("/toggle") {
+                    return await guardedRoute(level: .execute, current: currentLevel, clientIP: clientIP, req: req) {
+                        let enabled = (req.jsonBody?["enabled"] as? Bool) ?? true
+                        let success = await WebhookManager.shared.toggleSchedule(scheduleID, enabled: enabled)
+                        if success {
+                            return HTTPResponse.json(["status": "toggled", "enabled": enabled])
+                        }
+                        return HTTPResponse(statusCode: 404, headers: ["Content-Type": "application/json"],
+                                           body: Data("{\"error\":\"Schedule not found\"}".utf8))
+                    }
+                }
+
+                // DELETE /v1/schedules/{id} — Delete schedule
+                if req.method == "DELETE" {
+                    return await guardedRoute(level: .execute, current: currentLevel, clientIP: clientIP, req: req) {
+                        let success = await WebhookManager.shared.deleteSchedule(scheduleID)
+                        if success {
+                            return HTTPResponse.json(["status": "deleted"])
+                        }
+                        return HTTPResponse(statusCode: 404, headers: ["Content-Type": "application/json"],
+                                           body: Data("{\"error\":\"Schedule not found\"}".utf8))
+                    }
+                }
+
+                // POST /v1/schedules/{id}/run — Trigger immediate run
+                if req.method == "POST" && req.path.hasSuffix("/run") {
+                    return await guardedRoute(level: .execute, current: currentLevel, clientIP: clientIP, req: req) {
+                        let schedules = await WebhookManager.shared.listSchedules()
+                        guard let event = schedules.first(where: { $0.id == scheduleID }) else {
+                            return HTTPResponse(statusCode: 404, headers: ["Content-Type": "application/json"],
+                                               body: Data("{\"error\":\"Schedule not found\"}".utf8))
+                        }
+                        // Create a task from the schedule
+                        let task = await TaskQueue.shared.createTask(
+                            title: event.name,
+                            description: event.description,
+                            assignedTo: event.assignedTo,
+                            assignedBy: "mission-control",
+                            priority: .high
+                        )
+                        return HTTPResponse.json(["status": "triggered", "task_id": task.id])
+                    }
+                }
+            }
+        }
+
+        // GET /v1/mission-control — Aggregate Mission Control data
+        if req.method == "GET" && req.path == "/v1/mission-control" {
+            return await guardedRoute(level: .chatOnly, current: currentLevel, clientIP: clientIP, req: req) {
+                let df = ISO8601DateFormatter()
+
+                // Tasks
+                let allTasks = await TaskQueue.shared.allTasks()
+                let taskItems: [[String: Any]] = allTasks.suffix(50).map { t in
+                    ["id": t.id, "title": t.title, "description": t.description,
+                     "assigned_to": t.assignedTo, "assigned_by": t.assignedBy,
+                     "status": t.status.rawValue, "priority": t.priority.rawValue,
+                     "result": t.result ?? "", "error": t.error ?? "",
+                     "created_at": df.string(from: t.createdAt),
+                     "started_at": t.startedAt.map { df.string(from: $0) } ?? "",
+                     "completed_at": t.completedAt.map { df.string(from: $0) } ?? ""]
+                }
+
+                // Schedules
+                let schedules = await WebhookManager.shared.listSchedules()
+                let scheduleItems: [[String: Any]] = schedules.map { ev in
+                    ["id": ev.id, "name": ev.name, "description": ev.description,
+                     "assigned_to": ev.assignedTo, "enabled": ev.enabled,
+                     "run_count": ev.runCount,
+                     "last_run": ev.lastRunAt.map { df.string(from: $0) } ?? "",
+                     "next_run": ev.nextRunAt.map { df.string(from: $0) } ?? "",
+                     "created_at": df.string(from: ev.createdAt)]
+                }
+
+                // Agents
+                let agents = await AgentConfigManager.shared.listAgents()
+                let agentItems: [[String: Any]] = agents.map { a in
+                    ["id": a.id, "name": a.name, "access_level": a.accessLevel]
+                }
+
+                // System health
+                let s = self.appState
+                let health = await MainActor.run { () -> [String: Any] in
+                    let uptime = Date().timeIntervalSince(GatewayServer.serverStartTime)
+                    return [
+                        "uptime_seconds": Int(uptime),
+                        "active_connections": s?.connectedClients ?? 0,
+                        "total_requests": s?.totalRequests ?? 0,
+                        "blocked_requests": s?.blockedRequests ?? 0,
+                        "access_level": s?.accessLevel.rawValue ?? 0,
+                        "ollama_running": s?.ollamaRunning ?? false,
+                        "server_running": s?.serverRunning ?? false,
+                        "max_concurrent_tasks": s?.maxConcurrentTasks ?? 3
+                    ] as [String: Any]
+                }
+
+                // Task summary counts
+                let pending = allTasks.filter { $0.status == .pending }.count
+                let active = allTasks.filter { $0.status == .inProgress }.count
+                let completed = allTasks.filter { $0.status == .completed }.count
+                let failed = allTasks.filter { $0.status == .failed }.count
+
+                let response: [String: Any] = [
+                    "tasks": taskItems,
+                    "task_counts": ["pending": pending, "active": active, "completed": completed, "failed": failed],
+                    "schedules": scheduleItems,
+                    "agents": agentItems,
+                    "health": health
+                ]
+
+                return HTTPResponse.json(response)
+            }
+        }
+
+        switch (req.method, req.path) {
         // --- Calendar Routes ---
         case ("GET", "/v1/calendar/events"):
             return await guardedRoute(level: .readFiles, current: currentLevel, clientIP: clientIP, req: req) {
