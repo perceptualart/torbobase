@@ -50,6 +50,10 @@ struct AgentsView: View {
     // Auto-save debounce
     @State private var saveTask: Task<Void, Never>?
 
+    // Detail panel width tracking for responsive orb
+    @State private var detailWidth: CGFloat = 400
+    @State private var confirmingFull = false
+
     // Create agent form
     @State private var newAgentName = ""
     @State private var newAgentRole = "AI assistant"
@@ -140,7 +144,7 @@ struct AgentsView: View {
                         Text("Create")
                             .font(.system(size: 11, weight: .medium))
                     }
-                    .foregroundStyle(.cyan)
+                    .foregroundStyle(.white.opacity(0.5))
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 10)
                 }
@@ -157,7 +161,7 @@ struct AgentsView: View {
                         Text("Import")
                             .font(.system(size: 11, weight: .medium))
                     }
-                    .foregroundStyle(.cyan)
+                    .foregroundStyle(.white.opacity(0.5))
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 10)
                 }
@@ -181,10 +185,10 @@ struct AgentsView: View {
                 // Avatar circle
                 ZStack {
                     Circle()
-                        .fill(isSelected ? Color.cyan.opacity(0.2) : Color.white.opacity(0.06))
+                        .fill(isSelected ? Color.white.opacity(0.1) : Color.white.opacity(0.06))
                     Text(String(agent.name.prefix(1)).uppercased())
                         .font(.system(size: 12, weight: .bold, design: .monospaced))
-                        .foregroundStyle(isSelected ? .cyan : .white.opacity(0.5))
+                        .foregroundStyle(isSelected ? .white.opacity(0.8) : .white.opacity(0.5))
                 }
                 .frame(width: 32, height: 32)
 
@@ -196,10 +200,10 @@ struct AgentsView: View {
                         if agent.isBuiltIn {
                             Text("BUILT-IN")
                                 .font(.system(size: 7, weight: .bold, design: .monospaced))
-                                .foregroundStyle(.cyan.opacity(0.6))
+                                .foregroundStyle(.white.opacity(0.4))
                                 .padding(.horizontal, 4)
                                 .padding(.vertical, 1)
-                                .background(Color.cyan.opacity(0.1))
+                                .background(Color.white.opacity(0.06))
                                 .clipShape(RoundedRectangle(cornerRadius: 3))
                         }
                     }
@@ -234,114 +238,79 @@ struct AgentsView: View {
 
     private var agentDetailPanel: some View {
         VStack(spacing: 0) {
-            // Header with view mode toggle
-            VStack(alignment: .leading, spacing: 0) {
-                HStack(alignment: .center) {
-                    VStack(alignment: .leading, spacing: 4) {
-                        HStack(spacing: 10) {
-                            Text(editConfig.name)
-                                .font(.system(size: 24, weight: .bold))
-                                .foregroundStyle(.white)
-                            // Status indicator
-                            let isActive = agentActiveTasks.contains(where: { $0.hasPrefix(editConfig.id) })
-                            let isOff = editConfig.accessLevel == 0
-                            Circle()
-                                .fill(isOff ? Color.red : (isActive ? Color.green : Color.white.opacity(0.15)))
-                                .frame(width: 8, height: 8)
-                            if isOff {
-                                Text("OFF")
-                                    .font(.system(size: 8, weight: .bold, design: .monospaced))
-                                    .foregroundStyle(.red.opacity(0.7))
-                            } else if isActive {
-                                Text("ACTIVE")
-                                    .font(.system(size: 8, weight: .bold, design: .monospaced))
-                                    .foregroundStyle(.green.opacity(0.7))
-                            }
-                        }
-                        Text(editConfig.isBuiltIn ? "Built-in agent — cannot be deleted" : "Custom agent — id: \(editConfig.id)")
-                            .font(.system(size: 13))
-                            .foregroundStyle(.white.opacity(0.4))
-                    }
-                    Spacer()
-                    HStack(spacing: 8) {
-                        // Chat / Settings toggle
-                        Picker("", selection: $viewMode) {
-                            ForEach(AgentViewMode.allCases, id: \.self) { mode in
-                                Text(mode.rawValue).tag(mode)
-                            }
-                        }
-                        .pickerStyle(.segmented)
-                        .frame(width: 160)
+            // Orb + agent name + level picker
+            orbSection
+                .padding(.top, 16)
+                .padding(.bottom, 8)
 
-                        Divider().frame(height: 20).background(Color.white.opacity(0.06))
+            // Model picker — prominent, right below orb
+            modelPickerSection
+                .padding(.horizontal, 24)
+                .padding(.bottom, 12)
 
-                        // Per-agent kill switch
-                        Toggle(isOn: Binding(
-                            get: { editConfig.accessLevel > 0 },
-                            set: { enabled in
-                                if enabled {
-                                    // Restore to CHAT (1) as minimum when re-enabling
-                                    editConfig.accessLevel = max(previousAgentLevel, 1)
-                                } else {
-                                    previousAgentLevel = editConfig.accessLevel
-                                    editConfig.accessLevel = 0
-                                    // Cancel all running tasks for this agent
-                                    Task {
-                                        for task in agentTasks where task.status == .inProgress || task.status == .pending {
-                                            await TaskQueue.shared.cancelTask(id: task.id)
-                                            await ParallelExecutor.shared.cancel(taskID: task.id)
-                                        }
-                                        agentTasks = await TaskQueue.shared.tasksForAgent(editConfig.id)
-                                        agentActiveTasks = await ParallelExecutor.shared.activeTaskIDs
-                                    }
-                                }
-                                debouncedSave()
-                            }
-                        )) {
-                            Text(editConfig.accessLevel > 0 ? "Enabled" : "Killed")
-                                .font(.system(size: 10, weight: .bold, design: .monospaced))
-                                .foregroundStyle(editConfig.accessLevel > 0 ? .green.opacity(0.7) : .red.opacity(0.7))
-                        }
-                        .toggleStyle(.switch)
-                        .scaleEffect(0.8)
-                        .tint(.green)
-
-                        Divider().frame(height: 20).background(Color.white.opacity(0.06))
-
-                        Button("Export") { exportSelectedAgent() }
-                            .buttonStyle(.plain)
-                            .font(.system(size: 11, weight: .medium))
-                            .foregroundStyle(.cyan.opacity(0.6))
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 6)
-                            .background(Color.cyan.opacity(0.06))
-                            .clipShape(RoundedRectangle(cornerRadius: 6))
-
-                        Button("Reset") { showResetConfirm = true }
-                            .buttonStyle(.plain)
-                            .font(.system(size: 11, weight: .medium))
-                            .foregroundStyle(.white.opacity(0.3))
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 6)
-                            .background(Color.white.opacity(0.04))
-                            .clipShape(RoundedRectangle(cornerRadius: 6))
-
-                        if !editConfig.isBuiltIn {
-                            Button("Delete") { showDeleteConfirm = true }
-                                .buttonStyle(.plain)
-                                .font(.system(size: 11, weight: .medium))
-                                .foregroundStyle(.red.opacity(0.6))
-                                .padding(.horizontal, 12)
-                                .padding(.vertical, 6)
-                                .background(Color.red.opacity(0.06))
-                                .clipShape(RoundedRectangle(cornerRadius: 6))
-                        }
+            // Action bar: Chat/Settings toggle + buttons
+            HStack(spacing: 8) {
+                Picker("", selection: $viewMode) {
+                    ForEach(AgentViewMode.allCases, id: \.self) { mode in
+                        Text(mode.rawValue).tag(mode)
                     }
                 }
-                .padding(.horizontal, 32)
-                .padding(.top, 32)
-                .padding(.bottom, 24)
+                .pickerStyle(.segmented)
+                .frame(width: 160)
+
+                Spacer()
+
+                Button { exportSelectedAgent() } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: "square.and.arrow.up")
+                            .font(.system(size: 10))
+                        Text("Export")
+                            .font(.system(size: 11, weight: .medium))
+                    }
+                    .foregroundStyle(.white.opacity(0.4))
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 5)
+                    .background(Color.white.opacity(0.04))
+                    .clipShape(RoundedRectangle(cornerRadius: 6))
+                }
+                .buttonStyle(.plain)
+
+                Button { showResetConfirm = true } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: "arrow.counterclockwise")
+                            .font(.system(size: 10))
+                        Text("Reset")
+                            .font(.system(size: 11, weight: .medium))
+                    }
+                    .foregroundStyle(.white.opacity(0.3))
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 5)
+                    .background(Color.white.opacity(0.04))
+                    .clipShape(RoundedRectangle(cornerRadius: 6))
+                }
+                .buttonStyle(.plain)
+
+                if !editConfig.isBuiltIn {
+                    Button { showDeleteConfirm = true } label: {
+                        HStack(spacing: 4) {
+                            Image(systemName: "trash")
+                                .font(.system(size: 10))
+                            Text("Delete")
+                                .font(.system(size: 11, weight: .medium))
+                        }
+                        .foregroundStyle(.red.opacity(0.5))
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 5)
+                        .background(Color.red.opacity(0.04))
+                        .clipShape(RoundedRectangle(cornerRadius: 6))
+                    }
+                    .buttonStyle(.plain)
+                }
             }
+            .padding(.horizontal, 24)
+            .padding(.bottom, 12)
+
+            Divider().overlay(Color.white.opacity(0.06))
 
             // View mode switch: Chat or Settings
             if viewMode == .chat {
@@ -362,7 +331,7 @@ struct AgentsView: View {
 
                         HStack(spacing: 12) {
                             agentStatPill(value: "\(running.count)", label: "Running", color: .green)
-                            agentStatPill(value: "\(pending.count)", label: "Queued", color: .cyan)
+                            agentStatPill(value: "\(pending.count)", label: "Queued", color: .white.opacity(0.5))
                             agentStatPill(value: "\(completed.count)", label: "Done", color: .white.opacity(0.4))
                             agentStatPill(value: "\(failed.count)", label: "Failed", color: failed.isEmpty ? .white.opacity(0.2) : .red)
                         }
@@ -488,7 +457,7 @@ struct AgentsView: View {
                                     .foregroundStyle(.white.opacity(0.2))
                                 ForEach(pending.prefix(5), id: \.id) { task in
                                     HStack(spacing: 6) {
-                                        Circle().fill(Color.cyan.opacity(0.3)).frame(width: 4, height: 4)
+                                        Circle().fill(Color.white.opacity(0.2)).frame(width: 4, height: 4)
                                         Text(task.title)
                                             .font(.system(size: 10))
                                             .foregroundStyle(.white.opacity(0.4))
@@ -607,7 +576,7 @@ struct AgentsView: View {
                                     ForEach(Array(tokenHistory.enumerated()), id: \.offset) { _, day in
                                         VStack(spacing: 2) {
                                             RoundedRectangle(cornerRadius: 2)
-                                                .fill(Color.cyan.opacity(0.4))
+                                                .fill(Color.white.opacity(0.25))
                                                 .frame(height: max(CGFloat(day.tokens) / CGFloat(maxTokens) * 60, 2))
                                             Text(day.date)
                                                 .font(.system(size: 7, design: .monospaced))
@@ -660,7 +629,7 @@ struct AgentsView: View {
                         }
                         .buttonStyle(.plain)
                         .font(.system(size: 10, weight: .medium))
-                        .foregroundStyle(.cyan.opacity(0.6))
+                        .foregroundStyle(.white.opacity(0.4))
                     }
 
                     // MARK: - Vox (Voice — below Permissions per spec)
@@ -712,7 +681,7 @@ struct AgentsView: View {
                                             .frame(width: 12)
                                         Image(systemName: category.icon)
                                             .font(.system(size: 13))
-                                            .foregroundStyle(isGloballyDisabled ? .red.opacity(0.5) : .cyan)
+                                            .foregroundStyle(isGloballyDisabled ? .red.opacity(0.5) : .white.opacity(0.5))
                                             .frame(width: 20)
                                         VStack(alignment: .leading, spacing: 2) {
                                             Text(category.label)
@@ -741,7 +710,7 @@ struct AgentsView: View {
                                             .toggleStyle(.switch)
                                             .labelsHidden()
                                             .scaleEffect(0.8)
-                                            .tint(.cyan)
+                                            .tint(.white.opacity(0.5))
                                         }
                                     }
                                     .padding(.vertical, 4)
@@ -761,7 +730,7 @@ struct AgentsView: View {
                                                 HStack(spacing: 8) {
                                                     Text(tool.toolName)
                                                         .font(.system(size: 11, weight: .medium, design: .monospaced))
-                                                        .foregroundStyle(.cyan.opacity(0.7))
+                                                        .foregroundStyle(.white.opacity(0.5))
                                                     Text("—")
                                                         .font(.system(size: 10))
                                                         .foregroundStyle(.white.opacity(0.15))
@@ -797,7 +766,7 @@ struct AgentsView: View {
                                 .foregroundStyle(editConfig.personalityPreset == preset.id ? .black : .white.opacity(0.5))
                                 .padding(.horizontal, 10)
                                 .padding(.vertical, 5)
-                                .background(editConfig.personalityPreset == preset.id ? Color.cyan : Color.white.opacity(0.04))
+                                .background(editConfig.personalityPreset == preset.id ? Color.white.opacity(0.15) : Color.white.opacity(0.04))
                                 .clipShape(RoundedRectangle(cornerRadius: 6))
                             }
                         }
@@ -898,6 +867,8 @@ struct AgentsView: View {
         .onChange(of: editConfig.weeklyTokenLimit) { _ in debouncedSave() }
         .onChange(of: editConfig.monthlyTokenLimit) { _ in debouncedSave() }
         .onChange(of: editConfig.hardStopOnBudget) { _ in debouncedSave() }
+        .onChange(of: editConfig.preferredModel) { _ in debouncedSave() }
+        .onChange(of: editConfig.enabledCapabilities) { _ in debouncedSave() }
         .onChange(of: selectedAgentID) { _ in Task { await refreshTokenUsage() } }
     }
 
@@ -916,7 +887,7 @@ struct AgentsView: View {
                         RoundedRectangle(cornerRadius: 2)
                             .fill(Color.white.opacity(0.06))
                         RoundedRectangle(cornerRadius: 2)
-                            .fill(isOver ? Color.red.opacity(0.6) : (isWarning ? Color.orange.opacity(0.5) : Color.cyan.opacity(0.4)))
+                            .fill(isOver ? Color.red.opacity(0.6) : (isWarning ? Color.orange.opacity(0.5) : Color.white.opacity(0.3)))
                             .frame(width: geo.size.width * pct)
                     }
                 }
@@ -1038,7 +1009,7 @@ struct AgentsView: View {
                     .foregroundStyle(.black)
                     .padding(.horizontal, 20)
                     .padding(.vertical, 8)
-                    .background(newAgentName.trimmingCharacters(in: .whitespaces).isEmpty ? Color.gray : Color.cyan)
+                    .background(newAgentName.trimmingCharacters(in: .whitespaces).isEmpty ? Color.gray.opacity(0.3) : Color.white.opacity(0.2))
                     .clipShape(RoundedRectangle(cornerRadius: 6))
                     .disabled(newAgentName.trimmingCharacters(in: .whitespaces).isEmpty)
             }
@@ -1174,10 +1145,10 @@ struct AgentsView: View {
                 HStack(spacing: 8) {
                     Image(systemName: icon)
                         .font(.system(size: 12))
-                        .foregroundStyle(.cyan)
+                        .foregroundStyle(.white.opacity(0.5))
                     Text(title.uppercased())
                         .font(.system(size: 12, weight: .bold, design: .monospaced))
-                        .foregroundStyle(.cyan)
+                        .foregroundStyle(.white.opacity(0.5))
                         .tracking(1)
                 }
             }
@@ -1203,5 +1174,194 @@ struct AgentsView: View {
             content()
         }
     }
+
+    // MARK: - Model Picker
+
+    private var availableModels: [String] {
+        var models: [String] = []
+        // Local Ollama models
+        models.append(contentsOf: state.ollamaModels)
+        // Cloud models based on API keys
+        let keys = state.cloudAPIKeys
+        if let k = keys["ANTHROPIC_API_KEY"], !k.isEmpty {
+            models.append(contentsOf: ["claude-opus-4-6", "claude-sonnet-4-6-20260217", "claude-haiku-4-5-20251001"])
+        }
+        if let k = keys["OPENAI_API_KEY"], !k.isEmpty {
+            models.append(contentsOf: ["gpt-4o", "gpt-4o-mini"])
+        }
+        if let k = keys["GOOGLE_API_KEY"], !k.isEmpty {
+            models.append(contentsOf: ["gemini-2.5-pro-preview-06-05", "gemini-2.0-flash"])
+        }
+        if let k = keys["XAI_API_KEY"], !k.isEmpty {
+            models.append(contentsOf: ["grok-4-latest", "grok-3", "grok-3-fast"])
+        }
+        return models
+    }
+
+    private var modelPickerSection: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "cube.fill")
+                .font(.system(size: 12))
+                .foregroundStyle(.white.opacity(0.3))
+
+            Text("MODEL")
+                .font(.system(size: 9, weight: .bold, design: .monospaced))
+                .foregroundStyle(.white.opacity(0.3))
+                .tracking(1)
+
+            Picker("", selection: $editConfig.preferredModel) {
+                Text("Default").tag("")
+                ForEach(availableModels, id: \.self) { model in
+                    Text(model).tag(model)
+                }
+            }
+            .labelsHidden()
+            .frame(maxWidth: 260)
+
+            Spacer()
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(Color.white.opacity(0.03))
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.white.opacity(0.06), lineWidth: 1))
+    }
+
+    // MARK: - Orb Section (per-agent orb + name + level picker)
+
+    private var orbSize: CGFloat { min(detailWidth * 0.5, 360) }
+    private var glowSize: CGFloat { orbSize * 1.3 }
+
+    private var agentOrbHue: Double? {
+        switch editConfig.id.lowercased() {
+        case "sid":   return 0.9    // pink/magenta
+        case "ada":   return 0.55   // blue
+        case "mira":  return 0.45   // teal/green
+        case "orion": return 0.75   // purple
+        case "x":     return 0.0    // white (low saturation)
+        default:
+            // Hash-derived hue for custom agents
+            let hash = editConfig.id.utf8.reduce(0) { ($0 &+ Int($1)) &* 31 }
+            return Double(abs(hash) % 1000) / 1000.0
+        }
+    }
+
+    private var agentOrbSaturation: Double {
+        if editConfig.id.lowercased() == "x" { return 0.08 }
+        if editConfig.accessLevel == 0 { return 0.08 }
+        // Vivid at all active levels, scaling gently: CHAT=0.55, READ=0.65, WRITE=0.75, EXEC=0.85, FULL=0.95
+        let level = min(max(editConfig.accessLevel, 1), 5)
+        return 0.45 + Double(level) * 0.10
+    }
+
+    private var orbSection: some View {
+        VStack(spacing: 0) {
+            // Orb with glow
+            ZStack {
+                // Glow
+                Circle()
+                    .fill(
+                        RadialGradient(
+                            colors: [
+                                Color(hue: agentOrbHue ?? 0.85, saturation: agentOrbSaturation * 0.5, brightness: 0.8).opacity(0.15),
+                                Color.clear
+                            ],
+                            center: .center,
+                            startRadius: orbSize * 0.2,
+                            endRadius: glowSize * 0.5
+                        )
+                    )
+                    .frame(width: glowSize, height: glowSize)
+
+                OrbRenderer(
+                    audioLevels: Array(repeating: Float(0.15), count: 40),
+                    color: AccessLevel(rawValue: editConfig.accessLevel)?.color ?? .gray,
+                    isActive: editConfig.accessLevel > 0,
+                    baseHue: agentOrbHue,
+                    baseSaturation: agentOrbSaturation
+                )
+                .id("\(editConfig.id)-\(editConfig.accessLevel)")
+                .frame(width: orbSize, height: orbSize)
+
+                // Level overlay on orb
+                VStack(spacing: 2) {
+                    Text("\(editConfig.accessLevel)")
+                        .font(.system(size: min(orbSize * 0.18, 36), weight: .ultraLight, design: .rounded))
+                        .foregroundStyle(.white.opacity(0.3))
+                    Text(AccessLevel(rawValue: editConfig.accessLevel)?.name ?? "OFF")
+                        .font(.system(size: min(orbSize * 0.06, 10), weight: .bold, design: .monospaced))
+                        .foregroundStyle(.white.opacity(0.2))
+                        .tracking(2)
+                }
+            }
+            .frame(width: glowSize, height: glowSize)
+            .frame(maxWidth: .infinity)
+
+            // Agent name below orb
+            Text(editConfig.name)
+                .font(.system(size: 14, weight: .bold, design: .monospaced))
+                .foregroundStyle(.white.opacity(0.6))
+                .tracking(2)
+                .frame(maxWidth: .infinity)
+                .padding(.top, 4)
+                .padding(.bottom, 8)
+
+            // Tap-based level picker (replaces drag slider)
+            HStack(spacing: 0) {
+                ForEach(0..<6, id: \.self) { i in
+                    if let level = AccessLevel(rawValue: i) {
+                        Button {
+                            if i == 5 && editConfig.accessLevel != 5 {
+                                confirmingFull = true
+                            } else {
+                                if i == 0 { previousAgentLevel = editConfig.accessLevel }
+                                editConfig.accessLevel = i
+                                debouncedSave()
+                            }
+                        } label: {
+                            VStack(spacing: 5) {
+                                RoundedRectangle(cornerRadius: 3)
+                                    .fill(i <= editConfig.accessLevel ? level.color : Color.white.opacity(0.06))
+                                    .frame(height: i == editConfig.accessLevel ? 8 : 4)
+                                Text(level.name)
+                                    .font(.system(size: min(detailWidth * 0.02, 11), weight: .bold, design: .monospaced))
+                                    .foregroundStyle(i == editConfig.accessLevel ? .white.opacity(0.8) : .white.opacity(0.25))
+                                    .minimumScaleFactor(0.6)
+                            }
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 16)
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
+            .padding(.horizontal, 24)
+            .background(Color.white.opacity(0.03))
+            .clipShape(RoundedRectangle(cornerRadius: 8))
+            .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.white.opacity(0.06), lineWidth: 1))
+            .padding(.horizontal, 24)
+        }
+        .alert("Enable Full Access?", isPresented: $confirmingFull) {
+            Button("Enable Full Access", role: .destructive) {
+                editConfig.accessLevel = 5
+                debouncedSave()
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Full Access (Level 5) gives this agent unrestricted system access. Are you sure?")
+        }
+        .background(
+            GeometryReader { geo in
+                Color.clear.preference(key: DetailWidthKey.self, value: geo.size.width)
+            }
+        )
+        .onPreferenceChange(DetailWidthKey.self) { detailWidth = $0 }
+    }
+}
+
+private struct DetailWidthKey: PreferenceKey {
+    static var defaultValue: CGFloat = 400
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
 }
 #endif

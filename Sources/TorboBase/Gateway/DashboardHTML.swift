@@ -472,13 +472,13 @@ tr:hover { background: rgba(255,255,255,0.02); }
             <span class="nav-icon">&#9674;</span> Models
         </div>
         <div class="nav-item" onclick="switchTab('lexis')" data-tab="lexis">
-            <span class="nav-icon">&#9782;</span> Lexis
+            <span class="nav-icon">&#9782;</span> Conversations
         </div>
         <div class="nav-item" onclick="switchTab('security')" data-tab="security">
             <span class="nav-icon">&#9888;</span> Security
         </div>
         <div class="nav-item" onclick="switchTab('settings')" data-tab="settings">
-            <span class="nav-icon">&#9878;</span> Arkhe
+            <span class="nav-icon">&#9878;</span> Settings
         </div>
     </div>
     <div class="sidebar-footer">
@@ -1123,7 +1123,7 @@ tr:hover { background: rgba(255,255,255,0.02); }
 
     <!-- Lexis Tab -->
     <div id="tab-lexis" class="tab-panel">
-        <div class="page-title">Lexis</div>
+        <div class="page-title">Conversations</div>
         <div style="font-size:13px;color:var(--text-dim);margin-bottom:24px;">Conversation history organized by day</div>
         <div id="lexisError" class="error-msg" style="display:none;"></div>
         <div class="search-bar">

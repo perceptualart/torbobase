@@ -35,10 +35,10 @@ struct SkillsView: View {
                             Text("Install Skill")
                                 .font(.system(size: 12, weight: .medium))
                         }
-                        .foregroundStyle(.cyan)
+                        .foregroundStyle(.white.opacity(0.5))
                         .padding(.horizontal, 12)
                         .padding(.vertical, 6)
-                        .background(Color.cyan.opacity(0.1))
+                        .background(Color.white.opacity(0.06))
                         .clipShape(RoundedRectangle(cornerRadius: 6))
                     }
                     .buttonStyle(.plain)
@@ -110,9 +110,9 @@ struct SkillsView: View {
             // Icon
             Image(systemName: icon)
                 .font(.system(size: 20))
-                .foregroundStyle(enabled ? .cyan : .white.opacity(0.2))
+                .foregroundStyle(enabled ? .white.opacity(0.6) : .white.opacity(0.2))
                 .frame(width: 40, height: 40)
-                .background(enabled ? Color.cyan.opacity(0.1) : Color.white.opacity(0.03))
+                .background(enabled ? Color.white.opacity(0.06) : Color.white.opacity(0.03))
                 .clipShape(RoundedRectangle(cornerRadius: 8))
 
             // Info
@@ -168,7 +168,7 @@ struct SkillsView: View {
                     }
                 ))
                 .toggleStyle(.switch)
-                .tint(.cyan)
+                .tint(.white.opacity(0.5))
                 .scaleEffect(0.8)
 
                 // Remove

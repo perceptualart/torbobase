@@ -705,9 +705,9 @@ enum DashboardTab: String, CaseIterable {
     case agents = "Agents"
     case skills = "Skills"
     case models = "Models"
-    case spaces = "Lexis"
+    case spaces = "Conversations"
     case security = "Security"
-    case settings = "Arkhe"
+    case settings = "Settings"
 
     var icon: String {
         switch self {

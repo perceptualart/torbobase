@@ -22,8 +22,7 @@ struct DashboardView: View {
                         color: state.accessLevel.color,
                         isActive: state.serverRunning
                     )
-                    .frame(width: 80, height: 80)
-                    .scaleEffect(0.6)
+                    .frame(width: 160, height: 160)
                     .allowsHitTesting(false)
 
                     Text("TORBO BASE")
@@ -141,10 +140,10 @@ struct HomeView: View {
 
                 // Stats row
                 HStack(spacing: 12) {
-                    StatCard(label: "Requests", value: "\(state.totalRequests)", color: .cyan)
+                    StatCard(label: "Requests", value: "\(state.totalRequests)", color: .white.opacity(0.6))
                     StatCard(label: "Blocked", value: "\(state.blockedRequests)", color: .red)
                     StatCard(label: "Clients", value: "\(state.connectedClients)", color: .green)
-                    StatCard(label: "Models", value: "\(state.ollamaModels.count)", color: .purple)
+                    StatCard(label: "Models", value: "\(state.ollamaModels.count)", color: .white.opacity(0.5))
                 }
                 .padding(.horizontal, 24)
 
@@ -405,6 +404,7 @@ struct ModelsView: View {
     @EnvironmentObject private var state: AppState
     @State private var modelToInstall: String = ""
     @State private var showInstallGuide = false
+    @State private var pullError: String?
 
     private let recommendedModels = [
         ("llama3.2:3b", "3B params — fast, good for chat", "2.0 GB"),
@@ -481,10 +481,10 @@ struct ModelsView: View {
                     VStack(alignment: .leading, spacing: 6) {
                         HStack(spacing: 8) {
                             ProgressView(value: state.pullProgress, total: 100)
-                                .tint(.cyan)
+                                .tint(.white.opacity(0.5))
                             Text(String(format: "%.0f%%", state.pullProgress))
                                 .font(.system(size: 11, weight: .bold, design: .monospaced))
-                                .foregroundStyle(.cyan)
+                                .foregroundStyle(.white.opacity(0.5))
                                 .frame(width: 40, alignment: .trailing)
                         }
                         Text("Pulling \(pulling)...")
@@ -492,9 +492,31 @@ struct ModelsView: View {
                             .foregroundStyle(.white.opacity(0.4))
                     }
                     .padding(10)
-                    .background(Color.cyan.opacity(0.04))
+                    .background(Color.white.opacity(0.03))
                     .cornerRadius(6)
-                    .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.cyan.opacity(0.1), lineWidth: 1))
+                    .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.white.opacity(0.06), lineWidth: 1))
+                }
+
+                // Pull error
+                if let error = pullError {
+                    HStack(spacing: 8) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .foregroundStyle(.orange)
+                        Text(error)
+                            .font(.system(size: 11))
+                            .foregroundStyle(.white.opacity(0.6))
+                        Spacer()
+                        Button { pullError = nil } label: {
+                            Image(systemName: "xmark")
+                                .font(.system(size: 9, weight: .bold))
+                                .foregroundStyle(.white.opacity(0.3))
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    .padding(10)
+                    .background(Color.orange.opacity(0.08))
+                    .cornerRadius(6)
+                    .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.orange.opacity(0.2), lineWidth: 1))
                 }
 
                 // Cloud API models
@@ -533,7 +555,7 @@ struct ModelsView: View {
                             HStack(spacing: 10) {
                                 Image(systemName: "cube.fill")
                                     .font(.system(size: 14))
-                                    .foregroundStyle(.cyan.opacity(0.7))
+                                    .foregroundStyle(.white.opacity(0.5))
                                 Text(model)
                                     .font(.system(size: 13, weight: .medium, design: .monospaced))
                                     .foregroundStyle(.white.opacity(0.8))
@@ -563,7 +585,7 @@ struct ModelsView: View {
                         HStack(spacing: 10) {
                             Image(systemName: "cube")
                                 .font(.system(size: 14))
-                                .foregroundStyle(.purple.opacity(0.5))
+                                .foregroundStyle(.white.opacity(0.3))
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(model.0)
                                     .font(.system(size: 12, weight: .medium, design: .monospaced))
@@ -584,7 +606,7 @@ struct ModelsView: View {
                                         .font(.system(size: 12))
                                 }
                                 .buttonStyle(.plain)
-                                .foregroundStyle(.cyan.opacity(0.6))
+                                .foregroundStyle(.white.opacity(0.4))
                             } else {
                                 Image(systemName: "checkmark.circle.fill")
                                     .font(.system(size: 12))
@@ -618,18 +640,18 @@ struct ModelsView: View {
         var models: [(String, String, Color)] = []
         let keys = state.cloudAPIKeys
         if let k = keys["ANTHROPIC_API_KEY"], !k.isEmpty {
-            models.append(("claude-opus-4-6", "Anthropic", .purple))
-            models.append(("claude-sonnet-4-6-20260217", "Anthropic", .purple))
-            models.append(("claude-sonnet-4-5-20250929", "Anthropic", .purple))
-            models.append(("claude-haiku-4-5-20251001", "Anthropic", .purple))
+            models.append(("claude-opus-4-6", "Anthropic", .white.opacity(0.5)))
+            models.append(("claude-sonnet-4-6-20260217", "Anthropic", .white.opacity(0.5)))
+            models.append(("claude-sonnet-4-5-20250929", "Anthropic", .white.opacity(0.5)))
+            models.append(("claude-haiku-4-5-20251001", "Anthropic", .white.opacity(0.5)))
         }
         if let k = keys["OPENAI_API_KEY"], !k.isEmpty {
             models.append(("gpt-4o", "OpenAI", .green))
             models.append(("gpt-4o-mini", "OpenAI", .green))
         }
         if let k = keys["GOOGLE_API_KEY"], !k.isEmpty {
-            models.append(("gemini-2.5-pro-preview-06-05", "Google", .blue))
-            models.append(("gemini-2.0-flash", "Google", .blue))
+            models.append(("gemini-2.5-pro-preview-06-05", "Google", .white.opacity(0.5)))
+            models.append(("gemini-2.0-flash", "Google", .white.opacity(0.5)))
         }
         if let k = keys["XAI_API_KEY"], !k.isEmpty {
             models.append(("grok-4-latest", "xAI", .orange))
@@ -669,7 +691,7 @@ struct ModelsView: View {
     }
 
     private func pullModel(_ name: String) async {
-        await MainActor.run { state.pullingModel = name; state.pullProgress = 0 }
+        await MainActor.run { state.pullingModel = name; state.pullProgress = 0; pullError = nil }
         guard let url = URL(string: OllamaManager.baseURL + "/api/pull") else { return }
         var req = URLRequest(url: url)
         req.httpMethod = "POST"
@@ -705,7 +727,10 @@ struct ModelsView: View {
             await OllamaManager.shared.checkAndUpdate()
         } catch {
             TorboLog.error("Pull error: \(error)", subsystem: "Ollama")
-            await MainActor.run { state.pullingModel = nil }
+            await MainActor.run {
+                state.pullingModel = nil
+                pullError = "Failed to pull \(name): \(error.localizedDescription). Is Ollama running?"
+            }
         }
     }
 
@@ -720,7 +745,7 @@ struct ModelsView: View {
     }
 }
 
-// MARK: - Spaces View
+// MARK: - Conversations View
 
 struct SpacesView: View {
     @EnvironmentObject private var state: AppState
@@ -732,7 +757,7 @@ struct SpacesView: View {
             VStack(alignment: .leading, spacing: 24) {
                 HStack {
                     VStack(alignment: .leading, spacing: 4) {
-                        Text("Spaces")
+                        Text("Conversations")
                             .font(.system(size: 22, weight: .bold))
                             .foregroundStyle(.white)
                         Text("Conversation history organized by day")
@@ -801,13 +826,13 @@ struct SpacesView: View {
                                     HStack(alignment: .top, spacing: 8) {
                                         Image(systemName: msg.role == "user" ? "person.fill" : "cube.fill")
                                             .font(.system(size: 10))
-                                            .foregroundStyle(msg.role == "user" ? .blue : .cyan)
+                                            .foregroundStyle(msg.role == "user" ? .white.opacity(0.5) : .white.opacity(0.4))
                                             .frame(width: 16)
                                         VStack(alignment: .leading, spacing: 2) {
                                             HStack {
                                                 Text(msg.role.capitalized)
                                                     .font(.system(size: 10, weight: .semibold))
-                                                    .foregroundStyle(msg.role == "user" ? .blue : .cyan)
+                                                    .foregroundStyle(msg.role == "user" ? .white.opacity(0.5) : .white.opacity(0.4))
                                                 if !msg.model.isEmpty {
                                                     Text("· \(msg.model)")
                                                         .font(.system(size: 9, design: .monospaced))
@@ -941,7 +966,7 @@ struct SecurityView: View {
                     SecurityMetricCard(
                         icon: "lock.fill", label: "Encryption",
                         value: "AES-256",
-                        color: .cyan
+                        color: .white.opacity(0.6)
                     )
                     SecurityMetricCard(
                         icon: "network", label: "Binding",
@@ -1041,7 +1066,7 @@ struct SecurityView: View {
                             HStack(spacing: 10) {
                                 Image(systemName: category.icon)
                                     .font(.system(size: 12))
-                                    .foregroundStyle(state.globalCapabilities[category.rawValue] == false ? .red.opacity(0.5) : .cyan)
+                                    .foregroundStyle(state.globalCapabilities[category.rawValue] == false ? .red.opacity(0.5) : .white.opacity(0.5))
                                     .frame(width: 18)
                                 VStack(alignment: .leading, spacing: 1) {
                                     Text(category.label)
@@ -1066,7 +1091,7 @@ struct SecurityView: View {
                                 .toggleStyle(.switch)
                                 .labelsHidden()
                                 .scaleEffect(0.7)
-                                .tint(.cyan)
+                                .tint(.white.opacity(0.5))
                             }
                             .padding(.horizontal, 12)
                             .padding(.vertical, 5)
@@ -1223,7 +1248,7 @@ struct SettingsView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("Arkhe")
+                    Text("Settings")
                         .font(.system(size: 22, weight: .bold))
                         .foregroundStyle(.white)
                     Text("All sections collapsed — expand what you need")
@@ -1258,27 +1283,27 @@ struct SettingsView: View {
                                 VStack(spacing: 2) {
                                     Text("\(totalMemories)")
                                         .font(.system(size: 18, weight: .bold, design: .monospaced))
-                                        .foregroundStyle(.cyan)
+                                        .foregroundStyle(.white.opacity(0.5))
                                     Text("Total Scrolls")
                                         .font(.system(size: 9))
                                         .foregroundStyle(.white.opacity(0.3))
                                 }
                                 .frame(maxWidth: .infinity)
                                 .padding(.vertical, 8)
-                                .background(Color.cyan.opacity(0.06))
+                                .background(Color.white.opacity(0.04))
                                 .cornerRadius(6)
 
                                 VStack(spacing: 2) {
                                     Text("\(categories.count)")
                                         .font(.system(size: 18, weight: .bold, design: .monospaced))
-                                        .foregroundStyle(.purple)
+                                        .foregroundStyle(.white.opacity(0.4))
                                     Text("Categories")
                                         .font(.system(size: 9))
                                         .foregroundStyle(.white.opacity(0.3))
                                 }
                                 .frame(maxWidth: .infinity)
                                 .padding(.vertical, 8)
-                                .background(Color.purple.opacity(0.06))
+                                .background(Color.white.opacity(0.04))
                                 .cornerRadius(6)
                             }
 
@@ -1311,7 +1336,7 @@ struct SettingsView: View {
                 } label: {
                     Label("MEMORY (LIBRARY OF ALEXANDRIA)", systemImage: "brain.head.profile")
                         .font(.system(size: 10, weight: .bold, design: .monospaced))
-                        .foregroundStyle(.cyan.opacity(0.6))
+                        .foregroundStyle(.white.opacity(0.4))
                 }
                 .accentColor(.white.opacity(0.3))
 
@@ -1571,7 +1596,7 @@ struct SettingsView: View {
                         VStack(spacing: 2) {
                             ForEach(AppConfig.sandboxPaths, id: \.self) { path in
                                 HStack {
-                                    Image(systemName: "folder").font(.system(size: 10)).foregroundStyle(.cyan.opacity(0.4))
+                                    Image(systemName: "folder").font(.system(size: 10)).foregroundStyle(.white.opacity(0.3))
                                     Text(path).font(.system(size: 11, design: .monospaced)).foregroundStyle(.white.opacity(0.6))
                                     Spacer()
                                     Button {
@@ -1603,7 +1628,7 @@ struct SettingsView: View {
                                 Image(systemName: "plus.circle").font(.system(size: 12))
                             }
                             .buttonStyle(.plain)
-                            .foregroundStyle(.cyan.opacity(0.6))
+                            .foregroundStyle(.white.opacity(0.4))
                         }
                     }
                     .padding(.top, 8)
@@ -1622,7 +1647,7 @@ struct SettingsView: View {
                         VStack(spacing: 2) {
                             ForEach(AppConfig.allowedCORSOrigins, id: \.self) { origin in
                                 HStack {
-                                    Image(systemName: "network").font(.system(size: 10)).foregroundStyle(.cyan.opacity(0.4))
+                                    Image(systemName: "network").font(.system(size: 10)).foregroundStyle(.white.opacity(0.3))
                                     Text(origin).font(.system(size: 11, design: .monospaced)).foregroundStyle(.white.opacity(0.6))
                                     Spacer()
                                     Button {
@@ -1654,7 +1679,7 @@ struct SettingsView: View {
                                 Image(systemName: "plus.circle").font(.system(size: 12))
                             }
                             .buttonStyle(.plain)
-                            .foregroundStyle(.cyan.opacity(0.6))
+                            .foregroundStyle(.white.opacity(0.4))
                         }
                     }
                     .padding(.top, 8)
@@ -1706,7 +1731,7 @@ struct SettingsView: View {
                                 Image(systemName: "plus.circle").font(.system(size: 12))
                             }
                             .buttonStyle(.plain)
-                            .foregroundStyle(.cyan.opacity(0.6))
+                            .foregroundStyle(.white.opacity(0.4))
                         }
                     }
                     .padding(.top, 8)
@@ -1859,7 +1884,7 @@ struct SettingsView: View {
                 // MARK: Legal & Principles
                 SectionHeader(title: "LEGAL & PRINCIPLES")
                 VStack(alignment: .leading, spacing: 8) {
-                    legalLinkRow(icon: "shield.checkmark.fill", title: "Our Principles", subtitle: "The Torbo Constitution", color: .cyan, path: "/legal/torbo-constitution.html")
+                    legalLinkRow(icon: "shield.checkmark.fill", title: "Our Principles", subtitle: "The Torbo Constitution", color: .white.opacity(0.5), path: "/legal/torbo-constitution.html")
                     legalLinkRow(icon: "doc.text.fill", title: "Terms of Service", subtitle: "Service agreement", color: .white.opacity(0.5), path: "/legal/terms-of-service.html")
                     legalLinkRow(icon: "lock.fill", title: "Privacy Policy", subtitle: "How we handle your data", color: .green, path: "/legal/privacy-policy.html")
                     legalLinkRow(icon: "exclamationmark.triangle.fill", title: "Acceptable Use", subtitle: "Usage guidelines", color: .yellow, path: "/legal/acceptable-use-policy.html")
@@ -2103,7 +2128,7 @@ struct LLMInstallGuideView: View {
                     .font(.system(size: 12, weight: .bold, design: .monospaced))
                     .foregroundStyle(.black)
                     .frame(width: 22, height: 22)
-                    .background(Circle().fill(.cyan))
+                    .background(Circle().fill(.white.opacity(0.3)))
                 Text(title)
                     .font(.system(size: 14, weight: .semibold))
                     .foregroundStyle(.white.opacity(0.9))

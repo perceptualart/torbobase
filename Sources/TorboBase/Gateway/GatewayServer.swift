@@ -81,12 +81,13 @@ actor ChatRoomStore {
             role: role,
             agentID: agentID
         )
-        if rooms[room] == nil { rooms[room] = [] }
-        rooms[room]!.append(msg)
+        var buffer = rooms[room] ?? []
+        buffer.append(msg)
         // Cap at 500 messages per room
-        if rooms[room]!.count > 500 {
-            rooms[room] = Array(rooms[room]!.suffix(500))
+        if buffer.count > 500 {
+            buffer = Array(buffer.suffix(500))
         }
+        rooms[room] = buffer
         return msg
     }
 
@@ -138,9 +139,18 @@ actor GatewayServer {
                 return
             }
 
-            // Always bind to all interfaces — required for phone pairing and Tailscale.
-            params.requiredLocalEndpoint = NWEndpoint.hostPort(host: .ipv4(.any), port: nwPort)
-            TorboLog.info("Binding to 0.0.0.0:\(port)", subsystem: "Gateway")
+            // Bind host: default 0.0.0.0 (all interfaces) for phone pairing + Tailscale.
+            // Override with TORBO_BIND_HOST=127.0.0.1 to restrict to localhost only.
+            let bindHost = ProcessInfo.processInfo.environment["TORBO_BIND_HOST"] ?? "0.0.0.0"
+            let nwHost: NWEndpoint.Host = (bindHost == "127.0.0.1" || bindHost == "localhost")
+                ? .ipv4(.loopback)
+                : .ipv4(.any)
+            params.requiredLocalEndpoint = NWEndpoint.hostPort(host: nwHost, port: nwPort)
+            if nwHost == .ipv4(.any) {
+                TorboLog.warn("Binding to 0.0.0.0:\(port) — exposed to LAN. Set TORBO_BIND_HOST=127.0.0.1 to restrict.", subsystem: "Gateway")
+            } else {
+                TorboLog.info("Binding to \(bindHost):\(port) (localhost only)", subsystem: "Gateway")
+            }
             listener = try NWListener(using: params)
 
             listener?.newConnectionHandler = { [weak self] conn in
@@ -626,7 +636,11 @@ actor GatewayServer {
         }
 
         // Web chat UI — serves the built-in chat interface
+        // Token is auto-injected so webchat opens with no login prompt.
+        // Anyone who can reach Base on the network (localhost/LAN/Tailscale) is trusted.
         if req.method == "GET" && req.path == "/chat" {
+            let chatToken = KeychainManager.serverToken
+            let html = WebChatHTML.page.replacingOccurrences(of: "/*%%TORBO_SESSION_TOKEN%%*/", with: chatToken)
             return HTTPResponse(statusCode: 200,
                               headers: [
                                 "Content-Type": "text/html; charset=utf-8",
@@ -635,7 +649,7 @@ actor GatewayServer {
                                 "X-Frame-Options": "DENY",
                                 "X-Content-Type-Options": "nosniff"
                               ],
-                              body: Data(WebChatHTML.page.utf8))
+                              body: Data(html.utf8))
         }
 
         // Web dashboard UI — serves the built-in management dashboard
@@ -1840,6 +1854,8 @@ actor GatewayServer {
     }
 
     // MARK: - Rate Limiting
+    // Safety: GatewayServer is an actor — all calls to isRateLimited are serialized.
+    // The read-modify-write on requestLog[clientIP] is atomic by actor isolation.
 
     private var lastRateLimitPrune: Date = Date()
 
@@ -1885,7 +1901,9 @@ actor GatewayServer {
         guard var body = req.jsonBody else {
             writer.sendResponse(.badRequest("Invalid JSON body")); return
         }
-        let model = (body["model"] as? String) ?? "qwen2.5:7b"
+        // Model priority: request body > agent preferredModel > default
+        let agentModel = await AgentConfigManager.shared.agent(agentID)?.preferredModel ?? ""
+        let model = (body["model"] as? String) ?? (agentModel.isEmpty ? "qwen2.5:7b" : agentModel)
         if body["model"] == nil { body["model"] = model }
 
         // Detect if client provided their own system prompt (API override — skip SiD identity)
@@ -2622,7 +2640,9 @@ actor GatewayServer {
         guard var body = req.jsonBody else {
             return HTTPResponse.badRequest("Invalid JSON body")
         }
-        let model = (body["model"] as? String) ?? "qwen2.5:7b"
+        // Model priority: request body > agent preferredModel > default
+        let agentModel = await AgentConfigManager.shared.agent(agentID)?.preferredModel ?? ""
+        let model = (body["model"] as? String) ?? (agentModel.isEmpty ? "qwen2.5:7b" : agentModel)
         if body["model"] == nil { body["model"] = model }
 
         // Detect if client provided their own system prompt (API override — skip SiD identity)
@@ -2959,7 +2979,7 @@ actor GatewayServer {
             if code == 401 || code == 403 {
                 TorboLog.error("Anthropic API key invalid/expired (HTTP \(code))", subsystem: "Gateway")
                 return HTTPResponse(statusCode: code, headers: ["Content-Type": "application/json"],
-                    body: Data("{\"error\":{\"message\":\"Anthropic API key is invalid or expired. Update it in Settings → API Keys.\",\"type\":\"auth_error\"}}".utf8))
+                    body: Data("{\"error\":{\"message\":\"Cloud API key is invalid or expired. Update it in Settings → API Keys.\",\"type\":\"auth_error\"}}".utf8))
             }
             // 429 — rate limited, pass through with Retry-After
             if code == 429 {
@@ -3047,7 +3067,7 @@ actor GatewayServer {
             if code == 401 || code == 403 {
                 TorboLog.error("OpenAI API key invalid/expired (HTTP \(code))", subsystem: "Gateway")
                 return HTTPResponse(statusCode: code, headers: ["Content-Type": "application/json"],
-                    body: Data("{\"error\":{\"message\":\"OpenAI API key is invalid or expired. Update it in Settings → API Keys.\",\"type\":\"auth_error\"}}".utf8))
+                    body: Data("{\"error\":{\"message\":\"Cloud API key is invalid or expired. Update it in Settings → API Keys.\",\"type\":\"auth_error\"}}".utf8))
             }
             if code == 429 {
                 var headers = ["Content-Type": "application/json"]
@@ -3094,7 +3114,7 @@ actor GatewayServer {
             if code == 401 || code == 403 {
                 TorboLog.error("xAI API key invalid/expired (HTTP \(code))", subsystem: "Gateway")
                 return HTTPResponse(statusCode: code, headers: ["Content-Type": "application/json"],
-                    body: Data("{\"error\":{\"message\":\"xAI API key is invalid or expired. Update it in Settings → API Keys.\",\"type\":\"auth_error\"}}".utf8))
+                    body: Data("{\"error\":{\"message\":\"Cloud API key is invalid or expired. Update it in Settings → API Keys.\",\"type\":\"auth_error\"}}".utf8))
             }
             if code == 429 {
                 var headers = ["Content-Type": "application/json"]

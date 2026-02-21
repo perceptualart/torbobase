@@ -68,7 +68,7 @@ enum TierEnforcer {
             for adminPath in adminPaths {
                 if path.hasPrefix(adminPath) {
                     return .denied(
-                        reason: "The admin panel (Arkhe) requires Torbo Max. Self-hosted users get admin access for free.",
+                        reason: "The admin panel requires Torbo Max. Self-hosted users get admin access for free.",
                         upgradeRequired: .torboMax
                     )
                 }
@@ -114,7 +114,7 @@ enum TierEnforcer {
     // MARK: - Admin Panel Check
 
     /// Check if a user has admin panel access.
-    /// Used by iOS app to decide whether to render the Arkhe admin tab.
+    /// Used by iOS app to decide whether to render the admin/settings tab.
     /// Returns true for:
     ///   - torbo_max subscribers
     ///   - Any user connected to a local (self-hosted) Base instance
