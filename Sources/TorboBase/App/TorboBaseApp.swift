@@ -160,15 +160,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             // Default: OFF until toggled
 
-            // Start Ambient Monitor
+            // Start ambient intelligence subsystems
+            TorboLog.info("Starting ambient monitor...", subsystem: "App")
+            await HomeKitSOCReceiver.shared.start()
             await AmbientMonitor.shared.start()
-            TorboLog.info("Ambient monitor online", subsystem: "App")
         }
     }
 
     func applicationWillTerminate(_ notification: Notification) {
         // Flush any pending messages to disk
         Task { await ConversationStore.shared.flushMessages() }
+        Task { await AmbientMonitor.shared.stop() }
+        Task { await HomeKitSOCReceiver.shared.stop() }
         Task { await GatewayServer.shared.stop() }
     }
 
