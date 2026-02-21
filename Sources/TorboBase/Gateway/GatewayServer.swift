@@ -444,8 +444,8 @@ actor GatewayServer {
         Task { await MCPManager.shared.initialize() }
         Task { await DocumentStore.shared.initialize() }
         Task {
-            // TODO: await ConversationSearch.shared.initialize()
-            // TODO: await ConversationSearch.shared.backfillFromStore()
+            await ConversationSearch.shared.initialize()
+            await ConversationSearch.shared.backfillFromStore()
         }
         Task { await SkillsManager.shared.initialize() }
         Task { await WorkflowEngine.shared.loadFromDisk() }
@@ -893,7 +893,7 @@ actor GatewayServer {
 
         // MARK: - Conversation Search
         if req.path.hasPrefix("/search") {
-            // TODO: return await handleSearchRoute(req, clientIP: clientIP)
+            return await handleSearchRoute(req, clientIP: clientIP)
         }
 
         // MARK: - Commitments API
@@ -4120,6 +4120,77 @@ actor GatewayServer {
                 let event = await EventBus.shared.publish(eventName, payload: payload, source: source)
                 return HTTPResponse.json(event.toDict())
             }
+        }
+
+        return HTTPResponse.notFound()
+    }
+
+    // MARK: - Conversation Search
+
+    private func handleSearchRoute(_ req: HTTPRequest, clientIP: String) async -> HTTPResponse {
+        // GET /search/stats — Index statistics
+        if req.method == "GET" && req.path == "/search/stats" {
+            let s = await ConversationSearch.shared.stats()
+            guard let data = try? JSONSerialization.data(withJSONObject: s) else {
+                return HTTPResponse.serverError("Failed to encode stats")
+            }
+            return HTTPResponse(statusCode: 200, headers: ["Content-Type": "application/json"], body: data)
+        }
+
+        // GET /search/sessions?q=X — Session-level search
+        if req.method == "GET" && req.path == "/search/sessions" {
+            guard let q = req.queryParam("q"), !q.isEmpty else {
+                return .badRequest("Missing 'q' query parameter")
+            }
+            let limit = Int(req.queryParam("limit") ?? "10") ?? 10
+            let sessions = await ConversationSearch.shared.searchSessions(query: q, limit: limit)
+            guard let data = try? JSONSerialization.data(withJSONObject: ["sessions": sessions]) else {
+                return HTTPResponse.serverError("Failed to encode results")
+            }
+            return HTTPResponse(statusCode: 200, headers: ["Content-Type": "application/json"], body: data)
+        }
+
+        // GET /search?q=X — Full-text message search
+        if req.method == "GET" && (req.path == "/search" || req.path == "/search/messages") {
+            guard let q = req.queryParam("q"), !q.isEmpty else {
+                return .badRequest("Missing 'q' query parameter")
+            }
+
+            let agentFilter = req.queryParam("agent")
+            let limit = Int(req.queryParam("limit") ?? "20") ?? 20
+            let offset = Int(req.queryParam("offset") ?? "0") ?? 0
+
+            // Parse date filters (ISO8601 or yyyy-MM-dd)
+            let iso = ISO8601DateFormatter()
+            let dayFmt = DateFormatter()
+            dayFmt.dateFormat = "yyyy-MM-dd"
+
+            var fromDate: Date?
+            var toDate: Date?
+            if let fromStr = req.queryParam("from") {
+                fromDate = iso.date(from: fromStr) ?? dayFmt.date(from: fromStr)
+            }
+            if let toStr = req.queryParam("to") {
+                toDate = iso.date(from: toStr) ?? dayFmt.date(from: toStr)
+            }
+
+            let hits = await ConversationSearch.shared.search(
+                query: q, agent: agentFilter, from: fromDate, to: toDate, limit: limit, offset: offset
+            )
+
+            // Enrich with context
+            let enriched = await ConversationSearch.shared.enrichWithContext(hits)
+
+            let response: [String: Any] = [
+                "query": q,
+                "total": hits.count,
+                "offset": offset,
+                "results": enriched
+            ]
+            guard let data = try? JSONSerialization.data(withJSONObject: response) else {
+                return HTTPResponse.serverError("Failed to encode results")
+            }
+            return HTTPResponse(statusCode: 200, headers: ["Content-Type": "application/json"], body: data)
         }
 
         return HTTPResponse.notFound()
