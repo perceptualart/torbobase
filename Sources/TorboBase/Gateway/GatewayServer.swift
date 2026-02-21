@@ -862,6 +862,11 @@ actor GatewayServer {
             return await handleLoARoute(req, clientIP: clientIP)
         }
 
+        // MARK: - Debate API (multi-agent decision analysis)
+        if req.path.hasPrefix("/v1/debate") {
+            return await handleDebateRoute(req, clientIP: clientIP, currentLevel: currentLevel, agentID: agentID)
+        }
+
         // MARK: - Memory Management API
         if req.path.hasPrefix("/v1/memory") {
             return await handleMemoryRoute(req, clientIP: clientIP)
