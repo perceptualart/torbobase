@@ -122,6 +122,25 @@ actor GatewayServer {
     private weak var appState: AppState?
     private var requestLog: [String: [Date]] = [:]
 
+    // Webchat session tokens — ephemeral, expire with server restart.
+    // These grant chat-level access without exposing the master server token.
+    private var webchatSessionTokens: Set<String> = []
+
+    private func generateWebchatToken() -> String {
+        var bytes = [UInt8](repeating: 0, count: 24)
+        #if canImport(Security)
+        _ = SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes)
+        #else
+        for i in 0..<bytes.count { bytes[i] = UInt8.random(in: 0...255) }
+        #endif
+        let token = "wc_" + Data(bytes).base64EncodedString()
+            .replacingOccurrences(of: "+", with: "-")
+            .replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: "=", with: "")
+        webchatSessionTokens.insert(token)
+        return token
+    }
+
     #if canImport(Network)
     func start(appState: AppState) async {
         self.appState = appState
@@ -636,10 +655,11 @@ actor GatewayServer {
         }
 
         // Web chat UI — serves the built-in chat interface
-        // Token is auto-injected so webchat opens with no login prompt.
-        // Anyone who can reach Base on the network (localhost/LAN/Tailscale) is trusted.
+        // Ephemeral session token auto-injected — no login prompt.
+        // Session tokens are scoped to webchat and expire on server restart.
+        // The master server token is never exposed in HTML.
         if req.method == "GET" && req.path == "/chat" {
-            let chatToken = KeychainManager.serverToken
+            let chatToken = generateWebchatToken()
             let html = WebChatHTML.page.replacingOccurrences(of: "/*%%TORBO_SESSION_TOKEN%%*/", with: chatToken)
             return HTTPResponse(statusCode: 200,
                               headers: [
@@ -1735,6 +1755,7 @@ actor GatewayServer {
         guard let auth = req.headers["authorization"] ?? req.headers["Authorization"] else { return false }
         let token = auth.hasPrefix("Bearer ") ? String(auth.dropFirst(7)) : auth
         if token == KeychainManager.serverToken { return true }
+        if webchatSessionTokens.contains(token) { return true }
         return PairedDeviceStore.isAuthorized(token: token)
     }
 
@@ -3637,7 +3658,7 @@ actor GatewayServer {
         check("CSP Headers", true, "Content-Security-Policy on /chat and /dashboard")
         check("Token Expiry", true, "Paired device tokens expire after 30 days idle")
         check("Webhook Secrets", true, "Auto-generated HMAC secrets")
-        check("Token Rotation", (tokenAge ?? 0) <= 90, tokenAge != nil ? "Token age: \(tokenAge!)d" : "Token age unknown — consider regenerating")
+        check("Token Rotation", (tokenAge ?? 0) <= 90, tokenAge.map { "Token age: \($0)d" } ?? "Token age unknown — consider regenerating")
 
         let passing = checks.filter { ($0["status"] as? String) == "pass" }.count
         let warnings = checks.count - passing
@@ -5071,7 +5092,9 @@ enum AccessControl {
         }
 
         // Resolve hostname to IP and check against private ranges
-        let hostC = host.cString(using: .utf8)!
+        guard let hostC = host.cString(using: .utf8) else {
+            return "Blocked: hostname contains invalid characters"
+        }
         var hints = addrinfo()
         hints.ai_family = AF_UNSPEC
         #if os(Linux)

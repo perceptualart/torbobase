@@ -155,7 +155,7 @@ enum TierEnforcer {
     private static func secondsUntilMidnightUTC() -> Int {
         let cal = Calendar(identifier: .gregorian)
         var utcCal = cal
-        utcCal.timeZone = TimeZone(identifier: "UTC")!
+        utcCal.timeZone = TimeZone(identifier: "UTC") ?? TimeZone(secondsFromGMT: 0) ?? utcCal.timeZone
         let now = Date()
         guard let tomorrow = utcCal.date(byAdding: .day, value: 1, to: utcCal.startOfDay(for: now)) else {
             return 3600  // fallback: 1 hour
