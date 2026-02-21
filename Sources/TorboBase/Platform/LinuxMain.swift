@@ -116,6 +116,9 @@ struct TorboBaseServer {
         TorboLog.info("Starting cron scheduler...", subsystem: "Main")
         await CronScheduler.shared.initialize()
 
+        TorboLog.info("Starting ambient monitor...", subsystem: "Main")
+        await AmbientMonitor.shared.start()
+
         // Start bridge polling (if configured via env vars)
         if ProcessInfo.processInfo.environment["TELEGRAM_BOT_TOKEN"] != nil {
             TorboLog.info("Starting Telegram bridge...", subsystem: "Main")

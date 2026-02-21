@@ -1711,6 +1711,13 @@ actor GatewayServer {
                 return HTTPResponse.notFound()
             }
 
+            // Ambient Monitor routes
+            if req.path.hasPrefix("/ambient") {
+                if let response = await handleAmbientRoute(req, clientIP: clientIP) {
+                    return response
+                }
+            }
+
             // Cron Scheduler routes
             if req.path.hasPrefix("/v1/cron/tasks") {
                 if let response = await handleCronSchedulerRoute(req, clientIP: clientIP) {
