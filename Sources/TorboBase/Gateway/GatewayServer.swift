@@ -279,6 +279,12 @@ actor GatewayServer {
             // Start LifeOS Predictor — calendar watcher, meeting prep, deadline detection
             Task { await LifeOSPredictor.shared.start() }
 
+            // Start Commitments Engine — accountability tracking
+            Task {
+                await CommitmentsStore.shared.initialize()
+                await CommitmentsFollowUp.shared.start()
+            }
+
             // Start Morning Briefing Scheduler
             Task { await MorningBriefing.shared.initialize() }
 
@@ -438,8 +444,8 @@ actor GatewayServer {
         Task { await MCPManager.shared.initialize() }
         Task { await DocumentStore.shared.initialize() }
         Task {
-            // TODO: await ConversationSearch.shared.initialize()
-            // TODO: await ConversationSearch.shared.backfillFromStore()
+            await ConversationSearch.shared.initialize()
+            await ConversationSearch.shared.backfillFromStore()
         }
         Task { await SkillsManager.shared.initialize() }
         Task { await WorkflowEngine.shared.loadFromDisk() }
@@ -887,7 +893,18 @@ actor GatewayServer {
 
         // MARK: - Conversation Search
         if req.path.hasPrefix("/search") {
-            // TODO: return await handleSearchRoute(req, clientIP: clientIP)
+            return await handleSearchRoute(req, clientIP: clientIP)
+        }
+
+        // MARK: - Commitments API
+        if req.path.hasPrefix("/v1/commitments") {
+            if let (status, body) = await CommitmentsRoutes.handle(method: req.method, path: req.path, body: req.jsonBody) {
+                if let data = try? JSONSerialization.data(withJSONObject: body) {
+                    return HTTPResponse(statusCode: status, headers: ["Content-Type": "application/json"], body: data)
+                }
+            }
+            return HTTPResponse(statusCode: 404, headers: ["Content-Type": "application/json"],
+                              body: Data("{\"error\":\"Unknown commitments route\"}".utf8))
         }
 
         // MARK: - Ambient Intelligence (HomeKit Monitoring)
@@ -2064,6 +2081,13 @@ actor GatewayServer {
         }
         await router.enrichRequest(&body, accessLevel: accessLevel.rawValue, toolNames: toolNames, clientProvidedSystem: hasClientSystem, agentID: agentID, platform: platform)
 
+        // Commitments detection — fire-and-forget on every user message
+        if let messages = body["messages"] as? [[String: Any]],
+           let lastUser = messages.last(where: { $0["role"] as? String == "user" }),
+           let uText = extractTextContent(from: lastUser["content"]) {
+            Task { await self.detectCommitmentsInMessage(uText) }
+        }
+
         // Log user message (handles both string and array/vision content)
         if let messages = body["messages"] as? [[String: Any]],
            let last = messages.last(where: { $0["role"] as? String == "user" }),
@@ -2806,6 +2830,13 @@ actor GatewayServer {
 
         // Force non-streaming for this path (streaming handled separately)
         body["stream"] = false
+
+        // Commitments detection — fire-and-forget on every user message
+        if let messages = body["messages"] as? [[String: Any]],
+           let lastUser = messages.last(where: { $0["role"] as? String == "user" }),
+           let uText = extractTextContent(from: lastUser["content"]) {
+            Task { await self.detectCommitmentsInMessage(uText) }
+        }
 
         // Log user message (handles both string and array/vision content)
         if let messages = body["messages"] as? [[String: Any]],
@@ -4179,6 +4210,77 @@ actor GatewayServer {
         return HTTPResponse.notFound()
     }
 
+    // MARK: - Conversation Search
+
+    private func handleSearchRoute(_ req: HTTPRequest, clientIP: String) async -> HTTPResponse {
+        // GET /search/stats — Index statistics
+        if req.method == "GET" && req.path == "/search/stats" {
+            let s = await ConversationSearch.shared.stats()
+            guard let data = try? JSONSerialization.data(withJSONObject: s) else {
+                return HTTPResponse.serverError("Failed to encode stats")
+            }
+            return HTTPResponse(statusCode: 200, headers: ["Content-Type": "application/json"], body: data)
+        }
+
+        // GET /search/sessions?q=X — Session-level search
+        if req.method == "GET" && req.path == "/search/sessions" {
+            guard let q = req.queryParam("q"), !q.isEmpty else {
+                return .badRequest("Missing 'q' query parameter")
+            }
+            let limit = Int(req.queryParam("limit") ?? "10") ?? 10
+            let sessions = await ConversationSearch.shared.searchSessions(query: q, limit: limit)
+            guard let data = try? JSONSerialization.data(withJSONObject: ["sessions": sessions]) else {
+                return HTTPResponse.serverError("Failed to encode results")
+            }
+            return HTTPResponse(statusCode: 200, headers: ["Content-Type": "application/json"], body: data)
+        }
+
+        // GET /search?q=X — Full-text message search
+        if req.method == "GET" && (req.path == "/search" || req.path == "/search/messages") {
+            guard let q = req.queryParam("q"), !q.isEmpty else {
+                return .badRequest("Missing 'q' query parameter")
+            }
+
+            let agentFilter = req.queryParam("agent")
+            let limit = Int(req.queryParam("limit") ?? "20") ?? 20
+            let offset = Int(req.queryParam("offset") ?? "0") ?? 0
+
+            // Parse date filters (ISO8601 or yyyy-MM-dd)
+            let iso = ISO8601DateFormatter()
+            let dayFmt = DateFormatter()
+            dayFmt.dateFormat = "yyyy-MM-dd"
+
+            var fromDate: Date?
+            var toDate: Date?
+            if let fromStr = req.queryParam("from") {
+                fromDate = iso.date(from: fromStr) ?? dayFmt.date(from: fromStr)
+            }
+            if let toStr = req.queryParam("to") {
+                toDate = iso.date(from: toStr) ?? dayFmt.date(from: toStr)
+            }
+
+            let hits = await ConversationSearch.shared.search(
+                query: q, agent: agentFilter, from: fromDate, to: toDate, limit: limit, offset: offset
+            )
+
+            // Enrich with context
+            let enriched = await ConversationSearch.shared.enrichWithContext(hits)
+
+            let response: [String: Any] = [
+                "query": q,
+                "total": hits.count,
+                "offset": offset,
+                "results": enriched
+            ]
+            guard let data = try? JSONSerialization.data(withJSONObject: response) else {
+                return HTTPResponse.serverError("Failed to encode results")
+            }
+            return HTTPResponse(statusCode: 200, headers: ["Content-Type": "application/json"], body: data)
+        }
+
+        return HTTPResponse.notFound()
+    }
+
     // MARK: - LoA (Library of Alexandria) Shortcuts
 
     /// User-friendly shortcuts for the memory system.
@@ -5343,6 +5445,43 @@ actor GatewayServer {
 
     private func handleDebateRoute(_ req: HTTPRequest, clientIP: String, currentLevel: AccessLevel, agentID: String) async -> HTTPResponse {
         return HTTPResponse.json(["error": "Debate API not yet implemented"] as [String: Any])
+    }
+
+    // MARK: - Commitments Detection
+
+    /// Detect commitments or resolutions in user messages.
+    /// Runs in background — never blocks the chat response.
+    private func detectCommitmentsInMessage(_ text: String) async {
+        // Check for resolution first ("done", "forget it")
+        if let resolution = CommitmentsDetector.detectResolution(text) {
+            let open = await CommitmentsStore.shared.allOpen()
+            // Try to match resolution to most recent open commitment
+            if let latest = open.first {
+                await CommitmentsStore.shared.updateStatus(
+                    id: latest.id,
+                    status: resolution.action,
+                    note: "Resolved via: \"\(resolution.triggerText)\""
+                )
+                TorboLog.info("Commitment #\(latest.id) \(resolution.action.rawValue) via \"\(resolution.triggerText)\"", subsystem: "Commitments")
+            }
+            return
+        }
+
+        // Fast pre-filter — skip expensive LLM call if no commitment language
+        guard CommitmentsDetector.likelyContainsCommitment(text) else { return }
+
+        // LLM extraction
+        let extracted = await CommitmentsDetector.extractCommitments(from: text)
+        for commitment in extracted {
+            await CommitmentsStore.shared.add(
+                text: commitment.text,
+                dueDate: commitment.dueDate,
+                dueText: commitment.dueText
+            )
+        }
+        if !extracted.isEmpty {
+            TorboLog.info("Extracted \(extracted.count) commitment(s) from message", subsystem: "Commitments")
+        }
     }
 
 }
