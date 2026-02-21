@@ -2058,6 +2058,12 @@ actor GatewayServer {
                 body["tool_choice"] = "auto"
                 toolNames = extractToolNames(from: tools)
             }
+        } else if let clientTools = body["tools"] as? [[String: Any]], clientTools.isEmpty {
+            // Client explicitly sent empty tools array — no tools needed (conversational voice).
+            // Strip empty array to avoid API issues, and skip server-side injection.
+            body.removeValue(forKey: "tools")
+            body.removeValue(forKey: "tool_choice")
+            TorboLog.info("Client sent empty tools — skipping all tool injection (conversational)", subsystem: "Gateway")
         } else {
             // Client provided tools (e.g. native iOS tools) — ensure tool_choice is set
             if body["tool_choice"] == nil {
@@ -2805,6 +2811,12 @@ actor GatewayServer {
                 body["tool_choice"] = "auto"
                 toolNames = extractToolNames(from: tools)
             }
+        } else if let clientTools = body["tools"] as? [[String: Any]], clientTools.isEmpty {
+            // Client explicitly sent empty tools array — no tools needed (conversational voice).
+            // Strip empty array to avoid API issues, and skip server-side injection.
+            body.removeValue(forKey: "tools")
+            body.removeValue(forKey: "tool_choice")
+            TorboLog.info("Client sent empty tools — skipping all tool injection (non-streaming conversational)", subsystem: "Gateway")
         } else {
             // Client provided tools (e.g. native iOS tools) — ensure tool_choice is set
             if body["tool_choice"] == nil {
