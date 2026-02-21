@@ -279,6 +279,12 @@ actor GatewayServer {
             // Start LifeOS Predictor — calendar watcher, meeting prep, deadline detection
             Task { await LifeOSPredictor.shared.start() }
 
+            // Start Commitments Engine — accountability tracking
+            Task {
+                await CommitmentsStore.shared.initialize()
+                await CommitmentsFollowUp.shared.start()
+            }
+
             // Start Morning Briefing Scheduler
             Task { await MorningBriefing.shared.initialize() }
 
@@ -888,6 +894,17 @@ actor GatewayServer {
         // MARK: - Conversation Search
         if req.path.hasPrefix("/search") {
             // TODO: return await handleSearchRoute(req, clientIP: clientIP)
+        }
+
+        // MARK: - Commitments API
+        if req.path.hasPrefix("/v1/commitments") {
+            if let (status, body) = await CommitmentsRoutes.handle(method: req.method, path: req.path, body: req.jsonBody) {
+                if let data = try? JSONSerialization.data(withJSONObject: body) {
+                    return HTTPResponse(statusCode: status, headers: ["Content-Type": "application/json"], body: data)
+                }
+            }
+            return HTTPResponse(statusCode: 404, headers: ["Content-Type": "application/json"],
+                              body: Data("{\"error\":\"Unknown commitments route\"}".utf8))
         }
 
         // MARK: - LoA (Library of Alexandria) Shortcuts
@@ -2059,6 +2076,13 @@ actor GatewayServer {
         }
         await router.enrichRequest(&body, accessLevel: accessLevel.rawValue, toolNames: toolNames, clientProvidedSystem: hasClientSystem, agentID: agentID, platform: platform)
 
+        // Commitments detection — fire-and-forget on every user message
+        if let messages = body["messages"] as? [[String: Any]],
+           let lastUser = messages.last(where: { $0["role"] as? String == "user" }),
+           let uText = extractTextContent(from: lastUser["content"]) {
+            Task { await self.detectCommitmentsInMessage(uText) }
+        }
+
         // Log user message (handles both string and array/vision content)
         if let messages = body["messages"] as? [[String: Any]],
            let last = messages.last(where: { $0["role"] as? String == "user" }),
@@ -2801,6 +2825,13 @@ actor GatewayServer {
 
         // Force non-streaming for this path (streaming handled separately)
         body["stream"] = false
+
+        // Commitments detection — fire-and-forget on every user message
+        if let messages = body["messages"] as? [[String: Any]],
+           let lastUser = messages.last(where: { $0["role"] as? String == "user" }),
+           let uText = extractTextContent(from: lastUser["content"]) {
+            Task { await self.detectCommitmentsInMessage(uText) }
+        }
 
         // Log user message (handles both string and array/vision content)
         if let messages = body["messages"] as? [[String: Any]],
@@ -5178,6 +5209,43 @@ actor GatewayServer {
 
     private func handleDebateRoute(_ req: HTTPRequest, clientIP: String, currentLevel: AccessLevel, agentID: String) async -> HTTPResponse {
         return HTTPResponse.json(["error": "Debate API not yet implemented"] as [String: Any])
+    }
+
+    // MARK: - Commitments Detection
+
+    /// Detect commitments or resolutions in user messages.
+    /// Runs in background — never blocks the chat response.
+    private func detectCommitmentsInMessage(_ text: String) async {
+        // Check for resolution first ("done", "forget it")
+        if let resolution = CommitmentsDetector.detectResolution(text) {
+            let open = await CommitmentsStore.shared.allOpen()
+            // Try to match resolution to most recent open commitment
+            if let latest = open.first {
+                await CommitmentsStore.shared.updateStatus(
+                    id: latest.id,
+                    status: resolution.action,
+                    note: "Resolved via: \"\(resolution.triggerText)\""
+                )
+                TorboLog.info("Commitment #\(latest.id) \(resolution.action.rawValue) via \"\(resolution.triggerText)\"", subsystem: "Commitments")
+            }
+            return
+        }
+
+        // Fast pre-filter — skip expensive LLM call if no commitment language
+        guard CommitmentsDetector.likelyContainsCommitment(text) else { return }
+
+        // LLM extraction
+        let extracted = await CommitmentsDetector.extractCommitments(from: text)
+        for commitment in extracted {
+            await CommitmentsStore.shared.add(
+                text: commitment.text,
+                dueDate: commitment.dueDate,
+                dueText: commitment.dueText
+            )
+        }
+        if !extracted.isEmpty {
+            TorboLog.info("Extracted \(extracted.count) commitment(s) from message", subsystem: "Commitments")
+        }
     }
 
 }

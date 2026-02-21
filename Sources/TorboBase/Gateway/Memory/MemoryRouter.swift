@@ -131,6 +131,13 @@ actor MemoryRouter {
             }
         }
 
+        // 5. Commitments nudges (overdue follow-ups injected into system prompt)
+        let nudges = await CommitmentsFollowUp.shared.consumeNudges()
+        if !nudges.isEmpty {
+            let nudgeBlock = "<commitments>\n" + nudges.joined(separator: "\n") + "\n</commitments>"
+            systemParts.append(nudgeBlock)
+        }
+
         let systemPrompt = systemParts.joined(separator: "\n\n")
 
         // Inject or merge with existing system message

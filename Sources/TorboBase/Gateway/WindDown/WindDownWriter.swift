@@ -14,7 +14,13 @@ actor WindDownWriter {
 
     /// Generate the evening briefing text from a day review.
     func compose(review: DayReview) async -> String {
-        let prompt = buildPrompt(review: review)
+        var prompt = buildPrompt(review: review)
+
+        // Inject open commitments into the briefing prompt
+        let commitmentsSection = await CommitmentsFollowUp.shared.windDownSection()
+        if !commitmentsSection.isEmpty {
+            prompt += "\n\n" + commitmentsSection
+        }
 
         // Route through the local gateway so the agent gets full tool access,
         // memory context, and identity. Use SiD by default.
@@ -95,7 +101,7 @@ actor WindDownWriter {
         }
 
         parts.append("")
-        parts.append("Instructions: Summarize today briefly. Flag anything unresolved. Preview tomorrow. Keep it under 150 words. No bullet points — write in short paragraphs. Sign off warmly.")
+        parts.append("Instructions: Summarize today briefly. Flag anything unresolved — especially overdue commitments. Preview tomorrow. Keep it under 150 words. No bullet points — write in short paragraphs. Sign off warmly.")
 
         return parts.joined(separator: "\n")
     }

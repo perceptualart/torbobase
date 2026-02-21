@@ -127,6 +127,10 @@ struct TorboBaseServer {
         TorboLog.info("Starting LifeOS predictor...", subsystem: "Main")
         await LifeOSPredictor.shared.start()
 
+        TorboLog.info("Starting commitments engine...", subsystem: "Main")
+        await CommitmentsStore.shared.initialize()
+        await CommitmentsFollowUp.shared.start()
+
         TorboLog.info("Starting ambient monitor...", subsystem: "Main")
         await AmbientMonitor.shared.start()
 
