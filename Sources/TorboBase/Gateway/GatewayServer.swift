@@ -270,6 +270,9 @@ actor GatewayServer {
             // Initialize Token Tracker
             Task { await TokenTracker.shared.initialize() }
 
+            // Start Morning Briefing Scheduler
+            Task { await MorningBriefing.shared.initialize() }
+
             // Start Evening Wind-Down Scheduler
             Task { await WindDownScheduler.shared.initialize() }
 
@@ -890,6 +893,11 @@ actor GatewayServer {
         // MARK: - LoA (Library of Alexandria) Shortcuts
         if req.path.hasPrefix("/v1/loa") {
             return await handleLoARoute(req, clientIP: clientIP)
+        }
+
+        // MARK: - Debate API (multi-agent decision analysis)
+        if req.path.hasPrefix("/v1/debate") {
+            return await handleDebateRoute(req, clientIP: clientIP, currentLevel: currentLevel, agentID: agentID)
         }
 
         // MARK: - Memory Management API
@@ -1772,6 +1780,7 @@ actor GatewayServer {
                     return response
                 }
             }
+
 
             // LifeOS Morning Briefing routes
             if req.path.hasPrefix("/lifeos/briefing") {
