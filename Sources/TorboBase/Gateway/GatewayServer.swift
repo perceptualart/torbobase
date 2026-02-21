@@ -667,7 +667,8 @@ actor GatewayServer {
                                 "Permissions-Policy": "microphone=(self), camera=()",
                                 "Content-Security-Policy": "default-src 'self'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; img-src 'self' data:; font-src 'none'; frame-src 'none'; object-src 'none'",
                                 "X-Frame-Options": "DENY",
-                                "X-Content-Type-Options": "nosniff"
+                                "X-Content-Type-Options": "nosniff",
+                                "Referrer-Policy": "no-referrer"
                               ],
                               body: Data(html.utf8))
         }
