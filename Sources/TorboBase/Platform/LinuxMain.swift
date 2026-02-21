@@ -130,6 +130,10 @@ struct TorboBaseServer {
         TorboLog.info("Starting ambient monitor...", subsystem: "Main")
         await AmbientMonitor.shared.start()
 
+        TorboLog.info("Starting HomeKit monitor...", subsystem: "Main")
+        await HomeKitSOCReceiver.shared.start()
+        await HomeKitMonitor.shared.start()
+
         TorboLog.info("Starting morning briefing scheduler...", subsystem: "Main")
         await MorningBriefing.shared.initialize()
 

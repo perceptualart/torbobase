@@ -895,6 +895,11 @@ actor GatewayServer {
             return await handleLoARoute(req, clientIP: clientIP)
         }
 
+        // MARK: - HomeKit Ambient Intelligence
+        if req.path.hasPrefix("/v1/homekit") || req.path == "/v1/soc/homekit" {
+            return await handleHomeKitRoute(req, clientIP: clientIP)
+        }
+
         // MARK: - Debate API (multi-agent decision analysis)
         if req.path.hasPrefix("/v1/debate") {
             return await handleDebateRoute(req, clientIP: clientIP, currentLevel: currentLevel, agentID: agentID)
@@ -5172,6 +5177,86 @@ actor GatewayServer {
         }
         let preview = String(errorBody.prefix(200))
         return "\(provider) returned \(code)\(preview.isEmpty ? "" : ": \(preview)")"
+    }
+
+    // MARK: - HomeKit Routes
+
+    private func handleHomeKitRoute(_ req: HTTPRequest, clientIP: String) async -> HTTPResponse {
+        // POST /v1/soc/homekit — receive HomeKit state update from iOS
+        if req.path == "/v1/soc/homekit" && req.method == "POST" {
+            guard let body = req.jsonBody,
+                  let data = try? JSONSerialization.data(withJSONObject: body),
+                  let update = try? JSONDecoder().decode(HomeKitStateUpdate.self, from: data) else {
+                return HTTPResponse.badRequest("Invalid HomeKit state update")
+            }
+            await HomeKitSOCReceiver.shared.handleStateUpdate(update)
+            return HTTPResponse.json(["status": "ok"] as [String: Any])
+        }
+
+        // GET /v1/homekit/alerts — list HomeKit alerts
+        if req.path == "/v1/homekit/alerts" && req.method == "GET" {
+            let typeFilter = req.queryParam("type")
+            let limitStr = req.queryParam("limit")
+            let limit = limitStr.flatMap(Int.init) ?? 100
+            let activeOnly = req.queryParam("active") == "true"
+
+            var alerts: [AmbientAlert]
+            if activeOnly {
+                alerts = await AmbientAlertManager.shared.activeAlerts()
+            } else {
+                alerts = await AmbientAlertManager.shared.getAlerts()
+            }
+
+            if let typeFilter = typeFilter {
+                alerts = alerts.filter { $0.type == typeFilter }
+            }
+            alerts = Array(alerts.prefix(limit))
+            let enc = JSONEncoder()
+            guard let alertsData = try? enc.encode(alerts),
+                  let alertsArray = try? JSONSerialization.jsonObject(with: alertsData) as? [[String: Any]] else {
+                return HTTPResponse.json(["alerts": [] as [Any], "count": 0] as [String: Any])
+            }
+            return HTTPResponse.json(["alerts": alertsArray, "count": alertsArray.count] as [String: Any])
+        }
+
+        // POST /v1/homekit/alerts/dismiss — dismiss alert by ID
+        if req.path == "/v1/homekit/alerts/dismiss" && req.method == "POST" {
+            guard let body = req.jsonBody, let alertID = body["id"] as? String else {
+                return HTTPResponse.badRequest("Missing 'id' field")
+            }
+            let dismissed = await AmbientAlertManager.shared.dismiss(id: alertID)
+            return HTTPResponse.json(["dismissed": dismissed] as [String: Any])
+        }
+
+        // POST /v1/homekit/alerts/dismiss-all — dismiss all alerts
+        if req.path == "/v1/homekit/alerts/dismiss-all" && req.method == "POST" {
+            await AmbientAlertManager.shared.dismissAll()
+            return HTTPResponse.json(["dismissed": true] as [String: Any])
+        }
+
+        // GET /v1/homekit/status — system status + config
+        if req.path == "/v1/homekit/status" && req.method == "GET" {
+            let running = await HomeKitMonitor.shared.getIsRunning()
+            let cfg = await HomeKitMonitor.shared.getConfig()
+            let alertCount = await AmbientAlertManager.shared.getAlerts().count
+            let cfgDict: [String: Any] = [
+                "lightsOutHour": cfg.lightsOutHour,
+                "lockCheckHour": cfg.lockCheckHour,
+                "tempLowF": cfg.tempLowF,
+                "tempHighF": cfg.tempHighF,
+                "offlineThresholdMinutes": cfg.offlineThresholdMinutes,
+                "alertCooldownMinutes": cfg.alertCooldownMinutes
+            ]
+            let result: [String: Any] = [
+                "running": running,
+                "alert_count": alertCount,
+                "config": cfgDict,
+                "agent": "CC-AMBIENT-1"
+            ]
+            return HTTPResponse.json(result)
+        }
+
+        return HTTPResponse.notFound()
     }
 
     // MARK: - Debate Routes (stub)

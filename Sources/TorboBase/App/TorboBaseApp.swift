@@ -163,6 +163,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // Start Ambient Monitor
             await AmbientMonitor.shared.start()
             TorboLog.info("Ambient monitor online", subsystem: "App")
+
+            // Start HomeKit ambient intelligence
+            await HomeKitSOCReceiver.shared.start()
+            await HomeKitMonitor.shared.start()
+            TorboLog.info("HomeKit monitor online", subsystem: "App")
         }
     }
 
