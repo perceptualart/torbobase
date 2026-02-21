@@ -259,8 +259,19 @@ actor GatewayServer {
                 await CronScheduler.shared.initialize()
             }
 
+            // Start Event Bus
+            Task {
+                await EventBus.shared.initialize()
+                await EventBus.shared.publish("system.gateway.started",
+                    payload: ["port": "\(port)"],
+                    source: "Gateway")
+            }
+
             // Initialize Token Tracker
             Task { await TokenTracker.shared.initialize() }
+
+            // Start Morning Briefing Scheduler
+            Task { await MorningBriefing.shared.initialize() }
 
             // Start Evening Wind-Down Scheduler
             Task { await WindDownScheduler.shared.initialize() }
@@ -429,6 +440,10 @@ actor GatewayServer {
         Task { await WindDownScheduler.shared.initialize() }
         Task { await TelegramBridge.shared.startPolling() }
         Task { await ChannelManager.shared.initialize() }
+        Task {
+            await LoAMemoryEngine.shared.initialize()
+            await LoADistillation.shared.registerCronJob()
+        }
 
         await MainActor.run {
             PairingManager.shared.startAdvertising(port: port)
@@ -846,6 +861,11 @@ actor GatewayServer {
             return await handleDashboardRoute(req, clientIP: clientIP)
         }
 
+        // MARK: - Event Bus API
+        if req.path.hasPrefix("/v1/events") || req.path == "/events/stream" || req.path == "/events/log" {
+            return await handleEventBusRoute(req, clientIP: clientIP, currentLevel: currentLevel, writer: writer, corsOrigin: corsOrigin)
+        }
+
         // MARK: - Evening Wind-Down
         if req.path.hasPrefix("/v1/winddown") {
             if let (status, body) = await WindDownRoutes.handle(method: req.method, path: req.path, body: req.jsonBody) {
@@ -870,6 +890,13 @@ actor GatewayServer {
         // MARK: - Memory Management API
         if req.path.hasPrefix("/v1/memory") {
             return await handleMemoryRoute(req, clientIP: clientIP)
+        }
+
+        // MARK: - LoA Memory Engine (structured knowledge store)
+        if req.path.hasPrefix("/memory") {
+            if let response = await handleLoAMemoryEngineRoute(req, clientIP: clientIP) {
+                return response
+            }
         }
 
         switch (req.method, req.path) {
@@ -924,7 +951,7 @@ actor GatewayServer {
             }
         case ("GET", "/v1/messages"):
             return await guardedRoute(level: .chatOnly, current: currentLevel, clientIP: clientIP, req: req) {
-                await self.listMessages()
+                await self.listMessages(req: req)
             }
 
         // --- Chat Rooms (multi-user) ---
@@ -1732,6 +1759,13 @@ actor GatewayServer {
                     return HTTPResponse(statusCode: 200, headers: ["Content-Type": mime], body: data)
                 }
                 return HTTPResponse.notFound()
+            }
+
+            // LifeOS Morning Briefing routes
+            if req.path.hasPrefix("/lifeos/briefing") {
+                if let response = await handleBriefingRoute(req, clientIP: clientIP) {
+                    return response
+                }
             }
 
             // Cron Scheduler routes
@@ -3317,12 +3351,17 @@ actor GatewayServer {
         return HTTPResponse.json(["sessions": data])
     }
 
-    private func listMessages() async -> HTTPResponse {
+    private func listMessages(req: HTTPRequest) async -> HTTPResponse {
+        let limit = Int(req.queryParam("limit") ?? "100") ?? 100
         let s2 = appState
         let messages = await MainActor.run { s2?.recentMessages ?? [] }
-        let data = messages.suffix(100).map { m -> [String: Any] in
-            ["id": m.id.uuidString, "role": m.role, "content": m.content,
-             "model": m.model, "timestamp": ISO8601DateFormatter().string(from: m.timestamp)]
+        let data = messages.suffix(min(limit, 200)).map { m -> [String: Any] in
+            var dict: [String: Any] = [
+                "id": m.id.uuidString, "role": m.role, "content": m.content,
+                "model": m.model, "timestamp": ISO8601DateFormatter().string(from: m.timestamp)
+            ]
+            if let agentID = m.agentID { dict["agentID"] = agentID }
+            return dict
         }
         return HTTPResponse.json(["messages": data])
     }
