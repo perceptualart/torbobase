@@ -621,6 +621,13 @@ final class AppState: _TorboObservable {
         if recentMessages.count > 200 { recentMessages.removeFirst() }
         // Persist to disk
         Task { await ConversationStore.shared.appendMessage(msg) }
+        // Index for full-text search
+        Task {
+            await ConversationSearch.shared.indexMessage(
+                id: msg.id.uuidString, role: msg.role, agent: msg.agentID ?? "sid",
+                content: msg.content, sessionID: "", timestamp: msg.timestamp
+            )
+        }
     }
 
     /// Load persisted conversations on launch

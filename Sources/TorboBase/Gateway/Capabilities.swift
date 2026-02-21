@@ -112,6 +112,7 @@ enum CapabilityRegistry {
         CapabilityDefinition(toolName: "loa_forget", category: .memory, minimumAccessLevel: .chatOnly, description: "Remove stored knowledge", macOnly: false),
         CapabilityDefinition(toolName: "loa_entities", category: .memory, minimumAccessLevel: .chatOnly, description: "List known entities", macOnly: false),
         CapabilityDefinition(toolName: "loa_timeline", category: .memory, minimumAccessLevel: .chatOnly, description: "Browse memory timeline", macOnly: false),
+        CapabilityDefinition(toolName: "search_conversations", category: .search, minimumAccessLevel: .chatOnly, description: "Search past conversations", macOnly: false),
         // Code Execution
         CapabilityDefinition(toolName: "execute_code", category: .execution, minimumAccessLevel: .execute, description: "Run code in sandbox", macOnly: false),
         CapabilityDefinition(toolName: "execute_code_docker", category: .execution, minimumAccessLevel: .execute, description: "Run code in Docker", macOnly: false),
@@ -321,7 +322,8 @@ actor ToolProcessor {
         names.formUnion(["generate_image", "search_documents", "create_workflow",
                          "execute_code", "execute_code_docker",
                          "browser_navigate", "browser_screenshot", "browser_extract", "browser_interact",
-                         "loa_recall", "loa_teach", "loa_forget", "loa_entities", "loa_timeline"])
+                         "loa_recall", "loa_teach", "loa_forget", "loa_entities", "loa_timeline",
+                         "search_conversations"])
         return names
     }()
 
@@ -980,6 +982,26 @@ extension ToolProcessor {
     /// Tool definitions for all tools (filtered by access level)
     /// Built-in tools (web_search, web_fetch) are available at ALL levels.
     /// System access tools (files, commands) are gated by higher levels.
+    /// search_conversations tool definition
+    static let searchConversationsToolDefinition: [String: Any] = [
+        "type": "function",
+        "function": [
+            "name": "search_conversations",
+            "description": "Search across all past conversations using full-text search. Find what was discussed, when, and with which agent. Returns matching messages with surrounding context.",
+            "parameters": [
+                "type": "object",
+                "properties": [
+                    "query": ["type": "string", "description": "What to search for in past conversations"],
+                    "agent": ["type": "string", "description": "Filter by agent name (e.g. 'sid')"],
+                    "from": ["type": "string", "description": "Start date filter (ISO8601 or yyyy-MM-dd)"],
+                    "to": ["type": "string", "description": "End date filter (ISO8601 or yyyy-MM-dd)"],
+                    "limit": ["type": "integer", "description": "Max results to return (default 10)"]
+                ] as [String: Any],
+                "required": ["query"]
+            ] as [String: Any]
+        ] as [String: Any]
+    ]
+
     /// search_documents tool definition
     static let searchDocumentsToolDefinition: [String: Any] = [
         "type": "function",
@@ -1297,6 +1319,7 @@ extension ToolProcessor {
         case "loa_forget": return loaForgetToolDefinition
         case "loa_entities": return loaEntitiesToolDefinition
         case "loa_timeline": return loaTimelineToolDefinition
+        case "search_conversations": return searchConversationsToolDefinition
         case "execute_code": return executeCodeToolDefinition
         case "execute_code_docker": return executeCodeDockerToolDefinition
         case "browser_navigate": return browserNavigateToolDefinition
@@ -1397,6 +1420,31 @@ extension ToolProcessor {
                     let prompt = args["prompt"] as? String ?? ""
                     let size = args["size"] as? String ?? "1024x1024"
                     content = await ImageGenerator.shared.generate(prompt: prompt, size: size)
+                case "search_conversations":
+                    let query = args["query"] as? String ?? ""
+                    let agentFilter = args["agent"] as? String
+                    let limitVal = args["limit"] as? Int ?? 10
+                    let iso8601 = ISO8601DateFormatter()
+                    let dayFmt2 = DateFormatter()
+                    dayFmt2.dateFormat = "yyyy-MM-dd"
+                    var fromD: Date?
+                    var toD: Date?
+                    if let fs = args["from"] as? String { fromD = iso8601.date(from: fs) ?? dayFmt2.date(from: fs) }
+                    if let ts = args["to"] as? String { toD = iso8601.date(from: ts) ?? dayFmt2.date(from: ts) }
+                    let hits = await ConversationSearch.shared.search(
+                        query: query, agent: agentFilter, from: fromD, to: toD, limit: limitVal
+                    )
+                    if hits.isEmpty {
+                        content = "No matching conversations found for: \(query)"
+                    } else {
+                        content = hits.enumerated().map { i, hit in
+                            var entry = "[\(i+1)] \(hit.role) (\(hit.agent)) — \(hit.timestamp)\n"
+                            entry += "  Snippet: \(hit.snippet)\n"
+                            entry += "  Full: \(String(hit.content.prefix(300)))"
+                            if hit.content.count > 300 { entry += "..." }
+                            return entry
+                        }.joined(separator: "\n\n")
+                    }
                 case "search_documents":
                     let query = args["query"] as? String ?? ""
                     let topK = args["top_k"] as? Int ?? 5

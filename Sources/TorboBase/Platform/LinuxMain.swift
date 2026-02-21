@@ -82,8 +82,8 @@ struct TorboBaseServer {
         await MemoryIndex.shared.initialize()
 
         TorboLog.info("Initializing conversation search...", subsystem: "Main")
-        // TODO: await ConversationSearch.shared.initialize()
-        // TODO: Task { await ConversationSearch.shared.backfillFromStore() }
+        await ConversationSearch.shared.initialize()
+        Task { await ConversationSearch.shared.backfillFromStore() }
 
         TorboLog.info("Initializing skills...", subsystem: "Main")
         await SkillsManager.shared.initialize()
