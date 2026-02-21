@@ -1774,7 +1774,12 @@ actor GatewayServer {
             return HTTPResponse.badRequest("Missing 'token'")
         }
         let valid = await MainActor.run { PairingManager.shared.verifyToken(token) }
-        return HTTPResponse.json(["valid": valid])
+        var response: [String: Any] = ["valid": valid]
+        if valid {
+            if let tsIP = Self.detectTailscaleIP() { response["tailscaleIP"] = tsIP }
+            if let tsHostname = Self.detectTailscaleHostname() { response["tailscaleHostname"] = tsHostname }
+        }
+        return HTTPResponse.json(response)
     }
 
     /// Auto-pair: trusted Tailscale clients (100.x.x.x) can pair without a code.
