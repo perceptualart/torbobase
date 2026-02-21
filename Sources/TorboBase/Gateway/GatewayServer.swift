@@ -867,6 +867,13 @@ actor GatewayServer {
             return await handleMemoryRoute(req, clientIP: clientIP)
         }
 
+        // MARK: - LoA Memory Engine (structured knowledge store)
+        if req.path.hasPrefix("/memory") {
+            if let response = await handleLoAMemoryEngineRoute(req, clientIP: clientIP) {
+                return response
+            }
+        }
+
         switch (req.method, req.path) {
 
         // --- Level 1: Chat ---
