@@ -127,15 +127,15 @@ struct TorboBaseServer {
         TorboLog.info("Starting LifeOS predictor...", subsystem: "Main")
         await LifeOSPredictor.shared.start()
 
-        TorboLog.info("Starting ambient monitor...", subsystem: "Main")
-        await AmbientMonitor.shared.start()
-
         TorboLog.info("Starting HomeKit monitor...", subsystem: "Main")
-        await HomeKitSOCReceiver.shared.start()
         await HomeKitMonitor.shared.start()
 
         TorboLog.info("Starting morning briefing scheduler...", subsystem: "Main")
         await MorningBriefing.shared.initialize()
+
+        TorboLog.info("Starting ambient monitor...", subsystem: "Main")
+        await HomeKitSOCReceiver.shared.start()
+        await AmbientMonitor.shared.start()
 
         // Start bridge polling (if configured via env vars)
         if ProcessInfo.processInfo.environment["TELEGRAM_BOT_TOKEN"] != nil {

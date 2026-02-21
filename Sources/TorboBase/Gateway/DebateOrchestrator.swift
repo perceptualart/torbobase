@@ -167,7 +167,7 @@ actor DebateOrchestrator {
         ]
 
         for provider in providers {
-            if let key = KeychainManager.get(provider.key), !key.isEmpty {
+            if let key = KeychainManager.get("apikey." + provider.key) ?? KeychainManager.get(provider.key), !key.isEmpty {
                 if provider.transform {
                     return await callAnthropic(messages: messages, apiKey: key, model: model)
                 } else {

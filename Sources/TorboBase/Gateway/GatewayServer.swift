@@ -890,6 +890,11 @@ actor GatewayServer {
             // TODO: return await handleSearchRoute(req, clientIP: clientIP)
         }
 
+        // MARK: - Ambient Intelligence (HomeKit Monitoring)
+        if req.path.hasPrefix("/v1/ambient") || req.path == "/v1/soc/homekit" {
+            return await handleAmbientIntelligenceRoute(req, clientIP: clientIP)
+        }
+
         // MARK: - LoA (Library of Alexandria) Shortcuts
         if req.path.hasPrefix("/v1/loa") {
             return await handleLoARoute(req, clientIP: clientIP)
@@ -1779,12 +1784,7 @@ actor GatewayServer {
                 return HTTPResponse.notFound()
             }
 
-            // Ambient Monitor routes
-            if req.path.hasPrefix("/ambient") {
-                if let response = await handleAmbientRoute(req, clientIP: clientIP) {
-                    return response
-                }
-            }
+
 
 
             // LifeOS Morning Briefing routes
@@ -4094,6 +4094,86 @@ actor GatewayServer {
                 let event = await EventBus.shared.publish(eventName, payload: payload, source: source)
                 return HTTPResponse.json(event.toDict())
             }
+        }
+
+        return HTTPResponse.notFound()
+    }
+
+    // MARK: - Ambient Intelligence (HomeKit Monitoring)
+
+    private func handleAmbientIntelligenceRoute(_ req: HTTPRequest, clientIP: String) async -> HTTPResponse {
+        if req.method == "POST" && req.path == "/v1/soc/homekit" {
+            guard let body = req.body, !body.isEmpty else {
+                return .badRequest("Empty body")
+            }
+            do {
+                let update = try JSONDecoder().decode(HomeKitStateUpdate.self, from: body)
+                guard update.type == "HOMEKIT_STATE_UPDATE" else {
+                    return .badRequest("Expected type HOMEKIT_STATE_UPDATE")
+                }
+                await HomeKitSOCReceiver.shared.handleStateUpdate(update)
+                return HTTPResponse.json(["status": "ok", "devices": update.devices.count])
+            } catch {
+                return .badRequest("Invalid HomeKit state: \(error.localizedDescription)")
+            }
+        }
+
+        if req.method == "GET" && req.path == "/v1/ambient/alerts" {
+            let query = req.queryParams
+            let type = query["type"]
+            let limit = Int(query["limit"] ?? "50") ?? 50
+            let activeOnly = query["active"] == "true"
+            let alerts: [AmbientAlert]
+            if activeOnly {
+                alerts = await AmbientAlertManager.shared.activeAlerts()
+            } else {
+                alerts = await AmbientAlertManager.shared.getAlerts(type: type, limit: limit)
+            }
+            let encoded = alerts.map { a in
+                ["id": a.id, "type": a.type, "priority": "\(a.priority)",
+                 "message": a.message, "timestamp": "\(a.timestamp)",
+                 "agent": a.agent, "dismissed": "\(a.dismissed)"] as [String: String]
+            }
+            if let data = try? JSONSerialization.data(withJSONObject: encoded) {
+                return HTTPResponse(statusCode: 200, headers: ["Content-Type": "application/json"], body: data)
+            }
+            return HTTPResponse.json(["alerts": [], "count": 0])
+        }
+
+        if req.method == "POST" && req.path == "/v1/ambient/alerts/dismiss" {
+            guard let body = req.jsonBody, let id = body["id"] as? String else {
+                return .badRequest("Missing 'id' field")
+            }
+            let success = await AmbientAlertManager.shared.dismiss(id: id)
+            return HTTPResponse.json(["success": success])
+        }
+
+        if req.method == "POST" && req.path == "/v1/ambient/alerts/dismiss-all" {
+            await AmbientAlertManager.shared.dismissAll()
+            return HTTPResponse.json(["status": "ok"])
+        }
+
+        if req.method == "GET" && req.path == "/v1/ambient/status" {
+            let alertCount = await AmbientAlertManager.shared.count
+            let activeCount = await AmbientAlertManager.shared.activeCount
+            let hasState = await HomeKitSOCReceiver.shared.latestState != nil
+            let deviceCount = await HomeKitSOCReceiver.shared.latestState?.devices.count ?? 0
+            let config = await AmbientMonitor.shared.getConfig()
+            return HTTPResponse.json([
+                "monitoring": true,
+                "hasHomeKitState": hasState,
+                "deviceCount": deviceCount,
+                "totalAlerts": alertCount,
+                "activeAlerts": activeCount,
+                "config": [
+                    "lightsOutHour": config.lightsOutHour,
+                    "lockCheckHour": config.lockCheckHour,
+                    "tempLowF": config.tempLowF,
+                    "tempHighF": config.tempHighF,
+                    "offlineThresholdMinutes": config.offlineThresholdMinutes,
+                    "alertCooldownMinutes": config.alertCooldownMinutes
+                ]
+            ] as [String: Any])
         }
 
         return HTTPResponse.notFound()
