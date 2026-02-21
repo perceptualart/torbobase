@@ -57,6 +57,9 @@ enum PlatformPaths {
     /// Documents (RAG) directory.
     static var documentsDir: String { dataDir + "/documents" }
 
+    /// Briefings storage directory.
+    static var briefingsDir: String { dataDir + "/briefings" }
+
     // MARK: - Files
 
     /// Task queue persistence file.
@@ -80,12 +83,15 @@ enum PlatformPaths {
     /// MCP server configurations.
     static var mcpConfigFile: String { dataDir + "/mcp_servers.json" }
 
+    /// Morning briefing configuration.
+    static var briefingConfigFile: String { dataDir + "/briefing_config.json" }
+
     // MARK: - Initialization
 
     /// Ensure all required directories exist.
     static func ensureDirectories() {
         let fm = FileManager.default
-        let dirs = [dataDir, configDir, agentsDir, skillsDir, memoryDir, documentsDir]
+        let dirs = [dataDir, configDir, agentsDir, skillsDir, memoryDir, documentsDir, briefingsDir]
         for dir in dirs {
             try? fm.createDirectory(atPath: dir, withIntermediateDirectories: true)
         }

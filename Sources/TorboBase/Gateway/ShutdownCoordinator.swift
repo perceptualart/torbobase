@@ -47,6 +47,10 @@ actor ShutdownCoordinator {
         TorboLog.info("Stopping Cron Scheduler...", subsystem: "Shutdown")
         await CronScheduler.shared.shutdown()
 
+        // 2b. Stop Wind-Down Scheduler
+        TorboLog.info("Stopping Wind-Down Scheduler...", subsystem: "Shutdown")
+        await WindDownScheduler.shared.shutdown()
+
         // 3. Stop MCP servers
         TorboLog.info("Stopping MCP servers...", subsystem: "Shutdown")
         await MCPManager.shared.stopAll()

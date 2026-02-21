@@ -66,7 +66,7 @@ actor AmbientMonitor {
         TorboLog.info("Ambient monitor started", subsystem: "Ambient")
         if config.emailEnabled { Task { await emailLoop() }; TorboLog.info("Email monitor: every \(config.emailIntervalMinutes)m", subsystem: "Ambient") }
         if config.calendarEnabled { Task { await calendarLoop() }; TorboLog.info("Calendar monitor: every \(config.calendarIntervalMinutes)m", subsystem: "Ambient") }
-        if config.stockEnabled && !config.stockTickers.isEmpty { Task { await stockLoop() }; TorboLog.info("Stock monitor: \(config.stockTickers.joined(separator: \", \")) every \(config.stockIntervalMinutes)m", subsystem: "Ambient") }
+        if config.stockEnabled && !config.stockTickers.isEmpty { Task { await stockLoop() }; TorboLog.info("Stock monitor active", subsystem: "Ambient") }
         if config.newsEnabled && !config.newsKeywords.isEmpty { Task { await newsLoop() }; TorboLog.info("News monitor active", subsystem: "Ambient") }
     }
     func stop() { isRunning = false; TorboLog.info("Ambient monitor stopped", subsystem: "Ambient") }
@@ -119,7 +119,7 @@ actor AmbientMonitor {
     private func loadAlerts() {
         guard let d = FileManager.default.contents(atPath: alertsFilePath) else { return }
         let dec = JSONDecoder(); dec.dateDecodingStrategy = .iso8601
-        do { alerts = try dec.decode([AmbientAlert].self, from: d); TorboLog.info("Loaded \(alerts.count) pending alert(s)", subsystem: "Ambient") }
+        do { alerts = try dec.decode([AmbientAlert].self, from: d); TorboLog.info("Loaded \(alerts.count) alert(s)", subsystem: "Ambient") }
         catch { TorboLog.warn("Failed to load alerts: \(error)", subsystem: "Ambient") }
     }
     private func persistConfig() {
@@ -129,29 +129,20 @@ actor AmbientMonitor {
     }
     private func loadConfig() {
         guard let d = FileManager.default.contents(atPath: configFilePath) else { return }
-        do { config = try JSONDecoder().decode(AmbientConfig.self, from: d); TorboLog.info("Loaded ambient config", subsystem: "Ambient") }
-        catch { TorboLog.warn("Failed to load config: \(error)", subsystem: "Ambient") }
+        do { config = try JSONDecoder().decode(AmbientConfig.self, from: d) } catch { TorboLog.warn("Config load failed: \(error)", subsystem: "Ambient") }
     }
-    private func emailLoop() async {
-        while isRunning && config.emailEnabled { await checkEmail(); try? await Task.sleep(nanoseconds: UInt64(config.emailIntervalMinutes) * 60_000_000_000) }
-    }
+    private func emailLoop() async { while isRunning && config.emailEnabled { await checkEmail(); try? await Task.sleep(nanoseconds: UInt64(config.emailIntervalMinutes) * 60_000_000_000) } }
     private func checkEmail() async {
         #if os(macOS)
         let raw = await EmailManager.shared.checkEmail(limit: 20)
         for line in raw.split(separator: "\n").map(String.init) {
             guard line.contains("ID:") && line.contains("FROM:") && line.contains("SUBJECT:") else { continue }
-            let parts = parseEmailLine(line)
-            guard let emailID = parts["ID"], !alertedEmailIDs.contains(emailID) else { continue }
-            let from = parts["FROM"] ?? ""; let subject = parts["SUBJECT"] ?? ""
-            let combined = (from + " " + subject).lowercased()
-            let isVIP = config.emailVIPContacts.contains { from.lowercased().contains($0.lowercased()) }
-            let isUrgent = config.emailUrgentKeywords.contains { combined.contains($0.lowercased()) }
-            if isVIP { alertedEmailIDs.insert(emailID); addAlert(type: .email, priority: .high, message: "VIP email from \(from): \(subject)") }
-            else if isUrgent { alertedEmailIDs.insert(emailID); addAlert(type: .email, priority: .high, message: "Urgent email from \(from): \(subject)") }
+            let parts = parseEmailLine(line); guard let eid = parts["ID"], !alertedEmailIDs.contains(eid) else { continue }
+            let from = parts["FROM"] ?? ""; let subj = parts["SUBJECT"] ?? ""; let combo = (from + " " + subj).lowercased()
+            if config.emailVIPContacts.contains(where: { from.lowercased().contains($0.lowercased()) }) { alertedEmailIDs.insert(eid); addAlert(type: .email, priority: .high, message: "VIP email from \(from): \(subj)") }
+            else if config.emailUrgentKeywords.contains(where: { combo.contains($0.lowercased()) }) { alertedEmailIDs.insert(eid); addAlert(type: .email, priority: .high, message: "Urgent email from \(from): \(subj)") }
         }
         if alertedEmailIDs.count > 500 { alertedEmailIDs = Set(alertedEmailIDs.suffix(250)) }
-        #else
-        TorboLog.debug("Email monitor not available on Linux", subsystem: "Ambient")
         #endif
     }
     private func parseEmailLine(_ line: String) -> [String: String] {
@@ -160,17 +151,14 @@ actor AmbientMonitor {
             if let ci = seg.firstIndex(of: ":") { r[String(seg[seg.startIndex..<ci]).trimmingCharacters(in: .whitespaces)] = String(seg[seg.index(after: ci)...]).trimmingCharacters(in: .whitespaces) }
         }; return r
     }
-    private func calendarLoop() async {
-        while isRunning && config.calendarEnabled { await checkCalendar(); try? await Task.sleep(nanoseconds: UInt64(config.calendarIntervalMinutes) * 60_000_000_000) }
-    }
+    private func calendarLoop() async { while isRunning && config.calendarEnabled { await checkCalendar(); try? await Task.sleep(nanoseconds: UInt64(config.calendarIntervalMinutes) * 60_000_000_000) } }
     private func checkCalendar() async {
-        let now = Date(); let windowEnd = now.addingTimeInterval(Double(config.calendarAlertMinutesBefore) * 60)
-        for event in await CalendarManager.shared.listEvents(from: now, to: windowEnd) {
+        let now = Date()
+        for event in await CalendarManager.shared.listEvents(from: now, to: now.addingTimeInterval(Double(config.calendarAlertMinutesBefore) * 60)) {
             guard !alertedEventIDs.contains(event.id) else { continue }
             let mins = Int(event.startDate.timeIntervalSince(now) / 60); guard mins >= 0 else { continue }
             alertedEventIDs.insert(event.id)
-            var msg = "\(event.title) starts in \(mins) minute(s)"
-            if let loc = event.location, !loc.isEmpty { msg += " at \(loc)" }
+            var msg = "\(event.title) starts in \(mins) minute(s)"; if let l = event.location, !l.isEmpty { msg += " at \(l)" }
             addAlert(type: .calendar, priority: mins <= 10 ? .high : .normal, message: msg)
         }
         if alertedEventIDs.count > 200 { alertedEventIDs = Set(alertedEventIDs.suffix(100)) }
@@ -183,56 +171,39 @@ actor AmbientMonitor {
         }
     }
     private func checkStocks() async {
-        for ticker in config.stockTickers {
-            guard let price = await fetchStockPrice(ticker) else { continue }
-            if let last = lastStockPrices[ticker] {
-                let pct = ((price - last) / last) * 100.0
-                if abs(pct) >= config.stockThresholdPercent {
-                    addAlert(type: .stock, priority: abs(pct) >= config.stockThresholdPercent * 2 ? .high : .normal,
-                        message: "\(ticker) \(pct > 0 ? "UP" : "DOWN") \(String(format: "%.1f", abs(pct)))% — $\(String(format: "%.2f", price)) (was $\(String(format: "%.2f", last)))")
-                }
+        for t in config.stockTickers {
+            guard let p = await fetchStockPrice(t) else { continue }
+            if let last = lastStockPrices[t] {
+                let pct = ((p - last) / last) * 100.0
+                if abs(pct) >= config.stockThresholdPercent { addAlert(type: .stock, priority: abs(pct) >= config.stockThresholdPercent * 2 ? .high : .normal, message: "\(t) \(pct > 0 ? "UP" : "DOWN") \(String(format: "%.1f", abs(pct)))% — $\(String(format: "%.2f", p)) (was $\(String(format: "%.2f", last)))") }
             }
-            lastStockPrices[ticker] = price
+            lastStockPrices[t] = p
         }
     }
     private func fetchStockPrice(_ ticker: String) async -> Double? {
-        let safe = ticker.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? ticker
-        guard let url = URL(string: "https://query1.finance.yahoo.com/v8/finance/chart/\(safe)?range=1d&interval=1m") else { return nil }
+        guard let url = URL(string: "https://query1.finance.yahoo.com/v8/finance/chart/\(ticker.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? ticker)?range=1d&interval=1m") else { return nil }
         var req = URLRequest(url: url); req.timeoutInterval = 15; req.setValue("Mozilla/5.0", forHTTPHeaderField: "User-Agent")
-        do {
-            let (data, resp) = try await URLSession.shared.data(for: req)
-            guard let hr = resp as? HTTPURLResponse, hr.statusCode == 200,
-                  let j = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  let c = j["chart"] as? [String: Any], let r = c["result"] as? [[String: Any]],
-                  let m = r.first?["meta"] as? [String: Any], let p = m["regularMarketPrice"] as? Double else { return nil }
-            return p
-        } catch { TorboLog.debug("Stock fetch failed for \(ticker)", subsystem: "Ambient"); return nil }
+        do { let (data, resp) = try await URLSession.shared.data(for: req); guard let hr = resp as? HTTPURLResponse, hr.statusCode == 200, let j = try? JSONSerialization.jsonObject(with: data) as? [String: Any], let c = j["chart"] as? [String: Any], let r = c["result"] as? [[String: Any]], let m = r.first?["meta"] as? [String: Any], let p = m["regularMarketPrice"] as? Double else { return nil }; return p }
+        catch { return nil }
     }
-    private func newsLoop() async {
-        while isRunning && config.newsEnabled { await checkNews(); try? await Task.sleep(nanoseconds: UInt64(config.newsIntervalMinutes) * 60_000_000_000) }
-    }
+    private func newsLoop() async { while isRunning && config.newsEnabled { await checkNews(); try? await Task.sleep(nanoseconds: UInt64(config.newsIntervalMinutes) * 60_000_000_000) } }
     private func checkNews() async {
         for kw in config.newsKeywords {
-            guard let headlines = await fetchNewsHeadlines(kw) else { continue }
-            for h in headlines.prefix(3) { addAlert(type: .news, priority: .low, message: "[\(kw)] \(String(h.prefix(200)))") }
+            guard let hl = await fetchNewsHeadlines(kw) else { continue }
+            for h in hl.prefix(3) { addAlert(type: .news, priority: .low, message: "[\(kw)] \(String(h.prefix(200)))") }
         }
     }
     private func fetchNewsHeadlines(_ keyword: String) async -> [String]? {
-        guard let enc = keyword.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed),
-              let url = URL(string: "https://html.duckduckgo.com/html/?q=\(enc)+news") else { return nil }
+        guard let enc = keyword.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed), let url = URL(string: "https://html.duckduckgo.com/html/?q=\(enc)+news") else { return nil }
         var req = URLRequest(url: url); req.timeoutInterval = 15; req.setValue("Mozilla/5.0", forHTTPHeaderField: "User-Agent")
-        do {
-            let (data, resp) = try await URLSession.shared.data(for: req)
-            guard let hr = resp as? HTTPURLResponse, hr.statusCode == 200, let html = String(data: data, encoding: .utf8) else { return nil }
+        do { let (data, resp) = try await URLSession.shared.data(for: req); guard let hr = resp as? HTTPURLResponse, hr.statusCode == 200, let html = String(data: data, encoding: .utf8) else { return nil }
             var results: [String] = []
             for comp in html.components(separatedBy: "result__snippet").dropFirst().prefix(5) {
-                guard let si = comp.firstIndex(of: ">") else { continue }
-                let after = comp.index(after: si); guard after < comp.endIndex else { continue }
+                guard let si = comp.firstIndex(of: ">") else { continue }; let after = comp.index(after: si); guard after < comp.endIndex else { continue }
                 let rest = String(comp[after...]); guard let ei = rest.firstIndex(of: "<") else { continue }
-                let cleaned = String(rest[rest.startIndex..<ei]).replacingOccurrences(of: "&amp;", with: "&").replacingOccurrences(of: "&lt;", with: "<").replacingOccurrences(of: "&gt;", with: ">").replacingOccurrences(of: "&quot;", with: "\"").replacingOccurrences(of: "&#x27;", with: "'").trimmingCharacters(in: .whitespacesAndNewlines)
+                let cleaned = String(rest[rest.startIndex..<ei]).replacingOccurrences(of: "&amp;", with: "&").replacingOccurrences(of: "&quot;", with: "\"").trimmingCharacters(in: .whitespacesAndNewlines)
                 if cleaned.count > 20 { results.append(cleaned) }
-            }
-            return results.isEmpty ? nil : results
-        } catch { TorboLog.debug("News fetch failed for \(keyword)", subsystem: "Ambient"); return nil }
+            }; return results.isEmpty ? nil : results
+        } catch { return nil }
     }
 }

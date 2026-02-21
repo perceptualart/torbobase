@@ -279,6 +279,9 @@ actor GatewayServer {
             // Start LifeOS Predictor — calendar watcher, meeting prep, deadline detection
             Task { await LifeOSPredictor.shared.start() }
 
+            // Start Morning Briefing Scheduler
+            Task { await MorningBriefing.shared.initialize() }
+
             // Start Calendar Manager (requests access on first use)
             // CalendarManager.shared is lazy — initialized when first called
 
@@ -433,6 +436,10 @@ actor GatewayServer {
         Task { await MemoryRouter.shared.initialize() }
         Task { await MCPManager.shared.initialize() }
         Task { await DocumentStore.shared.initialize() }
+        Task {
+            await ConversationSearch.shared.initialize()
+            await ConversationSearch.shared.backfillFromStore()
+        }
         Task { await SkillsManager.shared.initialize() }
         Task { await WorkflowEngine.shared.loadFromDisk() }
         Task { await WebhookManager.shared.initialize() }
@@ -875,6 +882,11 @@ actor GatewayServer {
             }
             return HTTPResponse(statusCode: 404, headers: ["Content-Type": "application/json"],
                               body: Data("{\"error\":\"Unknown wind-down route\"}".utf8))
+        }
+
+        // MARK: - Conversation Search
+        if req.path.hasPrefix("/search") {
+            return await handleSearchRoute(req, clientIP: clientIP)
         }
 
         // MARK: - LoA (Library of Alexandria) Shortcuts
@@ -1760,6 +1772,14 @@ actor GatewayServer {
                 }
                 return HTTPResponse.notFound()
             }
+
+            // Ambient Monitor routes
+            if req.path.hasPrefix("/ambient") {
+                if let response = await handleAmbientRoute(req, clientIP: clientIP) {
+                    return response
+                }
+            }
+
 
             // LifeOS Morning Briefing routes
             if req.path.hasPrefix("/lifeos/briefing") {

@@ -81,6 +81,10 @@ struct TorboBaseServer {
         TorboLog.info("Initializing memory system...", subsystem: "Main")
         await MemoryIndex.shared.initialize()
 
+        TorboLog.info("Initializing conversation search...", subsystem: "Main")
+        await ConversationSearch.shared.initialize()
+        Task { await ConversationSearch.shared.backfillFromStore() }
+
         TorboLog.info("Initializing skills...", subsystem: "Main")
         await SkillsManager.shared.initialize()
 
@@ -116,9 +120,6 @@ struct TorboBaseServer {
         TorboLog.info("Starting cron scheduler...", subsystem: "Main")
         await CronScheduler.shared.initialize()
 
-        TorboLog.info("Starting morning briefing scheduler...", subsystem: "Main")
-        await MorningBriefing.shared.initialize()
-
         TorboLog.info("Starting LoA Memory Engine...", subsystem: "Main")
         await LoAMemoryEngine.shared.initialize()
         await LoADistillation.shared.registerCronJob()
@@ -126,9 +127,11 @@ struct TorboBaseServer {
         TorboLog.info("Starting LifeOS predictor...", subsystem: "Main")
         await LifeOSPredictor.shared.start()
 
-        TorboLog.info("Starting commitments engine...", subsystem: "Main")
-        await CommitmentsStore.shared.initialize()
-        await CommitmentsFollowUp.shared.start()
+        TorboLog.info("Starting ambient monitor...", subsystem: "Main")
+        await AmbientMonitor.shared.start()
+
+        TorboLog.info("Starting morning briefing scheduler...", subsystem: "Main")
+        await MorningBriefing.shared.initialize()
 
         // Start bridge polling (if configured via env vars)
         if ProcessInfo.processInfo.environment["TELEGRAM_BOT_TOKEN"] != nil {
