@@ -314,37 +314,44 @@ actor MCPManager {
             return
         }
 
-        let activeConfigs = configs.filter { !$0.key.hasPrefix("_") }
-        TorboLog.info("Starting \(activeConfigs.count) server(s) (skipping \(configs.count - activeConfigs.count) disabled)...", subsystem: "MCP")
+        // Filter: respect both `enabled` field and legacy underscore-prefix convention
+        let activeConfigs = configs.filter { !$0.key.hasPrefix("_") && $0.value.isEnabled }
+        let disabledCount = configs.count - activeConfigs.count
+        TorboLog.info("Starting \(activeConfigs.count) server(s) (skipping \(disabledCount) disabled)...", subsystem: "MCP")
 
         for (name, config) in activeConfigs {
-            // Validate command against allowlist
-            let commandBasename = URL(fileURLWithPath: config.resolvedCommand).lastPathComponent
-            let userAllowed = Set(MCPConfigLoader.loadAllowedCommands())
-            let fullAllowlist = MCPDefaults.allowedCommands.union(userAllowed)
-            if !fullAllowlist.contains(commandBasename) && !fullAllowlist.contains(config.command) {
-                TorboLog.warn("Command '\(config.command)' (\(commandBasename)) not in allowlist — skipping '\(name)'. Add it to allowedCommands in mcp_servers.json to permit.", subsystem: "MCP")
-                continue
-            }
-
-            TorboLog.info("Initializing '\(name)' (cmd: \(config.resolvedCommand))...", subsystem: "MCP")
-
-            let conn = MCPServerConnection(name: name, config: config)
-            servers[name] = conn
-
-            do {
-                try await conn.start()
-                let tools = await conn.getTools()
-                allTools.append(contentsOf: tools)
-                TorboLog.info("'\(name)' ready with \(tools.count) tool(s)", subsystem: "MCP")
-            } catch {
-                TorboLog.error("'\(name)' failed: \(error)", subsystem: "MCP")
-                await conn.stop()
-                servers.removeValue(forKey: name)
-            }
+            await startServer(name: name, config: config)
         }
 
         TorboLog.info("Ready: \(servers.count) server(s), \(allTools.count) total tool(s)", subsystem: "MCP")
+    }
+
+    /// Start a single MCP server by name and config (used by both initialize and addServer)
+    private func startServer(name: String, config: MCPServerConfig) async {
+        // Validate command against allowlist
+        let commandBasename = URL(fileURLWithPath: config.resolvedCommand).lastPathComponent
+        let userAllowed = Set(MCPConfigLoader.loadAllowedCommands())
+        let fullAllowlist = MCPDefaults.allowedCommands.union(userAllowed)
+        if !fullAllowlist.contains(commandBasename) && !fullAllowlist.contains(config.command) {
+            TorboLog.warn("Command '\(config.command)' (\(commandBasename)) not in allowlist — skipping '\(name)'. Add it to allowedCommands in mcp_servers.json to permit.", subsystem: "MCP")
+            return
+        }
+
+        TorboLog.info("Initializing '\(name)' (cmd: \(config.resolvedCommand))...", subsystem: "MCP")
+
+        let conn = MCPServerConnection(name: name, config: config)
+        servers[name] = conn
+
+        do {
+            try await conn.start()
+            let tools = await conn.getTools()
+            allTools.append(contentsOf: tools)
+            TorboLog.info("'\(name)' ready with \(tools.count) tool(s)", subsystem: "MCP")
+        } catch {
+            TorboLog.error("'\(name)' failed: \(error)", subsystem: "MCP")
+            await conn.stop()
+            servers.removeValue(forKey: name)
+        }
     }
 
     /// Refresh — reload config and restart servers
@@ -362,6 +369,101 @@ actor MCPManager {
         }
         servers = [:]
         allTools = []
+    }
+
+    // MARK: - Server Management (CRUD)
+
+    /// Add a new MCP server at runtime. Saves to config and starts it.
+    func addServer(name: String, command: String, args: [String]?, env: [String: String]?, enabled: Bool) async -> (success: Bool, error: String?) {
+        // Check for name collision with running servers
+        if servers[name] != nil {
+            return (false, "Server '\(name)' already exists and is running")
+        }
+
+        let config = MCPServerConfig(command: command, args: args, env: env, enabled: enabled)
+
+        // Save to disk
+        guard MCPConfigLoader.addServer(name: name, config: config) else {
+            return (false, "Failed to save config to disk")
+        }
+
+        // Start if enabled
+        if enabled {
+            await startServer(name: name, config: config)
+            if servers[name] != nil {
+                return (true, nil)
+            } else {
+                return (false, "Saved to config but server failed to start — check logs")
+            }
+        }
+
+        return (true, nil)
+    }
+
+    /// Remove an MCP server. Stops it and removes from config.
+    func removeServer(name: String) async -> (success: Bool, error: String?) {
+        // Stop if running
+        if let conn = servers[name] {
+            await conn.stop()
+            // Remove tools belonging to this server
+            allTools.removeAll { $0.serverName == name }
+            servers.removeValue(forKey: name)
+        }
+
+        // Remove from config
+        guard MCPConfigLoader.removeServer(name: name) else {
+            return (false, "Server '\(name)' not found in config")
+        }
+
+        TorboLog.info("Removed server '\(name)' from config and runtime", subsystem: "MCP")
+        return (true, nil)
+    }
+
+    // MARK: - Server & Tool Queries
+
+    /// List all configured servers with their runtime status
+    func listServers() -> [[String: Any]] {
+        let configs = MCPConfigLoader.load()
+        var result: [[String: Any]] = []
+
+        for (name, config) in configs {
+            let isRunning = servers[name] != nil
+            let toolCount: Int
+            if isRunning {
+                toolCount = allTools.filter { $0.serverName == name }.count
+            } else {
+                toolCount = 0
+            }
+
+            var entry: [String: Any] = [
+                "name": name,
+                "command": config.command,
+                "args": config.args ?? [] as [String],
+                "enabled": config.isEnabled,
+                "running": isRunning,
+                "tools": toolCount
+            ]
+            if let env = config.env, !env.isEmpty {
+                // Mask env values for security (show keys only)
+                entry["env_keys"] = Array(env.keys)
+            }
+            result.append(entry)
+        }
+
+        return result.sorted { ($0["name"] as? String ?? "") < ($1["name"] as? String ?? "") }
+    }
+
+    /// List all discovered tools across all connected servers
+    func listTools() -> [[String: Any]] {
+        allTools.map { tool in
+            [
+                "name": "mcp_\(tool.serverName)_\(tool.name)",
+                "server": tool.serverName,
+                "tool": tool.name,
+                "description": tool.description,
+                "parameters": tool.inputSchema
+            ] as [String: Any]
+        }
     }
 
     /// Get all MCP tool names (for registration with ToolProcessor)
