@@ -81,6 +81,10 @@ struct TorboBaseServer {
         TorboLog.info("Initializing memory system...", subsystem: "Main")
         await MemoryIndex.shared.initialize()
 
+        TorboLog.info("Initializing conversation search...", subsystem: "Main")
+        await ConversationSearch.shared.initialize()
+        Task { await ConversationSearch.shared.backfillFromStore() }
+
         TorboLog.info("Initializing skills...", subsystem: "Main")
         await SkillsManager.shared.initialize()
 
@@ -115,6 +119,10 @@ struct TorboBaseServer {
 
         TorboLog.info("Starting cron scheduler...", subsystem: "Main")
         await CronScheduler.shared.initialize()
+
+        TorboLog.info("Starting LoA Memory Engine...", subsystem: "Main")
+        await LoAMemoryEngine.shared.initialize()
+        await LoADistillation.shared.registerCronJob()
 
         TorboLog.info("Starting LifeOS predictor...", subsystem: "Main")
         await LifeOSPredictor.shared.start()

@@ -422,6 +422,10 @@ actor GatewayServer {
         Task { await MemoryRouter.shared.initialize() }
         Task { await MCPManager.shared.initialize() }
         Task { await DocumentStore.shared.initialize() }
+        Task {
+            await ConversationSearch.shared.initialize()
+            await ConversationSearch.shared.backfillFromStore()
+        }
         Task { await SkillsManager.shared.initialize() }
         Task { await WorkflowEngine.shared.loadFromDisk() }
         Task { await WebhookManager.shared.initialize() }
@@ -429,6 +433,10 @@ actor GatewayServer {
         Task { await WindDownScheduler.shared.initialize() }
         Task { await TelegramBridge.shared.startPolling() }
         Task { await ChannelManager.shared.initialize() }
+        Task {
+            await LoAMemoryEngine.shared.initialize()
+            await LoADistillation.shared.registerCronJob()
+        }
 
         await MainActor.run {
             PairingManager.shared.startAdvertising(port: port)
@@ -855,6 +863,11 @@ actor GatewayServer {
             }
             return HTTPResponse(statusCode: 404, headers: ["Content-Type": "application/json"],
                               body: Data("{\"error\":\"Unknown wind-down route\"}".utf8))
+        }
+
+        // MARK: - Conversation Search
+        if req.path.hasPrefix("/search") {
+            return await handleSearchRoute(req, clientIP: clientIP)
         }
 
         // MARK: - LoA (Library of Alexandria) Shortcuts
