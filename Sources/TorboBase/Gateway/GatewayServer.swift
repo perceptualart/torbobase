@@ -262,6 +262,12 @@ actor GatewayServer {
             // Initialize Token Tracker
             Task { await TokenTracker.shared.initialize() }
 
+            // Start Evening Wind-Down Scheduler
+            Task { await WindDownScheduler.shared.initialize() }
+
+            // Start LifeOS Predictor — calendar watcher, meeting prep, deadline detection
+            Task { await LifeOSPredictor.shared.start() }
+
             // Start Calendar Manager (requests access on first use)
             // CalendarManager.shared is lazy — initialized when first called
 
@@ -420,6 +426,7 @@ actor GatewayServer {
         Task { await WorkflowEngine.shared.loadFromDisk() }
         Task { await WebhookManager.shared.initialize() }
         Task { await CronScheduler.shared.initialize() }
+        Task { await WindDownScheduler.shared.initialize() }
         Task { await TelegramBridge.shared.startPolling() }
         Task { await ChannelManager.shared.initialize() }
 
@@ -837,6 +844,17 @@ actor GatewayServer {
         // MARK: - Dashboard API
         if req.path.hasPrefix("/v1/dashboard") || req.path.hasPrefix("/v1/config") || req.path.hasPrefix("/v1/audit") {
             return await handleDashboardRoute(req, clientIP: clientIP)
+        }
+
+        // MARK: - Evening Wind-Down
+        if req.path.hasPrefix("/v1/winddown") {
+            if let (status, body) = await WindDownRoutes.handle(method: req.method, path: req.path, body: req.jsonBody) {
+                if let data = try? JSONSerialization.data(withJSONObject: body) {
+                    return HTTPResponse(statusCode: status, headers: ["Content-Type": "application/json"], body: data)
+                }
+            }
+            return HTTPResponse(statusCode: 404, headers: ["Content-Type": "application/json"],
+                              body: Data("{\"error\":\"Unknown wind-down route\"}".utf8))
         }
 
         // MARK: - LoA (Library of Alexandria) Shortcuts
@@ -1724,6 +1742,25 @@ actor GatewayServer {
                     return response
                 }
             }
+
+            // Evening Wind-Down routes
+            if req.path.hasPrefix("/v1/winddown") {
+                if let (status, body) = await WindDownRoutes.handle(method: req.method, path: req.path, body: req.jsonBody) {
+                    if let data = try? JSONSerialization.data(withJSONObject: body) {
+                        return HTTPResponse(statusCode: status, headers: ["Content-Type": "application/json"], body: data)
+                    }
+                }
+                return HTTPResponse(statusCode: 404, headers: ["Content-Type": "application/json"],
+                                  body: Data("{\"error\":\"Unknown wind-down route\"}".utf8))
+            }
+
+            // LifeOS Predictor routes
+            if req.path.hasPrefix("/v1/lifeos") {
+                if let response = await handleLifeOSRoute(req, clientIP: clientIP) {
+                    return response
+                }
+            }
+
             return HTTPResponse.notFound()
         }
     }
