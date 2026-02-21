@@ -268,6 +268,9 @@ actor GatewayServer {
             // Start LifeOS Predictor — calendar watcher, meeting prep, deadline detection
             Task { await LifeOSPredictor.shared.start() }
 
+            // Start Morning Briefing Scheduler
+            Task { await MorningBriefing.shared.initialize() }
+
             // Start Calendar Manager (requests access on first use)
             // CalendarManager.shared is lazy — initialized when first called
 
@@ -1752,6 +1755,13 @@ actor GatewayServer {
             // Ambient Monitor routes
             if req.path.hasPrefix("/ambient") {
                 if let response = await handleAmbientRoute(req, clientIP: clientIP) {
+                    return response
+                }
+            }
+
+            // LifeOS Morning Briefing routes
+            if req.path.hasPrefix("/lifeos/briefing") {
+                if let response = await handleBriefingRoute(req, clientIP: clientIP) {
                     return response
                 }
             }

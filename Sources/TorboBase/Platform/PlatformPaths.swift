@@ -57,7 +57,7 @@ enum PlatformPaths {
     /// Documents (RAG) directory.
     static var documentsDir: String { dataDir + "/documents" }
 
-    /// Evening briefings storage directory.
+    /// Briefings storage directory.
     static var briefingsDir: String { dataDir + "/briefings" }
 
     // MARK: - Files
@@ -82,6 +82,9 @@ enum PlatformPaths {
 
     /// MCP server configurations.
     static var mcpConfigFile: String { dataDir + "/mcp_servers.json" }
+
+    /// Morning briefing configuration.
+    static var briefingConfigFile: String { dataDir + "/briefing_config.json" }
 
     // MARK: - Initialization
 
