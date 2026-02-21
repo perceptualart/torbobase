@@ -225,6 +225,11 @@ actor GatewayServer {
                 await WebhookManager.shared.initialize()
             }
 
+            // Start Cron Scheduler
+            Task {
+                await CronScheduler.shared.initialize()
+            }
+
             // Initialize Token Tracker
             Task { await TokenTracker.shared.initialize() }
 
@@ -385,6 +390,7 @@ actor GatewayServer {
         Task { await SkillsManager.shared.initialize() }
         Task { await WorkflowEngine.shared.loadFromDisk() }
         Task { await WebhookManager.shared.initialize() }
+        Task { await CronScheduler.shared.initialize() }
         Task { await TelegramBridge.shared.startPolling() }
         Task { await ChannelManager.shared.initialize() }
 
@@ -1012,6 +1018,26 @@ actor GatewayServer {
                 let json: [String: Any] = ["servers": status.servers, "tools": status.tools]
                 let data = (try? JSONSerialization.data(withJSONObject: json)) ?? Data()
                 return HTTPResponse(statusCode: 200, headers: ["Content-Type": "application/json"], body: data)
+            }
+
+        // --- MCP Server Management ---
+        case ("GET", "/v1/mcp/servers"):
+            return await guardedRoute(level: .chatOnly, current: currentLevel, clientIP: clientIP, req: req) {
+                await self.handleMCPListServers()
+            }
+        case ("POST", "/v1/mcp/servers"):
+            return await guardedRoute(level: .execute, current: currentLevel, clientIP: clientIP, req: req) {
+                await self.handleMCPAddServer(req)
+            }
+        case ("GET", "/v1/mcp/tools"):
+            return await guardedRoute(level: .chatOnly, current: currentLevel, clientIP: clientIP, req: req) {
+                await self.handleMCPListTools()
+            }
+        case _ where req.path.hasPrefix("/v1/mcp/servers/") && req.method == "DELETE":
+            return await guardedRoute(level: .execute, current: currentLevel, clientIP: clientIP, req: req) {
+                let serverName = String(req.path.dropFirst("/v1/mcp/servers/".count))
+                    .removingPercentEncoding ?? String(req.path.dropFirst("/v1/mcp/servers/".count))
+                return await self.handleMCPRemoveServer(name: serverName)
             }
 
         // --- Workflow Routes ---
@@ -1648,6 +1674,13 @@ actor GatewayServer {
                     return HTTPResponse(statusCode: 200, headers: ["Content-Type": mime], body: data)
                 }
                 return HTTPResponse.notFound()
+            }
+
+            // Cron Scheduler routes
+            if req.path.hasPrefix("/v1/cron/tasks") {
+                if let response = await handleCronSchedulerRoute(req, clientIP: clientIP) {
+                    return response
+                }
             }
 
             // TaskQueue routes
@@ -4421,6 +4454,80 @@ actor GatewayServer {
             "tools": status.tools,
             "tool_names": toolNames
         ] as [String: Any])
+    }
+
+    // MARK: - MCP Server Management Handlers
+
+    /// GET /v1/mcp/servers — list all configured MCP servers with runtime status
+    private func handleMCPListServers() async -> HTTPResponse {
+        let servers = await MCPManager.shared.listServers()
+        return HTTPResponse.json(["servers": servers, "count": servers.count])
+    }
+
+    /// POST /v1/mcp/servers — add a new MCP server
+    /// Body: { "name": "...", "command": "npx", "args": [...], "env": {...}, "enabled": true }
+    private func handleMCPAddServer(_ req: HTTPRequest) async -> HTTPResponse {
+        guard let body = req.jsonBody,
+              let name = body["name"] as? String,
+              let command = body["command"] as? String else {
+            return HTTPResponse.badRequest("Missing required fields: 'name' and 'command'")
+        }
+
+        // Validate name (alphanumeric + hyphens + underscores only)
+        let namePattern = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-_"))
+        if name.isEmpty || name.unicodeScalars.contains(where: { !namePattern.contains($0) }) {
+            return HTTPResponse.badRequest("Server name must be alphanumeric (hyphens and underscores allowed)")
+        }
+
+        let args = body["args"] as? [String]
+        let env = body["env"] as? [String: String]
+        let enabled = body["enabled"] as? Bool ?? true
+
+        let result = await MCPManager.shared.addServer(
+            name: name, command: command, args: args, env: env, enabled: enabled
+        )
+
+        if result.success {
+            let status = await MCPManager.shared.status()
+            return HTTPResponse(
+                statusCode: 201,
+                headers: ["Content-Type": "application/json"],
+                body: (try? JSONSerialization.data(withJSONObject: [
+                    "status": "added",
+                    "name": name,
+                    "enabled": enabled,
+                    "total_servers": status.servers,
+                    "total_tools": status.tools
+                ] as [String: Any])) ?? Data()
+            )
+        } else {
+            return HTTPResponse.badRequest(result.error ?? "Failed to add server")
+        }
+    }
+
+    /// DELETE /v1/mcp/servers/:id — remove an MCP server
+    private func handleMCPRemoveServer(name: String) async -> HTTPResponse {
+        guard !name.isEmpty else {
+            return HTTPResponse.badRequest("Server name is required")
+        }
+
+        let result = await MCPManager.shared.removeServer(name: name)
+
+        if result.success {
+            return HTTPResponse.json(["status": "removed", "name": name])
+        } else {
+            return HTTPResponse(
+                statusCode: 404,
+                headers: ["Content-Type": "application/json"],
+                body: Data("{\"error\":\"\(HTTPResponse.jsonEscape(result.error ?? "Not found"))\"}".utf8)
+            )
+        }
+    }
+
+    /// GET /v1/mcp/tools — list all discovered MCP tools
+    private func handleMCPListTools() async -> HTTPResponse {
+        let tools = await MCPManager.shared.listTools()
+        return HTTPResponse.json(["tools": tools, "count": tools.count])
     }
 
     // MARK: - Code Sandbox Handler
