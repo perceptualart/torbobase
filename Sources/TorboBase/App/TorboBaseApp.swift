@@ -159,6 +159,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 await ProactiveAgent.shared.start()
             }
             // Default: OFF until toggled
+
+            // Start Ambient Monitor
+            await AmbientMonitor.shared.start()
+            TorboLog.info("Ambient monitor online", subsystem: "App")
         }
     }
 

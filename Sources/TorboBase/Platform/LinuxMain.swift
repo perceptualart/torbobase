@@ -127,6 +127,9 @@ struct TorboBaseServer {
         TorboLog.info("Starting LifeOS predictor...", subsystem: "Main")
         await LifeOSPredictor.shared.start()
 
+        TorboLog.info("Starting ambient monitor...", subsystem: "Main")
+        await AmbientMonitor.shared.start()
+
         // Start bridge polling (if configured via env vars)
         if ProcessInfo.processInfo.environment["TELEGRAM_BOT_TOKEN"] != nil {
             TorboLog.info("Starting Telegram bridge...", subsystem: "Main")
