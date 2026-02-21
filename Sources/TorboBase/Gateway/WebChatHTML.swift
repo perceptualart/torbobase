@@ -650,17 +650,6 @@ enum WebChatHTML {
         </div>
     </div>
 
-    <!-- Auth Modal -->
-    <div class="nick-overlay" id="authOverlay" style="z-index:10001;">
-        <div class="nick-modal" style="max-width:360px;">
-            <h3>Authenticate</h3>
-            <p style="color:rgba(255,255,255,0.5);font-size:13px;margin-bottom:16px;">Enter your server token to continue.</p>
-            <div id="authError" style="display:none;color:#ff4444;font-size:12px;margin-bottom:8px;"></div>
-            <input type="password" id="authTokenInput" placeholder="Bearer token..." autocomplete="off" style="width:100%;padding:10px 12px;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.12);border-radius:8px;color:#fff;font-size:14px;margin-bottom:12px;" onkeydown="if(event.key==='Enter')doAuth()">
-            <button class="btn" style="width:100%;" onclick="doAuth()">Authenticate</button>
-        </div>
-    </div>
-
     <!-- Nickname Modal -->
     <div class="nick-overlay" id="nickOverlay">
         <div class="nick-modal">
@@ -672,7 +661,8 @@ enum WebChatHTML {
     </div>
 
     <script>
-    let TOKEN = localStorage.getItem('torbo_chat_token') || '';
+    // Token auto-injected by server — no manual login required.
+    let TOKEN = '/*%%TORBO_SESSION_TOKEN%%*/' || localStorage.getItem('torbo_chat_token') || '';
     const BASE = window.location.origin;
     const isLocal = (location.hostname === 'localhost' || location.hostname === '127.0.0.1' || location.hostname === '::1');
     const messagesEl = document.getElementById('messages');
@@ -732,36 +722,7 @@ enum WebChatHTML {
     }
     initTheme();
 
-    // ─── Auth ───
-    function showAuth() {
-        document.getElementById('authOverlay').classList.add('open');
-        document.getElementById('authTokenInput').focus();
-    }
-    function hideAuth() {
-        document.getElementById('authOverlay').classList.remove('open');
-    }
-    async function doAuth() {
-        const input = document.getElementById('authTokenInput');
-        const errEl = document.getElementById('authError');
-        const t = input.value.trim();
-        if (!t) { errEl.textContent = 'Token is required.'; errEl.style.display = 'block'; return; }
-        errEl.style.display = 'none';
-        try {
-            const res = await fetch(BASE + '/health', { headers: { 'Authorization': 'Bearer ' + t } });
-            if (res.ok) {
-                TOKEN = t;
-                localStorage.setItem('torbo_chat_token', t);
-                hideAuth();
-                initApp();
-            } else {
-                errEl.textContent = 'Invalid token. Server returned ' + res.status + '.';
-                errEl.style.display = 'block';
-            }
-        } catch(e) {
-            errEl.textContent = 'Connection failed: ' + e.message;
-            errEl.style.display = 'block';
-        }
-    }
+    // Auth is handled by server-injected token — no manual login needed.
 
     // ─── Token / Share Link ───
     function toggleTokenBar() {
@@ -1245,17 +1206,11 @@ enum WebChatHTML {
     });
 
     async function loadModels() {
-        if (!TOKEN && !isLocal) {
-            showAuth();
-            return;
-        }
         try {
             const hdrs = TOKEN ? { 'Authorization': 'Bearer ' + TOKEN } : {};
             const res = await fetch(BASE + '/v1/models', { headers: hdrs });
-            if (res.status === 401 && !isLocal) {
-                TOKEN = '';
-                localStorage.removeItem('torbo_chat_token');
-                showAuth();
+            if (!res.ok) {
+                console.warn('Failed to load models:', res.status);
                 return;
             }
             const data = await res.json();

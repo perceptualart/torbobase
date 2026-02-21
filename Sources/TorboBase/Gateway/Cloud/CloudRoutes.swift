@@ -285,7 +285,7 @@ enum CloudRoutes {
              "features": "Cloud-hosted. All 4 agents, Piper + ElevenLabs voices, tools, HomeKit, Shortcuts.",
              "trial_days": 30],
             ["tier": "torbo_max", "name": "Torbo Max", "price": 10,
-             "features": "Everything in Torbo + admin panel (Arkhe), priority routing, higher rate limits, advanced tools.",
+             "features": "Everything in Torbo + admin panel, priority routing, higher rate limits, advanced tools.",
              "trial_days": 30],
         ] as [[String: Any]]
 

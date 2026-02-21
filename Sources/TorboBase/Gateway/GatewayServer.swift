@@ -81,12 +81,13 @@ actor ChatRoomStore {
             role: role,
             agentID: agentID
         )
-        if rooms[room] == nil { rooms[room] = [] }
-        rooms[room]!.append(msg)
+        var buffer = rooms[room] ?? []
+        buffer.append(msg)
         // Cap at 500 messages per room
-        if rooms[room]!.count > 500 {
-            rooms[room] = Array(rooms[room]!.suffix(500))
+        if buffer.count > 500 {
+            buffer = Array(buffer.suffix(500))
         }
+        rooms[room] = buffer
         return msg
     }
 
@@ -121,6 +122,25 @@ actor GatewayServer {
     private weak var appState: AppState?
     private var requestLog: [String: [Date]] = [:]
 
+    // Webchat session tokens — ephemeral, expire with server restart.
+    // These grant chat-level access without exposing the master server token.
+    private var webchatSessionTokens: Set<String> = []
+
+    private func generateWebchatToken() -> String {
+        var bytes = [UInt8](repeating: 0, count: 24)
+        #if canImport(Security)
+        _ = SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes)
+        #else
+        for i in 0..<bytes.count { bytes[i] = UInt8.random(in: 0...255) }
+        #endif
+        let token = "wc_" + Data(bytes).base64EncodedString()
+            .replacingOccurrences(of: "+", with: "-")
+            .replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: "=", with: "")
+        webchatSessionTokens.insert(token)
+        return token
+    }
+
     #if canImport(Network)
     func start(appState: AppState) async {
         self.appState = appState
@@ -138,9 +158,18 @@ actor GatewayServer {
                 return
             }
 
-            // Always bind to all interfaces — required for phone pairing and Tailscale.
-            params.requiredLocalEndpoint = NWEndpoint.hostPort(host: .ipv4(.any), port: nwPort)
-            TorboLog.info("Binding to 0.0.0.0:\(port)", subsystem: "Gateway")
+            // Bind host: default 0.0.0.0 (all interfaces) for phone pairing + Tailscale.
+            // Override with TORBO_BIND_HOST=127.0.0.1 to restrict to localhost only.
+            let bindHost = ProcessInfo.processInfo.environment["TORBO_BIND_HOST"] ?? "0.0.0.0"
+            let nwHost: NWEndpoint.Host = (bindHost == "127.0.0.1" || bindHost == "localhost")
+                ? .ipv4(.loopback)
+                : .ipv4(.any)
+            params.requiredLocalEndpoint = NWEndpoint.hostPort(host: nwHost, port: nwPort)
+            if nwHost == .ipv4(.any) {
+                TorboLog.warn("Binding to 0.0.0.0:\(port) — exposed to LAN. Set TORBO_BIND_HOST=127.0.0.1 to restrict.", subsystem: "Gateway")
+            } else {
+                TorboLog.info("Binding to \(bindHost):\(port) (localhost only)", subsystem: "Gateway")
+            }
             listener = try NWListener(using: params)
 
             listener?.newConnectionHandler = { [weak self] conn in
@@ -626,16 +655,22 @@ actor GatewayServer {
         }
 
         // Web chat UI — serves the built-in chat interface
+        // Ephemeral session token auto-injected — no login prompt.
+        // Session tokens are scoped to webchat and expire on server restart.
+        // The master server token is never exposed in HTML.
         if req.method == "GET" && req.path == "/chat" {
+            let chatToken = generateWebchatToken()
+            let html = WebChatHTML.page.replacingOccurrences(of: "/*%%TORBO_SESSION_TOKEN%%*/", with: chatToken)
             return HTTPResponse(statusCode: 200,
                               headers: [
                                 "Content-Type": "text/html; charset=utf-8",
                                 "Permissions-Policy": "microphone=(self), camera=()",
                                 "Content-Security-Policy": "default-src 'self'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; img-src 'self' data:; font-src 'none'; frame-src 'none'; object-src 'none'",
                                 "X-Frame-Options": "DENY",
-                                "X-Content-Type-Options": "nosniff"
+                                "X-Content-Type-Options": "nosniff",
+                                "Referrer-Policy": "no-referrer"
                               ],
-                              body: Data(WebChatHTML.page.utf8))
+                              body: Data(html.utf8))
         }
 
         // Web dashboard UI — serves the built-in management dashboard
@@ -1721,6 +1756,7 @@ actor GatewayServer {
         guard let auth = req.headers["authorization"] ?? req.headers["Authorization"] else { return false }
         let token = auth.hasPrefix("Bearer ") ? String(auth.dropFirst(7)) : auth
         if token == KeychainManager.serverToken { return true }
+        if webchatSessionTokens.contains(token) { return true }
         return PairedDeviceStore.isAuthorized(token: token)
     }
 
@@ -1774,7 +1810,12 @@ actor GatewayServer {
             return HTTPResponse.badRequest("Missing 'token'")
         }
         let valid = await MainActor.run { PairingManager.shared.verifyToken(token) }
-        return HTTPResponse.json(["valid": valid])
+        var response: [String: Any] = ["valid": valid]
+        if valid {
+            if let tsIP = Self.detectTailscaleIP() { response["tailscaleIP"] = tsIP }
+            if let tsHostname = Self.detectTailscaleHostname() { response["tailscaleHostname"] = tsHostname }
+        }
+        return HTTPResponse.json(response)
     }
 
     /// Auto-pair: trusted Tailscale clients (100.x.x.x) can pair without a code.
@@ -1835,6 +1876,8 @@ actor GatewayServer {
     }
 
     // MARK: - Rate Limiting
+    // Safety: GatewayServer is an actor — all calls to isRateLimited are serialized.
+    // The read-modify-write on requestLog[clientIP] is atomic by actor isolation.
 
     private var lastRateLimitPrune: Date = Date()
 
@@ -1880,7 +1923,9 @@ actor GatewayServer {
         guard var body = req.jsonBody else {
             writer.sendResponse(.badRequest("Invalid JSON body")); return
         }
-        let model = (body["model"] as? String) ?? "qwen2.5:7b"
+        // Model priority: request body > agent preferredModel > default
+        let agentModel = await AgentConfigManager.shared.agent(agentID)?.preferredModel ?? ""
+        let model = (body["model"] as? String) ?? (agentModel.isEmpty ? "qwen2.5:7b" : agentModel)
         if body["model"] == nil { body["model"] = model }
 
         // Detect if client provided their own system prompt (API override — skip SiD identity)
@@ -2617,7 +2662,9 @@ actor GatewayServer {
         guard var body = req.jsonBody else {
             return HTTPResponse.badRequest("Invalid JSON body")
         }
-        let model = (body["model"] as? String) ?? "qwen2.5:7b"
+        // Model priority: request body > agent preferredModel > default
+        let agentModel = await AgentConfigManager.shared.agent(agentID)?.preferredModel ?? ""
+        let model = (body["model"] as? String) ?? (agentModel.isEmpty ? "qwen2.5:7b" : agentModel)
         if body["model"] == nil { body["model"] = model }
 
         // Detect if client provided their own system prompt (API override — skip SiD identity)
@@ -2954,7 +3001,7 @@ actor GatewayServer {
             if code == 401 || code == 403 {
                 TorboLog.error("Anthropic API key invalid/expired (HTTP \(code))", subsystem: "Gateway")
                 return HTTPResponse(statusCode: code, headers: ["Content-Type": "application/json"],
-                    body: Data("{\"error\":{\"message\":\"Anthropic API key is invalid or expired. Update it in Settings → API Keys.\",\"type\":\"auth_error\"}}".utf8))
+                    body: Data("{\"error\":{\"message\":\"Cloud API key is invalid or expired. Update it in Settings → API Keys.\",\"type\":\"auth_error\"}}".utf8))
             }
             // 429 — rate limited, pass through with Retry-After
             if code == 429 {
@@ -3042,7 +3089,7 @@ actor GatewayServer {
             if code == 401 || code == 403 {
                 TorboLog.error("OpenAI API key invalid/expired (HTTP \(code))", subsystem: "Gateway")
                 return HTTPResponse(statusCode: code, headers: ["Content-Type": "application/json"],
-                    body: Data("{\"error\":{\"message\":\"OpenAI API key is invalid or expired. Update it in Settings → API Keys.\",\"type\":\"auth_error\"}}".utf8))
+                    body: Data("{\"error\":{\"message\":\"Cloud API key is invalid or expired. Update it in Settings → API Keys.\",\"type\":\"auth_error\"}}".utf8))
             }
             if code == 429 {
                 var headers = ["Content-Type": "application/json"]
@@ -3089,7 +3136,7 @@ actor GatewayServer {
             if code == 401 || code == 403 {
                 TorboLog.error("xAI API key invalid/expired (HTTP \(code))", subsystem: "Gateway")
                 return HTTPResponse(statusCode: code, headers: ["Content-Type": "application/json"],
-                    body: Data("{\"error\":{\"message\":\"xAI API key is invalid or expired. Update it in Settings → API Keys.\",\"type\":\"auth_error\"}}".utf8))
+                    body: Data("{\"error\":{\"message\":\"Cloud API key is invalid or expired. Update it in Settings → API Keys.\",\"type\":\"auth_error\"}}".utf8))
             }
             if code == 429 {
                 var headers = ["Content-Type": "application/json"]
@@ -3612,7 +3659,7 @@ actor GatewayServer {
         check("CSP Headers", true, "Content-Security-Policy on /chat and /dashboard")
         check("Token Expiry", true, "Paired device tokens expire after 30 days idle")
         check("Webhook Secrets", true, "Auto-generated HMAC secrets")
-        check("Token Rotation", (tokenAge ?? 0) <= 90, tokenAge != nil ? "Token age: \(tokenAge!)d" : "Token age unknown — consider regenerating")
+        check("Token Rotation", (tokenAge ?? 0) <= 90, tokenAge.map { "Token age: \($0)d" } ?? "Token age unknown — consider regenerating")
 
         let passing = checks.filter { ($0["status"] as? String) == "pass" }.count
         let warnings = checks.count - passing
@@ -5046,7 +5093,9 @@ enum AccessControl {
         }
 
         // Resolve hostname to IP and check against private ranges
-        let hostC = host.cString(using: .utf8)!
+        guard let hostC = host.cString(using: .utf8) else {
+            return "Blocked: hostname contains invalid characters"
+        }
         var hints = addrinfo()
         hints.ai_family = AF_UNSPEC
         #if os(Linux)

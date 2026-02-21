@@ -10,10 +10,35 @@ struct OrbRenderer: View {
     let audioLevels: [Float]
     let color: Color
     let isActive: Bool
+    var baseHue: Double? = nil
+    var baseSaturation: Double = 0.85
 
     @State private var smoothLevel: Float = 0.15
     @State private var targetLevel: Float = 0.15
     @State private var appearScale: CGFloat = 0.001
+
+    private func wrapHue(_ h: Double) -> Double { h - floor(h) }
+
+    private var palette: [(hue: Double, sat: Double, bri: Double)] {
+        if let bh = baseHue {
+            let s = baseSaturation
+            return [
+                (wrapHue(bh - 0.10), s * 0.9,  0.9),
+                (wrapHue(bh - 0.05), s,         1.0),
+                (wrapHue(bh + 0.03), s,         1.0),
+                (wrapHue(bh + 0.08), s,         1.0),
+                (wrapHue(bh - 0.12), s * 0.95,  1.0),
+                (wrapHue(bh + 0.15), s * 0.9,   1.0),
+                (wrapHue(bh),        s * 0.8,   1.0),
+            ]
+        } else {
+            return [
+                (0.85, 0.8,  0.9), (0.0, 0.85, 1.0), (0.08, 0.9, 1.0),
+                (0.12, 0.9,  1.0), (0.9, 0.85, 1.0), (0.75, 0.8, 1.0),
+                (0.92, 0.7,  1.0),
+            ]
+        }
+    }
 
     var body: some View {
         TimelineView(.animation(minimumInterval: 1/30)) { timeline in
@@ -34,52 +59,53 @@ struct OrbRenderer: View {
                 let audioScale: CGFloat = restingScale + audioBoost
                 let radius = baseRadius * min(audioScale, 1.1)
                 let intensity = Double(max(0, level - 0.1)) * 1.5
+                let p = palette
 
-                // Layer 1: Deep outer glow — magenta
+                // Layer 1: Deep outer glow
                 drawAuroraRibbon(context: context, center: center, radius: radius * 1.15,
-                                color: Color(hue: 0.85, saturation: 0.8, brightness: 0.9),
+                                color: Color(hue: p[0].hue, saturation: p[0].sat, brightness: p[0].bri),
                                 phase: t * 0.08, wavePhase: t * 0.25,
                                 scaleX: 1.1, scaleY: 0.45, rotation: t * 0.015,
                                 intensity: intensity, blur: 18, opacity: 0.12)
 
-                // Layer 2: Red ribbon
+                // Layer 2
                 drawAuroraRibbon(context: context, center: center, radius: radius,
-                                color: Color(hue: 0.0, saturation: 0.85, brightness: 1.0),
+                                color: Color(hue: p[1].hue, saturation: p[1].sat, brightness: p[1].bri),
                                 phase: t * 0.12, wavePhase: t * 0.35,
                                 scaleX: 1.0, scaleY: 0.5, rotation: t * 0.02,
                                 intensity: intensity, blur: 12, opacity: 0.18)
 
-                // Layer 3: Orange ribbon
+                // Layer 3
                 drawAuroraRibbon(context: context, center: center, radius: radius * 0.95,
-                                color: Color(hue: 0.08, saturation: 0.9, brightness: 1.0),
+                                color: Color(hue: p[2].hue, saturation: p[2].sat, brightness: p[2].bri),
                                 phase: t * 0.1 + 1.5, wavePhase: t * 0.3 + 2,
                                 scaleX: 0.85, scaleY: 0.65, rotation: t * 0.018 + .pi * 0.3,
                                 intensity: intensity, blur: 10, opacity: 0.2)
 
-                // Layer 4: Cyan ribbon
+                // Layer 4
                 drawAuroraRibbon(context: context, center: center, radius: radius * 0.9,
-                                color: Color(hue: 0.52, saturation: 0.9, brightness: 1.0),
+                                color: Color(hue: p[3].hue, saturation: p[3].sat, brightness: p[3].bri),
                                 phase: t * 0.14 + 3, wavePhase: t * 0.4 + 1,
                                 scaleX: 0.75, scaleY: 0.8, rotation: t * 0.022 + .pi * 0.7,
                                 intensity: intensity, blur: 8, opacity: 0.22)
 
-                // Layer 5: Blue ribbon
+                // Layer 5
                 drawAuroraRibbon(context: context, center: center, radius: radius * 0.85,
-                                color: Color(hue: 0.6, saturation: 0.85, brightness: 1.0),
+                                color: Color(hue: p[4].hue, saturation: p[4].sat, brightness: p[4].bri),
                                 phase: t * 0.09 + 2, wavePhase: t * 0.28 + 3,
                                 scaleX: 0.7, scaleY: 0.75, rotation: t * 0.025 + .pi * 1.1,
                                 intensity: intensity, blur: 6, opacity: 0.25)
 
-                // Layer 6: Purple core ribbon
+                // Layer 6
                 drawAuroraRibbon(context: context, center: center, radius: radius * 0.75,
-                                color: Color(hue: 0.75, saturation: 0.8, brightness: 1.0),
+                                color: Color(hue: p[5].hue, saturation: p[5].sat, brightness: p[5].bri),
                                 phase: t * 0.16 + 4, wavePhase: t * 0.45 + 2,
                                 scaleX: 0.6, scaleY: 0.7, rotation: t * 0.028 + .pi * 0.5,
                                 intensity: intensity, blur: 4, opacity: 0.28)
 
-                // Layer 7: Pink inner glow
+                // Layer 7: Inner glow
                 drawAuroraRibbon(context: context, center: center, radius: radius * 0.6,
-                                color: Color(hue: 0.92, saturation: 0.7, brightness: 1.0),
+                                color: Color(hue: p[6].hue, saturation: p[6].sat, brightness: p[6].bri),
                                 phase: t * 0.11 + 1, wavePhase: t * 0.32 + 4,
                                 scaleX: 0.55, scaleY: 0.6, rotation: t * 0.03 + .pi * 1.4,
                                 intensity: intensity, blur: 3, opacity: 0.3)

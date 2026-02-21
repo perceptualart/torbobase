@@ -43,21 +43,25 @@ actor ShutdownCoordinator {
         TorboLog.info("Stopping Memory Army...", subsystem: "Shutdown")
         await MemoryArmy.shared.stop()
 
-        // 2. Stop MCP servers
+        // 2. Stop Cron Scheduler
+        TorboLog.info("Stopping Cron Scheduler...", subsystem: "Shutdown")
+        await CronScheduler.shared.shutdown()
+
+        // 3. Stop MCP servers
         TorboLog.info("Stopping MCP servers...", subsystem: "Shutdown")
         await MCPManager.shared.stopAll()
 
-        // 3. Execute registered callbacks (bridges, custom cleanup)
+        // 4. Execute registered callbacks (bridges, custom cleanup)
         for (i, callback) in shutdownCallbacks.enumerated() {
             TorboLog.info("Running cleanup callback \(i + 1)/\(shutdownCallbacks.count)...", subsystem: "Shutdown")
             await callback()
         }
 
-        // 4. Flush pending token tracking records (L-13)
+        // 5. Flush pending token tracking records (L-13)
         TorboLog.info("Flushing token tracker...", subsystem: "Shutdown")
         await TokenTracker.shared.flush()
 
-        // 5. Final: flush any pending memory writes
+        // 6. Final: flush any pending memory writes
         TorboLog.info("Flushing memory index...", subsystem: "Shutdown")
         // Force a final access tracking write if needed
         let memCount = await MemoryIndex.shared.count

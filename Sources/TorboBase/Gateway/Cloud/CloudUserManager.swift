@@ -118,7 +118,10 @@ actor CloudUserManager {
         await svc.memoryRouter.initializeForUser()
 
         userServices[ctx.userID] = svc
-        let maskedEmail = ctx.email.contains("@") ? String(ctx.email.prefix(2)) + "***" + ctx.email[ctx.email.firstIndex(of: "@")!...] : "***"
+        let maskedEmail: String = {
+            guard let at = ctx.email.firstIndex(of: "@") else { return "***" }
+            return String(ctx.email.prefix(2)) + "***" + ctx.email[at...]
+        }()
         TorboLog.info("Created services for user \(ctx.userID) (\(maskedEmail))", subsystem: "CloudUsers")
 
         // Start eviction timer if not running

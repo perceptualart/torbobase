@@ -68,6 +68,9 @@ enum PlatformPaths {
     /// Scheduled events persistence file.
     static var schedulesFile: String { dataDir + "/schedules.json" }
 
+    /// Cron scheduled tasks persistence file.
+    static var cronTasksFile: String { dataDir + "/scheduled_tasks.json" }
+
     /// Webhook definitions file.
     static var webhooksFile: String { dataDir + "/webhooks.json" }
 

@@ -87,14 +87,21 @@ actor WhatsAppBridge {
 
     // MARK: - Webhook Verification (GET)
 
-    /// Handle WhatsApp webhook verification challenge
+    /// Handle WhatsApp webhook verification challenge.
+    /// Uses constant-time comparison to prevent timing side-channel attacks on the verify token.
     func handleVerification(mode: String?, token: String?, challenge: String?, storedVerifyToken: String) -> (valid: Bool, challenge: String?) {
         guard mode == "subscribe",
               let token = token,
-              let challenge = challenge,
-              token == storedVerifyToken else {
+              let challenge = challenge else {
             return (false, nil)
         }
+        // Constant-time comparison — prevents timing attacks that could leak token bytes
+        let tokenBytes = Array(token.utf8)
+        let storedBytes = Array(storedVerifyToken.utf8)
+        guard tokenBytes.count == storedBytes.count else { return (false, nil) }
+        var diff: UInt8 = 0
+        for i in 0..<tokenBytes.count { diff |= tokenBytes[i] ^ storedBytes[i] }
+        guard diff == 0 else { return (false, nil) }
         return (true, challenge)
     }
 

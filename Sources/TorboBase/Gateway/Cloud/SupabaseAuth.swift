@@ -111,7 +111,7 @@ enum PlanTier: String, Codable, Sendable {
         }
     }
 
-    /// Admin panel access in Arkhe: dashboard, agent management, security,
+    /// Admin panel access: dashboard, agent management, security,
     /// memory viewer/editor, system prompt editor, token budgets, activity monitor, kill switches.
     /// Self-hosted users always get admin (checked at iOS layer by detecting local Base).
     var hasAdminPanel: Bool {

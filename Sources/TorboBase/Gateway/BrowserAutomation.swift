@@ -52,8 +52,17 @@ actor BrowserAutomation {
 
     // MARK: - Execute Browser Actions
 
-    /// Execute a browser action by generating and running a Playwright script
+    /// Execute a browser action by generating and running a Playwright script.
+    /// All URLs are validated against SSRF blocklist before execution.
     func execute(action: BrowserAction, params: [String: Any]) async -> BrowserResult {
+        // SSRF protection — block private IPs, file://, metadata endpoints
+        if let url = params["url"] as? String, url != "about:blank" {
+            if let ssrfError = AccessControl.validateURLForSSRF(url) {
+                TorboLog.warn("Browser SSRF blocked: \(ssrfError)", subsystem: "Browser")
+                return BrowserResult(success: false, output: "", error: ssrfError, files: [], executionTime: 0)
+            }
+        }
+
         let startTime = Date()
         sessionCount += 1
         let sessionID = "\(sessionCount)_\(UUID().uuidString.prefix(8))"
