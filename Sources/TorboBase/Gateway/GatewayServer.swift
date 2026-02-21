@@ -262,6 +262,9 @@ actor GatewayServer {
             // Initialize Token Tracker
             Task { await TokenTracker.shared.initialize() }
 
+            // Start Morning Briefing Scheduler
+            Task { await MorningBriefing.shared.initialize() }
+
             // Start Calendar Manager (requests access on first use)
             // CalendarManager.shared is lazy — initialized when first called
 
@@ -1709,6 +1712,13 @@ actor GatewayServer {
                     return HTTPResponse(statusCode: 200, headers: ["Content-Type": mime], body: data)
                 }
                 return HTTPResponse.notFound()
+            }
+
+            // LifeOS Morning Briefing routes
+            if req.path.hasPrefix("/lifeos/briefing") {
+                if let response = await handleBriefingRoute(req, clientIP: clientIP) {
+                    return response
+                }
             }
 
             // Cron Scheduler routes
