@@ -57,6 +57,9 @@ enum PlatformPaths {
     /// Documents (RAG) directory.
     static var documentsDir: String { dataDir + "/documents" }
 
+    /// Evening briefings storage directory.
+    static var briefingsDir: String { dataDir + "/briefings" }
+
     // MARK: - Files
 
     /// Task queue persistence file.
@@ -85,7 +88,7 @@ enum PlatformPaths {
     /// Ensure all required directories exist.
     static func ensureDirectories() {
         let fm = FileManager.default
-        let dirs = [dataDir, configDir, agentsDir, skillsDir, memoryDir, documentsDir]
+        let dirs = [dataDir, configDir, agentsDir, skillsDir, memoryDir, documentsDir, briefingsDir]
         for dir in dirs {
             try? fm.createDirectory(atPath: dir, withIntermediateDirectories: true)
         }
