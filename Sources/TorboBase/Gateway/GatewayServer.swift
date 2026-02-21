@@ -5174,6 +5174,12 @@ actor GatewayServer {
         return "\(provider) returned \(code)\(preview.isEmpty ? "" : ": \(preview)")"
     }
 
+    // MARK: - Debate Routes (stub)
+
+    private func handleDebateRoute(_ req: HTTPRequest, clientIP: String, currentLevel: AccessLevel, agentID: String) async -> HTTPResponse {
+        return HTTPResponse.json(["error": "Debate API not yet implemented"] as [String: Any])
+    }
+
 }
 
 // MARK: - Access Control
@@ -5477,4 +5483,5 @@ struct HTTPResponse {
         if let origin = origin { h["Access-Control-Allow-Origin"] = origin }
         return HTTPResponse(statusCode: 204, headers: h, body: Data())
     }
+
 }
