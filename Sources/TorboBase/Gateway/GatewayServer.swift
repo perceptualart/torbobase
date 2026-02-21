@@ -956,7 +956,7 @@ actor GatewayServer {
             }
         case ("GET", "/v1/messages"):
             return await guardedRoute(level: .chatOnly, current: currentLevel, clientIP: clientIP, req: req) {
-                await self.listMessages()
+                await self.listMessages(req: req)
             }
 
         // --- Chat Rooms (multi-user) ---
@@ -3363,12 +3363,17 @@ actor GatewayServer {
         return HTTPResponse.json(["sessions": data])
     }
 
-    private func listMessages() async -> HTTPResponse {
+    private func listMessages(req: HTTPRequest) async -> HTTPResponse {
+        let limit = Int(req.queryParam("limit") ?? "100") ?? 100
         let s2 = appState
         let messages = await MainActor.run { s2?.recentMessages ?? [] }
-        let data = messages.suffix(100).map { m -> [String: Any] in
-            ["id": m.id.uuidString, "role": m.role, "content": m.content,
-             "model": m.model, "timestamp": ISO8601DateFormatter().string(from: m.timestamp)]
+        let data = messages.suffix(min(limit, 200)).map { m -> [String: Any] in
+            var dict: [String: Any] = [
+                "id": m.id.uuidString, "role": m.role, "content": m.content,
+                "model": m.model, "timestamp": ISO8601DateFormatter().string(from: m.timestamp)
+            ]
+            if let agentID = m.agentID { dict["agentID"] = agentID }
+            return dict
         }
         return HTTPResponse.json(["messages": data])
     }
