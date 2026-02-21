@@ -285,9 +285,6 @@ actor GatewayServer {
                 await CommitmentsFollowUp.shared.start()
             }
 
-            // Start Morning Briefing Scheduler
-            Task { await MorningBriefing.shared.initialize() }
-
             // Start Calendar Manager (requests access on first use)
             // CalendarManager.shared is lazy — initialized when first called
 
