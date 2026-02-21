@@ -38,6 +38,7 @@ actor HomeKitSOCReceiver {
     }
 
     func handleStateUpdate(_ update: HomeKitStateUpdate) {
+        let previousState = latestState
         latestState = update
         let now = Date()
         for device in update.devices {
@@ -45,6 +46,30 @@ actor HomeKitSOCReceiver {
             if deviceLastSeen[device.id] == nil { deviceLastSeen[device.id] = now }
         }
         TorboLog.debug("HomeKit state: \(update.devices.count) devices, \(update.activeScenes.count) scenes", subsystem: "SOC")
+
+        // Publish state update event
+        let deviceCount = update.devices.count
+        let sceneCount = update.activeScenes.count
+        Task {
+            await EventBus.shared.publish("ambient.homekit.state_update",
+                payload: ["device_count": "\(deviceCount)", "scene_count": "\(sceneCount)"],
+                source: "HomeKit")
+        }
+
+        // Detect anomalies: devices that went offline since last update
+        if let prev = previousState {
+            let prevReachable = Set(prev.devices.filter { $0.reachable }.map { $0.id })
+            let nowUnreachable = update.devices.filter { !$0.reachable && prevReachable.contains($0.id) }
+            for device in nowUnreachable {
+                let devID = device.id
+                let devName = device.name
+                Task {
+                    await EventBus.shared.publish("ambient.homekit.anomaly",
+                        payload: ["device_id": devID, "device_name": devName, "anomaly": "device_went_offline"],
+                        source: "HomeKit")
+                }
+            }
+        }
     }
 
     func offlineDuration(deviceID: String) -> TimeInterval? {

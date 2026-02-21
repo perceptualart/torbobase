@@ -19,6 +19,17 @@ actor AmbientAlertManager {
         if alerts.count > maxAlerts { alerts = Array(alerts.prefix(maxAlerts)) }
         saveAlerts()
         TorboLog.info("[\(alert.type)] \(alert.message)", subsystem: "Ambient")
+
+        // Publish to event bus
+        let alertType = alert.type
+        let alertID = alert.id
+        let alertMessage = alert.message
+        let alertPriority = alert.priority
+        Task {
+            await EventBus.shared.publish("ambient.\(alertType)",
+                payload: ["alert_id": alertID, "message": alertMessage, "priority": "\(alertPriority)"],
+                source: "AmbientAlertManager")
+        }
     }
 
     func isDuplicate(type: String, deviceID: String?, cooldownMinutes: Int) -> Bool {
@@ -41,6 +52,13 @@ actor AmbientAlertManager {
         guard let idx = alerts.firstIndex(where: { $0.id == id }) else { return false }
         alerts[idx].dismissed = true
         saveAlerts()
+
+        let alertType = alerts[idx].type
+        Task {
+            await EventBus.shared.publish("ambient.\(alertType).dismissed",
+                payload: ["alert_id": id],
+                source: "AmbientAlertManager")
+        }
         return true
     }
 

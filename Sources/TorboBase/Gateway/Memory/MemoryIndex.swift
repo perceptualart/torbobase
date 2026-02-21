@@ -174,6 +174,17 @@ actor MemoryIndex {
                 entities: [], lastAccessedAt: Date(), accessCount: 0
             ))
             bm25.addEntry(id: id, text: text)
+
+            // Publish to event bus
+            let memID = id
+            let memCategory = category
+            let memSource = source
+            let preview = String(text.prefix(80))
+            Task {
+                await EventBus.shared.publish("system.memory.written",
+                    payload: ["memory_id": "\(memID)", "category": memCategory, "source": memSource, "text_preview": preview],
+                    source: "LoA")
+            }
         }
 
         return id

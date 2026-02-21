@@ -257,6 +257,16 @@ actor LifeOSPredictor {
         saveState()
 
         TorboLog.info("Briefing ready for '\(event.title)' — \(attendees.count) attendee(s)", subsystem: "LifeOS")
+
+        // Publish to event bus
+        let briefingID = briefing.id
+        let eventTitle = event.title
+        let attendeeCount = attendees.count
+        Task {
+            await EventBus.shared.publish("lifeos.briefing.ready",
+                payload: ["briefing_id": briefingID, "event_title": eventTitle, "attendee_count": "\(attendeeCount)"],
+                source: "LifeOS")
+        }
     }
 
     /// Extract attendee names from event title, notes, and location
@@ -522,6 +532,16 @@ actor LifeOSPredictor {
                             createdAt: Date()
                         )
                         deadlines[deadline.id] = deadline
+
+                        // Publish deadline detection event
+                        let dlID = deadline.id
+                        let dlUrgency = urgency
+                        let dlSender = sender
+                        Task {
+                            await EventBus.shared.publish("lifeos.prediction.made",
+                                payload: ["deadline_id": dlID, "urgency": dlUrgency, "source": "email", "sender": dlSender],
+                                source: "LifeOS")
+                        }
 
                         // Create alert for urgent deadlines
                         if urgency == "asap" || urgency == "this_week" {
