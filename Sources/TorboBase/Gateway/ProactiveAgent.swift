@@ -60,6 +60,13 @@ actor ProactiveAgent {
                     let agentName = await AgentConfigManager.shared.agent(agentID)?.name ?? agentID
                     TorboLog.info("\(agentName) starting task: '\(task.title)'", subsystem: "Agent")
 
+                    // Publish agent started event
+                    let taskID = task.id
+                    let taskTitle = task.title
+                    await EventBus.shared.publish("system.agent.started",
+                        payload: ["agent_id": agentID, "agent_name": agentName, "task_id": taskID, "task_title": taskTitle],
+                        source: "ProactiveAgent")
+
                     // Dispatch to executor — runs in its own Swift Task
                     await executor.execute(taskID: task.id) { [self] in
                         await self.executeTask(task, agentID: agentID)
@@ -100,9 +107,17 @@ actor ProactiveAgent {
             await TaskQueue.shared.completeTask(id: task.id, result: result)
             TorboLog.info("\(agentID) completed '\(task.title)' in \(elapsed)s", subsystem: "Agent")
 
+            await EventBus.shared.publish("system.agent.completed",
+                payload: ["agent_id": agentID, "task_id": task.id, "task_title": task.title, "elapsed": "\(elapsed)"],
+                source: "ProactiveAgent")
+
         } catch {
             await TaskQueue.shared.failTask(id: task.id, error: error.localizedDescription)
             TorboLog.error("\(agentID) failed '\(task.title)': \(error.localizedDescription)", subsystem: "Agent")
+
+            await EventBus.shared.publish("system.agent.error",
+                payload: ["agent_id": agentID, "task_id": task.id, "task_title": task.title, "error": error.localizedDescription],
+                source: "ProactiveAgent")
         }
         // Slot is auto-freed by ParallelExecutor when this closure returns
     }

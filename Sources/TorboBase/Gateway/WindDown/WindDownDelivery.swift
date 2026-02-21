@@ -35,7 +35,7 @@ struct EveningBriefingMessage: Codable {
 actor WindDownDelivery {
     static let shared = WindDownDelivery()
 
-    private var briefingsDir: String { PlatformPaths.briefingsDir }
+    private var briefingsDir: String { PlatformPaths.dataDir + "/briefings" }
 
     /// Deliver the evening briefing: store locally + push to paired iOS devices.
     func deliver(briefing: String, review: DayReview, tomorrowPrepQueued: Bool) async {

@@ -177,17 +177,12 @@ actor DayReviewAssembler {
     // MARK: - Alert Stats
 
     private func assembleAlertStats(since: Date) async -> [String] {
-        // Use AmbientMonitor.getAlerts() which returns [[String: Any]] —
-        // avoids AmbientAlert type ambiguity between HomeKitTypes and AmbientMonitor.
+        // Pull alerts from the AmbientAlertManager
         var messages: [String] = []
-        let sinceEpoch = since.timeIntervalSince1970
-        let monitorAlerts = await AmbientMonitor.shared.getAlerts()
-        for dict in monitorAlerts {
-            guard let message = dict["message"] as? String else { continue }
-            if let timestamp = dict["timestamp"] as? String,
-               let date = ISO8601DateFormatter().date(from: timestamp),
-               date.timeIntervalSince1970 >= sinceEpoch {
-                messages.append(message)
+        let alerts = await AmbientAlertManager.shared.getAlerts(limit: 200)
+        for alert in alerts {
+            if alert.timestamp >= since.timeIntervalSince1970 {
+                messages.append(alert.message)
             }
         }
         return messages

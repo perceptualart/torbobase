@@ -259,6 +259,14 @@ actor GatewayServer {
                 await CronScheduler.shared.initialize()
             }
 
+            // Start Event Bus
+            Task {
+                await EventBus.shared.initialize()
+                await EventBus.shared.publish("system.gateway.started",
+                    payload: ["port": "\(port)"],
+                    source: "Gateway")
+            }
+
             // Initialize Token Tracker
             Task { await TokenTracker.shared.initialize() }
 
@@ -314,6 +322,7 @@ actor GatewayServer {
             PairingManager.shared.stopAdvertising()
         }
         Task { await TelegramBridge.shared.notify("Gateway stopped") }
+        Task { await EventBus.shared.publish("system.gateway.stopped", source: "Gateway") }
         TorboLog.info("Stopped", subsystem: "Gateway")
     }
 
@@ -844,6 +853,11 @@ actor GatewayServer {
         // MARK: - Dashboard API
         if req.path.hasPrefix("/v1/dashboard") || req.path.hasPrefix("/v1/config") || req.path.hasPrefix("/v1/audit") {
             return await handleDashboardRoute(req, clientIP: clientIP)
+        }
+
+        // MARK: - Event Bus API
+        if req.path.hasPrefix("/v1/events") || req.path == "/events/stream" || req.path == "/events/log" {
+            return await handleEventBusRoute(req, clientIP: clientIP, currentLevel: currentLevel, writer: writer, corsOrigin: corsOrigin)
         }
 
         // MARK: - Evening Wind-Down
@@ -3923,6 +3937,106 @@ actor GatewayServer {
                     "limit": limit,
                     "offset": offset
                 ] as [String: Any])
+            }
+        }
+
+        return HTTPResponse.notFound()
+    }
+
+    // MARK: - Event Bus Routes
+
+    private func handleEventBusRoute(
+        _ req: HTTPRequest, clientIP: String, currentLevel: AccessLevel,
+        writer: ResponseWriter?, corsOrigin: String?
+    ) async -> HTTPResponse {
+
+        // GET /events/stream or /v1/events/stream — SSE live event stream
+        if req.method == "GET" && (req.path == "/events/stream" || req.path == "/v1/events/stream") {
+            return await guardedRoute(level: .chatOnly, current: currentLevel, clientIP: clientIP, req: req) {
+                guard let writer else {
+                    return HTTPResponse.badRequest("SSE requires a streaming connection")
+                }
+
+                let pattern = req.queryParam("filter") ?? "*"
+                let clientID = UUID().uuidString
+
+                writer.sendStreamHeaders(origin: corsOrigin)
+
+                // Send a connection confirmation event
+                let hello: [String: Any] = [
+                    "event": "connected",
+                    "client_id": clientID,
+                    "filter": pattern,
+                    "timestamp": Date().timeIntervalSince1970
+                ]
+                if let data = try? JSONSerialization.data(withJSONObject: hello),
+                   let json = String(data: data, encoding: .utf8) {
+                    writer.sendSSEChunk(json)
+                }
+
+                // Register as SSE client — events will be pushed by EventBus.publish()
+                await EventBus.shared.addSSEClient(id: clientID, pattern: pattern, writer: writer)
+
+                // Keep connection alive with periodic heartbeats
+                Task {
+                    while true {
+                        try? await Task.sleep(nanoseconds: 30_000_000_000) // 30s heartbeat
+                        writer.sendSSEChunk("{\"event\":\"heartbeat\",\"timestamp\":\(Date().timeIntervalSince1970)}")
+                    }
+                }
+
+                // Return empty response — actual data flows via SSE chunks
+                return HTTPResponse(statusCode: 200, headers: ["Content-Type": "text/event-stream"], body: Data())
+            }
+        }
+
+        // GET /events/log or /v1/events/log — Recent events from ring buffer
+        if req.method == "GET" && (req.path == "/events/log" || req.path == "/v1/events/log") {
+            return await guardedRoute(level: .chatOnly, current: currentLevel, clientIP: clientIP, req: req) {
+                let limit = Int(req.queryParam("limit") ?? "100") ?? 100
+                let pattern = req.queryParam("filter")
+                let events = await EventBus.shared.recentEvents(limit: min(limit, 1000), pattern: pattern)
+                let dicts = events.map { $0.toDict() }
+                return HTTPResponse.json([
+                    "events": dicts,
+                    "count": dicts.count,
+                    "filter": pattern ?? "*"
+                ] as [String: Any])
+            }
+        }
+
+        // GET /v1/events/critical — Critical events from SQLite audit trail
+        if req.method == "GET" && req.path == "/v1/events/critical" {
+            return await guardedRoute(level: .readFiles, current: currentLevel, clientIP: clientIP, req: req) {
+                let limit = Int(req.queryParam("limit") ?? "100") ?? 100
+                let name = req.queryParam("name")
+                let events = await EventBus.shared.criticalEvents(limit: min(limit, 1000), name: name)
+                return HTTPResponse.json([
+                    "events": events,
+                    "count": events.count
+                ] as [String: Any])
+            }
+        }
+
+        // GET /v1/events/stats — Event bus statistics
+        if req.method == "GET" && req.path == "/v1/events/stats" {
+            return await guardedRoute(level: .chatOnly, current: currentLevel, clientIP: clientIP, req: req) {
+                let stats = await EventBus.shared.stats()
+                return HTTPResponse.json(stats)
+            }
+        }
+
+        // POST /v1/events/publish — Manually publish an event (for testing/integration)
+        if req.method == "POST" && req.path == "/v1/events/publish" {
+            return await guardedRoute(level: .writeFiles, current: currentLevel, clientIP: clientIP, req: req) {
+                guard let body = req.jsonBody,
+                      let eventName = body["event"] as? String else {
+                    return HTTPResponse.badRequest("Missing 'event' field")
+                }
+                let payload = body["payload"] as? [String: String] ?? [:]
+                let source = body["source"] as? String ?? "api"
+                let event = await EventBus.shared.publish(eventName, payload: payload, source: source)
+                return HTTPResponse.json(event.toDict())
             }
         }
 

@@ -480,8 +480,18 @@ actor CronScheduler {
 
         if let error = finalError {
             TorboLog.error("'\(task.name)' failed in \(elapsed)s: \(error)", subsystem: "Cron")
+            Task {
+                await EventBus.shared.publish("system.cron.error",
+                    payload: ["task_id": id, "task_name": task.name, "error": error, "elapsed": "\(elapsed)"],
+                    source: "CronScheduler")
+            }
         } else {
             TorboLog.info("'\(task.name)' completed in \(elapsed)s", subsystem: "Cron")
+            Task {
+                await EventBus.shared.publish("system.cron.fired",
+                    payload: ["task_id": id, "task_name": task.name, "elapsed": "\(elapsed)"],
+                    source: "CronScheduler")
+            }
         }
 
         // Store result as a conversation message for the iOS client to pick up
