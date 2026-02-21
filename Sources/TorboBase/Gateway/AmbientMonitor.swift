@@ -7,7 +7,7 @@ import Foundation
 import FoundationNetworking
 #endif
 
-struct AmbientAlert: Codable {
+struct MonitorAlert: Codable {
     let id: String
     let type: AlertType
     let priority: AlertPriority
@@ -25,14 +25,14 @@ struct AmbientAlert: Codable {
     }
 }
 
-struct AmbientConfig: Codable {
+struct MonitorConfig: Codable {
     var emailEnabled: Bool; var emailIntervalMinutes: Int; var emailVIPContacts: [String]
     var emailUrgentKeywords: [String]; var emailStaleReplyHours: Int
     var calendarEnabled: Bool; var calendarIntervalMinutes: Int; var calendarAlertMinutesBefore: Int
     var stockEnabled: Bool; var stockIntervalMinutes: Int; var stockTickers: [String]
     var stockThresholdPercent: Double; var stockMarketOpenHour: Int; var stockMarketCloseHour: Int
     var newsEnabled: Bool; var newsIntervalMinutes: Int; var newsKeywords: [String]
-    static let `default` = AmbientConfig(
+    static let `default` = MonitorConfig(
         emailEnabled: true, emailIntervalMinutes: 5, emailVIPContacts: [],
         emailUrgentKeywords: ["urgent", "asap", "emergency", "critical", "deadline", "immediate"],
         emailStaleReplyHours: 24, calendarEnabled: true, calendarIntervalMinutes: 10,
@@ -51,8 +51,8 @@ struct AmbientConfig: Codable {
 
 actor AmbientMonitor {
     static let shared = AmbientMonitor()
-    private var config = AmbientConfig.default
-    private var alerts: [AmbientAlert] = []
+    private var config = MonitorConfig.default
+    private var alerts: [MonitorAlert] = []
     private var isRunning = false
     private var alertedEmailIDs: Set<String> = []
     private var alertedEventIDs: Set<String> = []
@@ -107,8 +107,8 @@ actor AmbientMonitor {
         let byType: [String: Any] = ["email": alerts.filter { $0.type == .email }.count, "calendar": alerts.filter { $0.type == .calendar }.count, "stock": alerts.filter { $0.type == .stock }.count, "news": alerts.filter { $0.type == .news }.count]
         return ["running": isRunning, "alert_count": alerts.count, "alerts_by_type": byType, "config": config.toDict()]
     }
-    private func addAlert(type: AmbientAlert.AlertType, priority: AmbientAlert.AlertPriority, message: String, agent: String = "ambient") {
-        alerts.append(AmbientAlert(id: UUID().uuidString, type: type, priority: priority, message: message, timestamp: Date(), agent: agent))
+    private func addAlert(type: MonitorAlert.AlertType, priority: MonitorAlert.AlertPriority, message: String, agent: String = "ambient") {
+        alerts.append(MonitorAlert(id: UUID().uuidString, type: type, priority: priority, message: message, timestamp: Date(), agent: agent))
         persistAlerts(); TorboLog.info("[\(type.rawValue)] \(priority) — \(message.prefix(80))", subsystem: "Ambient")
     }
     private func persistAlerts() {
@@ -119,7 +119,7 @@ actor AmbientMonitor {
     private func loadAlerts() {
         guard let d = FileManager.default.contents(atPath: alertsFilePath) else { return }
         let dec = JSONDecoder(); dec.dateDecodingStrategy = .iso8601
-        do { alerts = try dec.decode([AmbientAlert].self, from: d); TorboLog.info("Loaded \(alerts.count) alert(s)", subsystem: "Ambient") }
+        do { alerts = try dec.decode([MonitorAlert].self, from: d); TorboLog.info("Loaded \(alerts.count) alert(s)", subsystem: "Ambient") }
         catch { TorboLog.warn("Failed to load alerts: \(error)", subsystem: "Ambient") }
     }
     private func persistConfig() {
@@ -129,7 +129,7 @@ actor AmbientMonitor {
     }
     private func loadConfig() {
         guard let d = FileManager.default.contents(atPath: configFilePath) else { return }
-        do { config = try JSONDecoder().decode(AmbientConfig.self, from: d) } catch { TorboLog.warn("Config load failed: \(error)", subsystem: "Ambient") }
+        do { config = try JSONDecoder().decode(MonitorConfig.self, from: d) } catch { TorboLog.warn("Config load failed: \(error)", subsystem: "Ambient") }
     }
     private func emailLoop() async { while isRunning && config.emailEnabled { await checkEmail(); try? await Task.sleep(nanoseconds: UInt64(config.emailIntervalMinutes) * 60_000_000_000) } }
     private func checkEmail() async {

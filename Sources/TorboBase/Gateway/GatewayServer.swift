@@ -438,8 +438,8 @@ actor GatewayServer {
         Task { await MCPManager.shared.initialize() }
         Task { await DocumentStore.shared.initialize() }
         Task {
-            await ConversationSearch.shared.initialize()
-            await ConversationSearch.shared.backfillFromStore()
+            // TODO: await ConversationSearch.shared.initialize()
+            // TODO: await ConversationSearch.shared.backfillFromStore()
         }
         Task { await SkillsManager.shared.initialize() }
         Task { await WorkflowEngine.shared.loadFromDisk() }
@@ -887,7 +887,7 @@ actor GatewayServer {
 
         // MARK: - Conversation Search
         if req.path.hasPrefix("/search") {
-            return await handleSearchRoute(req, clientIP: clientIP)
+            // TODO: return await handleSearchRoute(req, clientIP: clientIP)
         }
 
         // MARK: - LoA (Library of Alexandria) Shortcuts
