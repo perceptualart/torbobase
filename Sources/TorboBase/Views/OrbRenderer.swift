@@ -1,6 +1,6 @@
 // Copyright 2026 Perceptual Art LLC. All rights reserved.
 // Licensed under Apache 2.0 — see LICENSE file.
-// Torbo Base — by Michael David Murphy
+// Torbo Base — by Perceptual AI
 // Ported from Torbo iOS — aurora silk ribbon orb renderer
 #if canImport(SwiftUI)
 import SwiftUI

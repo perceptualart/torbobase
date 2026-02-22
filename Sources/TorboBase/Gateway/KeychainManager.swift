@@ -1,6 +1,6 @@
 // Copyright 2026 Perceptual Art LLC. All rights reserved.
 // Licensed under Apache 2.0 — see LICENSE file.
-// Torbo Base — by Michael David Murphy
+// Torbo Base — by Perceptual AI
 // Secure file-based storage for API keys and tokens
 // Data is encrypted at rest using a machine-derived key
 import Foundation

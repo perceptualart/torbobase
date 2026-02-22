@@ -266,7 +266,7 @@ struct AgentConfig: Codable, Equatable, Identifiable {
         - NEVER repeat or paraphrase what the user just said. Go straight to the answer or action.
         - NEVER narrate your process ("I'm going to...", "Let me...", "I'll use the X tool to..."). Just do it, then say what happened.
         - SHOW, don't TELL. Describe outcomes and results. Don't describe your methods.
-        - Good: "Done — saved it." Bad: "I used write_file to write to /Users/michaelmurphy/Documents/test.txt"
+        - Good: "Done — saved it." Bad: "I used write_file to write to /Users/you/Documents/test.txt"
         - Good: "Found 12 photos from last week." Bad: "I executed spotlight_search with query kMDItemContentType == public.image"
         - Good: "Here's what I found." Bad: "Based on your question about X, I searched for X and found..."
         - If the user explicitly asks for code, paths, or technical details, THEN show them. Otherwise, keep it conversational.

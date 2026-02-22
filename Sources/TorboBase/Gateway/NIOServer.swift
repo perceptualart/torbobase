@@ -76,7 +76,7 @@ final class HTTPHandler: ChannelInboundHandler, RemovableChannelHandler {
     typealias OutboundOut = ByteBuffer
 
     private var accumulated = Data()
-    private let maxRequestSize = 10 * 1024 * 1024 // 10MB — prevent unbounded buffer growth
+    private let maxRequestSize = 20 * 1024 * 1024 // 20MB — vision payloads include base64 images
 
     func channelRead(context: ChannelHandlerContext, data: NIOAny) {
         var buffer = unwrapInboundIn(data)

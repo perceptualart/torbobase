@@ -1,6 +1,6 @@
 // Copyright 2026 Perceptual Art LLC. All rights reserved.
 // Licensed under Apache 2.0 — see LICENSE file.
-// Torbo Base — by Michael David Murphy
+// Torbo Base — by Perceptual AI
 // Main dashboard — dark, gorgeous, the Torbo at the center of everything
 #if canImport(SwiftUI)
 import SwiftUI

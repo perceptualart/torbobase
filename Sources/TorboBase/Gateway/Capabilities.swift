@@ -1,6 +1,6 @@
 // Copyright 2026 Perceptual Art LLC. All rights reserved.
 // Licensed under Apache 2.0 — see LICENSE file.
-// Torbo Base — by Michael David Murphy
+// Torbo Base — by Perceptual AI
 // Capabilities — Tool registry, definitions, and execution engines
 import Foundation
 #if canImport(FoundationNetworking)
@@ -843,6 +843,9 @@ func convertMessagesToAnthropic(_ messages: [[String: Any]]) -> (messages: [[Str
             for block in contentArray {
                 let blockType = block["type"] as? String ?? ""
                 if blockType == "text" {
+                    anthropicContent.append(block)
+                } else if blockType == "image" {
+                    // Already in Anthropic format — pass through
                     anthropicContent.append(block)
                 } else if blockType == "image_url",
                           let imageURL = block["image_url"] as? [String: Any],

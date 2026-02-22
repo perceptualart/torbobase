@@ -1,6 +1,6 @@
 // Copyright 2026 Perceptual Art LLC. All rights reserved.
 // Licensed under Apache 2.0 — see LICENSE file.
-// Torbo Base — by Michael David Murphy
+// Torbo Base — by Perceptual AI
 // The Torbo replaces the dial — a living, breathing access control interface
 // v2: Giant orb + rainbow slider + network health
 #if canImport(SwiftUI)
