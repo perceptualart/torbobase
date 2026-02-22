@@ -1652,36 +1652,52 @@ enum WebChatHTML {
     }
 
     async function loadConversations() {
-        var query = state.convQuery.trim();
-        convListEl.innerHTML = '<div class="conv-empty">Loading...</div>';
-        try {
-            if (query) {
-                var agent = state.convFilter !== 'all' ? '&agent=' + encodeURIComponent(state.convFilter) : '';
-                var res = await fetch(BASE + '/search?q=' + encodeURIComponent(query) + agent + '&limit=30', {
-                    headers: authHeaders()
-                });
-                if (res.ok) {
-                    var data = await res.json();
-                    renderSearchResults(data.results || []);
-                } else {
-                    convListEl.innerHTML = '<div class="conv-empty">Search failed</div>';
-                }
-            } else {
-                var res2 = await fetch(BASE + '/v1/sessions', { headers: authHeaders() });
-                if (res2.ok) {
-                    var data2 = await res2.json();
-                    var sessions = data2.sessions || [];
-                    if (state.convFilter !== 'all') {
-                        sessions = sessions.filter(function(s) { return s.agentID === state.convFilter || s.agent === state.convFilter; });
-                    }
-                    renderSessions(sessions);
-                } else {
-                    convListEl.innerHTML = '<div class="conv-empty">Could not load history</div>';
-                }
+        var query = state.convQuery.trim().toLowerCase();
+
+        // Build sessions from local rooms
+        var sessions = state.rooms.slice().sort(function(a,b) {
+            return (b.lastMessageAt || 0) - (a.lastMessageAt || 0);
+        }).map(function(room) {
+            var roomAgents = room.agents || [room.agent || 'sid'];
+            var msgs = state.roomMessages[room.id] || [];
+            var lastUserMsg = null;
+            for (var i = msgs.length - 1; i >= 0; i--) {
+                if (msgs[i].role === 'user') { lastUserMsg = msgs[i]; break; }
             }
-        } catch(e) {
-            convListEl.innerHTML = '<div class="conv-empty">Connection error</div>';
+            return {
+                id: room.id, title: room.title || 'Untitled',
+                agentID: roomAgents[0], agent: roomAgents[0],
+                agents: roomAgents,
+                model: getAgentModel(roomAgents[0]) || null,
+                messageCount: msgs.length,
+                startedAt: room.createdAt,
+                lastMessageAt: room.lastMessageAt,
+                preview: lastUserMsg ? lastUserMsg.content.slice(0, 100) : ''
+            };
+        });
+
+        // Apply agent filter
+        if (state.convFilter !== 'all') {
+            sessions = sessions.filter(function(s) {
+                var agents = s.agents || [s.agentID];
+                return agents.indexOf(state.convFilter) >= 0;
+            });
         }
+
+        // Apply search query
+        if (query) {
+            sessions = sessions.filter(function(s) {
+                if (s.title && s.title.toLowerCase().indexOf(query) >= 0) return true;
+                if (s.preview && s.preview.toLowerCase().indexOf(query) >= 0) return true;
+                // Search through messages
+                var msgs = state.roomMessages[s.id] || [];
+                return msgs.some(function(m) {
+                    return m.content && m.content.toLowerCase().indexOf(query) >= 0;
+                });
+            });
+        }
+
+        renderSessions(sessions);
     }
 
     function renderSessions(sessions) {
@@ -1693,6 +1709,7 @@ enum WebChatHTML {
         sessions.forEach(function(s) {
             var card = document.createElement('div');
             card.className = 'session-card';
+            if (s.id === state.activeRoomID) card.style.borderColor = 'var(--purple)';
             var title = document.createElement('div');
             title.className = 'session-title';
             title.textContent = s.title || 'Untitled';
@@ -1700,28 +1717,23 @@ enum WebChatHTML {
 
             var meta = document.createElement('div');
             meta.className = 'session-meta';
-            if (s.agentID || s.agent) {
-                var agentID = s.agentID || s.agent;
+            var agents = s.agents || (s.agentID ? [s.agentID] : [s.agent || 'sid']);
+            agents.forEach(function(aid) {
                 var badge = document.createElement('span');
                 badge.className = 'session-badge';
-                badge.style.background = ((AGENTS[agentID] || {}).color || '#a855f7') + '22';
-                badge.style.color = (AGENTS[agentID] || {}).color || '#a855f7';
-                badge.textContent = (AGENTS[agentID] || {}).name || agentID;
+                badge.style.background = ((AGENTS[aid] || {}).color || '#a855f7') + '22';
+                badge.style.color = (AGENTS[aid] || {}).color || '#a855f7';
+                badge.textContent = (AGENTS[aid] || {}).name || aid;
                 meta.appendChild(badge);
-            }
-            if (s.model) {
-                var modelSpan = document.createElement('span');
-                modelSpan.textContent = s.model;
-                meta.appendChild(modelSpan);
-            }
+            });
             if (s.messageCount) {
                 var countSpan = document.createElement('span');
                 countSpan.textContent = s.messageCount + ' msgs';
                 meta.appendChild(countSpan);
             }
-            if (s.startedAt) {
+            if (s.lastMessageAt || s.startedAt) {
                 var timeSpan = document.createElement('span');
-                timeSpan.textContent = new Date(s.startedAt).toLocaleDateString();
+                timeSpan.textContent = relativeTime(s.lastMessageAt || s.startedAt);
                 meta.appendChild(timeSpan);
             }
             card.appendChild(meta);
