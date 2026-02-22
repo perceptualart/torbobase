@@ -4,7 +4,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_NAME="Torbo Base"
 BUNDLE_NAME="TorboBase"
-VERSION="3.0.0"
+VERSION="${VERSION:-3.1.0}"
 BUILD_DIR="${SCRIPT_DIR}/.build"
 DIST_DIR="${SCRIPT_DIR}/dist"
 APP_BUNDLE="${DIST_DIR}/${APP_NAME}.app"
