@@ -146,9 +146,22 @@ actor TelegramBridge {
                 }
                 let (data, _) = try await session.data(from: url)
 
-                guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                      let ok = json["ok"] as? Bool, ok,
-                      let results = json["result"] as? [[String: Any]] else {
+                guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                    continue
+                }
+                guard let ok = json["ok"] as? Bool, ok else {
+                    let errCode = json["error_code"] as? Int ?? 0
+                    let errDesc = json["description"] as? String ?? "unknown"
+                    // 404 = invalid bot token, 401 = unauthorized — stop polling
+                    if errCode == 404 || errCode == 401 {
+                        TorboLog.error("Bot token invalid (\(errCode): \(errDesc)) — stopping Telegram bridge. Check your bot token.", subsystem: "Telegram")
+                        shouldPoll = false
+                        return
+                    }
+                    TorboLog.warn("Telegram API error \(errCode): \(errDesc)", subsystem: "Telegram")
+                    continue
+                }
+                guard let results = json["result"] as? [[String: Any]] else {
                     continue
                 }
 
