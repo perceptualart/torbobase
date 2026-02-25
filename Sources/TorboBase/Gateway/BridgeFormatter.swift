@@ -13,15 +13,27 @@ enum BridgePlatform: String {
     case slack
     case signal
     case whatsapp
+    case imessage
+    case email
+    case teams
+    case googlechat
+    case matrix
+    case sms
 
     /// Maximum message length for this platform.
     var maxLength: Int {
         switch self {
-        case .telegram: return 4096
-        case .discord:  return 2000
-        case .slack:    return 4000
-        case .signal:   return 4096
-        case .whatsapp: return 4096
+        case .telegram:   return 4096
+        case .discord:    return 2000
+        case .slack:      return 4000
+        case .signal:     return 4096
+        case .whatsapp:   return 4096
+        case .imessage:   return 4096
+        case .email:      return 50000  // Email has virtually no limit
+        case .teams:      return 28000  // Teams adaptive card limit
+        case .googlechat: return 4096
+        case .matrix:     return 65536  // Matrix spec limit
+        case .sms:        return 1600   // 10 SMS segments
         }
     }
 }
@@ -35,11 +47,17 @@ enum BridgeFormatter {
     /// Converts generic markdown to platform-native formatting.
     static func format(_ text: String, for platform: BridgePlatform) -> String {
         switch platform {
-        case .discord:   return formatDiscord(text)
-        case .telegram:  return formatTelegram(text)
-        case .slack:     return formatSlack(text)
-        case .signal:    return formatSignal(text)
-        case .whatsapp:  return formatWhatsApp(text)
+        case .discord:    return formatDiscord(text)
+        case .telegram:   return formatTelegram(text)
+        case .slack:      return formatSlack(text)
+        case .signal:     return formatSignal(text)
+        case .whatsapp:   return formatWhatsApp(text)
+        case .imessage:   return formatSignal(text)     // Plain text like Signal
+        case .email:      return formatEmail(text)
+        case .teams:      return formatTeams(text)
+        case .googlechat: return formatSignal(text)     // Plain text + basic formatting
+        case .matrix:     return text                   // Matrix supports full markdown
+        case .sms:        return formatSMS(text)
         }
     }
 
@@ -207,6 +225,69 @@ enum BridgeFormatter {
 
         result = formatted.joined(separator: "\n")
         return result
+    }
+
+    /// Email: HTML with inline styles for rich formatting
+    private static func formatEmail(_ text: String) -> String {
+        var html = "<div style=\"font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; font-size: 14px; line-height: 1.6; color: #333;\">"
+        let lines = text.split(separator: "\n", omittingEmptySubsequences: false)
+        var inCodeBlock = false
+
+        for line in lines {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if trimmed.hasPrefix("```") {
+                inCodeBlock.toggle()
+                if inCodeBlock {
+                    html += "<pre style=\"background: #f5f5f5; padding: 12px; border-radius: 4px; overflow-x: auto;\"><code>"
+                } else {
+                    html += "</code></pre>"
+                }
+                continue
+            }
+            if inCodeBlock {
+                html += escapeHTML(String(line)) + "\n"
+                continue
+            }
+            if trimmed.hasPrefix("### ") {
+                html += "<h3 style=\"margin: 16px 0 8px;\">\(escapeHTML(String(trimmed.dropFirst(4))))</h3>"
+            } else if trimmed.hasPrefix("## ") {
+                html += "<h2 style=\"margin: 16px 0 8px;\">\(escapeHTML(String(trimmed.dropFirst(3))))</h2>"
+            } else if trimmed.hasPrefix("# ") {
+                html += "<h1 style=\"margin: 16px 0 8px;\">\(escapeHTML(String(trimmed.dropFirst(2))))</h1>"
+            } else if trimmed.isEmpty {
+                html += "<br>"
+            } else {
+                var formatted = escapeHTML(String(line))
+                // Bold: **text** → <strong>text</strong>
+                formatted = formatted.replacingOccurrences(of: "\\*\\*(.+?)\\*\\*", with: "<strong>$1</strong>", options: .regularExpression)
+                html += "<p style=\"margin: 4px 0;\">\(formatted)</p>"
+            }
+        }
+        html += "</div>"
+        return html
+    }
+
+    /// Teams: Markdown compatible with Teams rendering
+    private static func formatTeams(_ text: String) -> String {
+        // Teams supports a subset of markdown similar to Slack
+        var result = text
+        result = result.replacingOccurrences(of: "**", with: "**") // Teams supports **bold** natively
+        return result
+    }
+
+    /// SMS: Plain text, concise, 160-char awareness
+    private static func formatSMS(_ text: String) -> String {
+        var result = stripMarkdown(text)
+        // SMS should be concise — trim excessive whitespace
+        result = result.replacingOccurrences(of: "\n\n\n+", with: "\n\n", options: .regularExpression)
+        return result
+    }
+
+    private static func escapeHTML(_ text: String) -> String {
+        text.replacingOccurrences(of: "&", with: "&amp;")
+            .replacingOccurrences(of: "<", with: "&lt;")
+            .replacingOccurrences(of: ">", with: "&gt;")
+            .replacingOccurrences(of: "\"", with: "&quot;")
     }
 
     // MARK: - Helpers

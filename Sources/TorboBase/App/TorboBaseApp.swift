@@ -70,6 +70,20 @@ struct TorboBaseApp: App {
         .windowStyle(.hiddenTitleBar)
         .windowResizability(.contentMinSize)
         .defaultSize(width: 860, height: 640)
+
+        // Canvas — floating workspace window
+        Window("Canvas", id: "canvas") {
+            CanvasWindow()
+                .frame(minWidth: 400, minHeight: 300)
+                .onAppear {
+                    DispatchQueue.main.async {
+                        AppDelegate.styleCanvasWindow()
+                    }
+                }
+        }
+        .windowStyle(.hiddenTitleBar)
+        .windowResizability(.contentMinSize)
+        .defaultSize(width: 520, height: 640)
     }
 }
 
@@ -108,6 +122,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         window.titlebarAppearsTransparent = true
         window.titleVisibility = .hidden
         NSApp.activate(ignoringOtherApps: true)
+    }
+
+    /// Style the canvas window — dark theme, position to the right of main window
+    static func styleCanvasWindow() {
+        guard let canvas = NSApp.windows.first(where: {
+            $0.identifier?.rawValue.contains("canvas") == true
+        }) else { return }
+
+        canvas.backgroundColor = NSColor(red: 0.06, green: 0.06, blue: 0.08, alpha: 1)
+        canvas.titlebarAppearsTransparent = true
+        canvas.titleVisibility = .hidden
+        canvas.makeKeyAndOrderFront(nil)
+
+        // Position to the right of the main dashboard window
+        if let main = NSApp.windows.first(where: {
+            $0.identifier?.rawValue.contains("dashboard") == true
+        }) {
+            let mainFrame = main.frame
+            let canvasOrigin = NSPoint(x: mainFrame.maxX + 8, y: mainFrame.origin.y)
+            canvas.setFrameOrigin(canvasOrigin)
+            // Match main window height
+            let canvasSize = NSSize(width: canvas.frame.width, height: mainFrame.height)
+            canvas.setContentSize(canvasSize)
+        }
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -169,6 +207,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // Start HomeKit ambient intelligence
             await HomeKitMonitor.shared.start()
             TorboLog.info("HomeKit monitor online", subsystem: "App")
+
+            // Mic permission deferred to first voice activation — avoids spawning
+            // audio IO threads at startup that can corrupt Swift metadata cache (PAC trap).
+            TorboLog.info("Audio engine: deferred until voice activation", subsystem: "App")
         }
     }
 

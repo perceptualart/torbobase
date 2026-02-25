@@ -125,6 +125,30 @@ enum CapabilityRegistry {
         CapabilityDefinition(toolName: "search_documents", category: .search, minimumAccessLevel: .readFiles, description: "Search document embeddings", macOnly: false),
         // Workflows
         CapabilityDefinition(toolName: "create_workflow", category: .execution, minimumAccessLevel: .execute, description: "Create multi-step workflow", macOnly: false),
+        // Home Assistant
+        CapabilityDefinition(toolName: "ha_list_entities", category: .automation, minimumAccessLevel: .readFiles, description: "List Home Assistant entities", macOnly: false),
+        CapabilityDefinition(toolName: "ha_control", category: .automation, minimumAccessLevel: .writeFiles, description: "Control Home Assistant entity", macOnly: false),
+        CapabilityDefinition(toolName: "ha_get_state", category: .automation, minimumAccessLevel: .readFiles, description: "Get Home Assistant entity state", macOnly: false),
+        CapabilityDefinition(toolName: "ha_history", category: .automation, minimumAccessLevel: .readFiles, description: "Get Home Assistant entity history", macOnly: false),
+        // Photo Editing
+        CapabilityDefinition(toolName: "edit_photo", category: .images, minimumAccessLevel: .writeFiles, description: "Edit photos (resize, crop, filter, etc.)", macOnly: false),
+        CapabilityDefinition(toolName: "remove_background", category: .images, minimumAccessLevel: .writeFiles, description: "AI background removal", macOnly: false),
+        CapabilityDefinition(toolName: "photo_composite", category: .images, minimumAccessLevel: .writeFiles, description: "Layer multiple images", macOnly: false),
+        // Video Editing
+        CapabilityDefinition(toolName: "edit_video", category: .images, minimumAccessLevel: .writeFiles, description: "Edit videos (trim, resize, compress, etc.)", macOnly: false),
+        CapabilityDefinition(toolName: "extract_audio", category: .images, minimumAccessLevel: .writeFiles, description: "Extract audio from video", macOnly: false),
+        CapabilityDefinition(toolName: "video_info", category: .images, minimumAccessLevel: .readFiles, description: "Get video metadata", macOnly: false),
+        CapabilityDefinition(toolName: "video_thumbnail", category: .images, minimumAccessLevel: .readFiles, description: "Extract frame from video", macOnly: false),
+        // Drawing & Diagrams
+        CapabilityDefinition(toolName: "generate_svg", category: .images, minimumAccessLevel: .writeFiles, description: "Generate SVG illustration", macOnly: false),
+        CapabilityDefinition(toolName: "create_diagram", category: .images, minimumAccessLevel: .writeFiles, description: "Create diagrams (flowchart, sequence, etc.)", macOnly: false),
+        // 3D Models
+        CapabilityDefinition(toolName: "create_3d_model", category: .images, minimumAccessLevel: .execute, description: "Generate 3D model from description", macOnly: false),
+        CapabilityDefinition(toolName: "render_3d", category: .images, minimumAccessLevel: .execute, description: "Render 3D model to image", macOnly: false),
+        // Deep Research
+        CapabilityDefinition(toolName: "deep_research", category: .browser, minimumAccessLevel: .writeFiles, description: "Autonomous multi-step research", macOnly: false),
+        // Browser Agent
+        CapabilityDefinition(toolName: "browser_agent", category: .browser, minimumAccessLevel: .execute, description: "Autonomous web browsing agent", macOnly: false),
     ]
 
     static let byName: [String: CapabilityDefinition] = {
@@ -323,6 +347,7 @@ actor ToolProcessor {
                          "execute_code", "execute_code_docker",
                          "browser_navigate", "browser_screenshot", "browser_extract", "browser_interact",
                          "loa_recall", "loa_teach", "loa_forget", "loa_entities", "loa_timeline",
+                         "loa_pin", "loa_history", "loa_graph",
                          "search_conversations"])
         return names
     }()
@@ -511,6 +536,38 @@ actor ToolProcessor {
                     let execResult = await DockerSandbox.shared.execute(code: code, language: language, config: dockerConfig)
                     content = execResult.toolResponse
                     if let dockerCodeWarning { content = dockerCodeWarning.formatted + "\n\n" + content }
+                // Photo Editing
+                case "edit_photo":
+                    content = await PhotoEditor.shared.editPhoto(inputPath: args["input_path"] as? String ?? "", operations: args["operations"] as? [[String: Any]] ?? [], outputFormat: args["output_format"] as? String)
+                case "remove_background":
+                    content = await PhotoEditor.shared.removeBackground(inputPath: args["input_path"] as? String ?? "")
+                case "photo_composite":
+                    content = await PhotoEditor.shared.composite(basePath: args["base_path"] as? String ?? "", layers: args["layers"] as? [[String: Any]] ?? [])
+                // Video Editing
+                case "edit_video":
+                    content = await VideoEditor.shared.editVideo(inputPath: args["input_path"] as? String ?? "", operations: args["operations"] as? [[String: Any]] ?? [], outputFormat: args["output_format"] as? String)
+                case "extract_audio":
+                    content = await VideoEditor.shared.extractAudio(inputPath: args["input_path"] as? String ?? "", format: args["format"] as? String ?? "mp3")
+                case "video_info":
+                    content = await VideoEditor.shared.videoInfo(inputPath: args["input_path"] as? String ?? "")
+                case "video_thumbnail":
+                    content = await VideoEditor.shared.videoThumbnail(inputPath: args["input_path"] as? String ?? "", timestamp: args["timestamp"] as? String ?? "00:00:01")
+                // Diagrams & SVG
+                case "generate_svg":
+                    content = await DiagramEngine.shared.generateSVG(description: args["description"] as? String ?? "", style: args["style"] as? String ?? "minimal")
+                case "create_diagram":
+                    content = await DiagramEngine.shared.createDiagram(description: args["description"] as? String ?? "", diagramType: args["type"] as? String ?? "auto", engine: args["engine"] as? String ?? "mermaid")
+                // 3D Models
+                case "create_3d_model":
+                    content = await ThreeDEngine.shared.createModel(description: args["description"] as? String ?? "", outputFormat: args["format"] as? String ?? "glb")
+                case "render_3d":
+                    content = await ThreeDEngine.shared.renderModel(inputPath: args["input_path"] as? String ?? "", resolution: args["resolution"] as? Int ?? 1080)
+                // Deep Research
+                case "deep_research":
+                    content = await DeepResearchEngine.shared.research(topic: args["topic"] as? String ?? "", depth: args["depth"] as? String ?? "standard")
+                // Browser Agent
+                case "browser_agent":
+                    content = await BrowserAgent.shared.execute(startURL: args["url"] as? String ?? "", goal: args["goal"] as? String ?? "", maxStepsOverride: args["max_steps"] as? Int)
                 default:
                     content = "Unknown tool: \(name)"
                 }
@@ -1276,6 +1333,55 @@ extension ToolProcessor {
         ] as [String: Any]
     ]
 
+    static let loaPinToolDefinition: [String: Any] = [
+        "type": "function",
+        "function": [
+            "name": "loa_pin",
+            "description": "Pin or unpin a memory in the Library of Alexandria. Pinned memories are exempt from decay and always included in context. Call with no arguments to list all pinned memories.",
+            "parameters": [
+                "type": "object",
+                "properties": [
+                    "action": ["type": "string", "enum": ["pin", "unpin", "list"], "description": "Pin, unpin, or list pinned memories (default: pin)"],
+                    "id": ["type": "integer", "description": "Memory ID to pin/unpin"],
+                    "query": ["type": "string", "description": "Search query to find a memory to pin/unpin (used if id not provided)"]
+                ] as [String: Any],
+                "required": []
+            ] as [String: Any]
+        ] as [String: Any]
+    ]
+
+    static let loaHistoryToolDefinition: [String: Any] = [
+        "type": "function",
+        "function": [
+            "name": "loa_history",
+            "description": "View the version history of a memory — see how it evolved over time. Use when someone asks 'what did I used to think about X?'",
+            "parameters": [
+                "type": "object",
+                "properties": [
+                    "id": ["type": "integer", "description": "Memory ID to view history for"],
+                    "query": ["type": "string", "description": "Search query to find the memory (used if id not provided)"]
+                ] as [String: Any],
+                "required": []
+            ] as [String: Any]
+        ] as [String: Any]
+    ]
+
+    static let loaGraphToolDefinition: [String: Any] = [
+        "type": "function",
+        "function": [
+            "name": "loa_graph",
+            "description": "Query the knowledge graph for relationships between entities. Shows how people, projects, and concepts are connected.",
+            "parameters": [
+                "type": "object",
+                "properties": [
+                    "entity": ["type": "string", "description": "Entity name to query relationships for"],
+                    "depth": ["type": "integer", "description": "How many hops to traverse (default: 2, max: 3)"]
+                ] as [String: Any],
+                "required": ["entity"]
+            ] as [String: Any]
+        ] as [String: Any]
+    ]
+
     /// Map tool names to their static definition dicts
     private static func toolDefinitionDict(for toolName: String) -> [String: Any]? {
         switch toolName {
@@ -1322,6 +1428,9 @@ extension ToolProcessor {
         case "loa_forget": return loaForgetToolDefinition
         case "loa_entities": return loaEntitiesToolDefinition
         case "loa_timeline": return loaTimelineToolDefinition
+        case "loa_pin": return loaPinToolDefinition
+        case "loa_history": return loaHistoryToolDefinition
+        case "loa_graph": return loaGraphToolDefinition
         case "search_conversations": return searchConversationsToolDefinition
         case "execute_code": return executeCodeToolDefinition
         case "execute_code_docker": return executeCodeDockerToolDefinition
@@ -1331,6 +1440,25 @@ extension ToolProcessor {
         case "browser_interact": return browserInteractToolDefinition
         case "search_documents": return searchDocumentsToolDefinition
         case "create_workflow": return createWorkflowToolDefinition
+        // Photo Editing
+        case "edit_photo": return PhotoEditor.editPhotoToolDefinition
+        case "remove_background": return PhotoEditor.removeBackgroundToolDefinition
+        case "photo_composite": return PhotoEditor.photoCompositeToolDefinition
+        // Video Editing
+        case "edit_video": return VideoEditor.editVideoToolDefinition
+        case "extract_audio": return VideoEditor.extractAudioToolDefinition
+        case "video_info": return VideoEditor.videoInfoToolDefinition
+        case "video_thumbnail": return VideoEditor.videoThumbnailToolDefinition
+        // Drawing & Diagrams
+        case "generate_svg": return DiagramEngine.generateSVGToolDefinition
+        case "create_diagram": return DiagramEngine.createDiagramToolDefinition
+        // 3D Models
+        case "create_3d_model": return ThreeDEngine.create3DModelToolDefinition
+        case "render_3d": return ThreeDEngine.render3DToolDefinition
+        // Deep Research
+        case "deep_research": return DeepResearchEngine.deepResearchToolDefinition
+        // Browser Agent
+        case "browser_agent": return BrowserAgent.browserAgentToolDefinition
         default: return nil
         }
     }
@@ -1575,6 +1703,66 @@ extension ToolProcessor {
                     let execResult = await DockerSandbox.shared.execute(code: code, language: language, config: dockerCfg)
                     content = execResult.toolResponse
                     if let dockerCodeWarning2 { content = dockerCodeWarning2.formatted + "\n\n" + content }
+                // Photo Editing Tools
+                case "edit_photo":
+                    let inputPath = args["input_path"] as? String ?? ""
+                    let ops = args["operations"] as? [[String: Any]] ?? []
+                    let outFmt = args["output_format"] as? String
+                    content = await PhotoEditor.shared.editPhoto(inputPath: inputPath, operations: ops, outputFormat: outFmt)
+                case "remove_background":
+                    let inputPath = args["input_path"] as? String ?? ""
+                    content = await PhotoEditor.shared.removeBackground(inputPath: inputPath)
+                case "photo_composite":
+                    let basePath = args["base_path"] as? String ?? ""
+                    let layers = args["layers"] as? [[String: Any]] ?? []
+                    content = await PhotoEditor.shared.composite(basePath: basePath, layers: layers)
+                // Video Editing Tools
+                case "edit_video":
+                    let inputPath = args["input_path"] as? String ?? ""
+                    let ops = args["operations"] as? [[String: Any]] ?? []
+                    let outFmt = args["output_format"] as? String
+                    content = await VideoEditor.shared.editVideo(inputPath: inputPath, operations: ops, outputFormat: outFmt)
+                case "extract_audio":
+                    let inputPath = args["input_path"] as? String ?? ""
+                    let fmt = args["format"] as? String ?? "mp3"
+                    content = await VideoEditor.shared.extractAudio(inputPath: inputPath, format: fmt)
+                case "video_info":
+                    let inputPath = args["input_path"] as? String ?? ""
+                    content = await VideoEditor.shared.videoInfo(inputPath: inputPath)
+                case "video_thumbnail":
+                    let inputPath = args["input_path"] as? String ?? ""
+                    let ts = args["timestamp"] as? String ?? "00:00:01"
+                    content = await VideoEditor.shared.videoThumbnail(inputPath: inputPath, timestamp: ts)
+                // Drawing & Diagram Tools
+                case "generate_svg":
+                    let desc = args["description"] as? String ?? ""
+                    let style = args["style"] as? String ?? "minimal"
+                    content = await DiagramEngine.shared.generateSVG(description: desc, style: style)
+                case "create_diagram":
+                    let desc = args["description"] as? String ?? ""
+                    let diagramType = args["type"] as? String ?? "auto"
+                    let engine = args["engine"] as? String ?? "mermaid"
+                    content = await DiagramEngine.shared.createDiagram(description: desc, diagramType: diagramType, engine: engine)
+                // 3D Model Tools
+                case "create_3d_model":
+                    let desc = args["description"] as? String ?? ""
+                    let fmt = args["format"] as? String ?? "glb"
+                    content = await ThreeDEngine.shared.createModel(description: desc, outputFormat: fmt)
+                case "render_3d":
+                    let inputPath = args["input_path"] as? String ?? ""
+                    let resolution = args["resolution"] as? Int ?? 1080
+                    content = await ThreeDEngine.shared.renderModel(inputPath: inputPath, resolution: resolution)
+                // Deep Research
+                case "deep_research":
+                    let topic = args["topic"] as? String ?? ""
+                    let depth = args["depth"] as? String ?? "standard"
+                    content = await DeepResearchEngine.shared.research(topic: topic, depth: depth)
+                // Browser Agent
+                case "browser_agent":
+                    let url = args["url"] as? String ?? ""
+                    let goal = args["goal"] as? String ?? ""
+                    let maxSteps = args["max_steps"] as? Int
+                    content = await BrowserAgent.shared.execute(startURL: url, goal: goal, maxStepsOverride: maxSteps)
                 // LoA (Library of Alexandria) — Memory Tools
                 case "loa_recall":
                     let q = args["query"] as? String ?? ""
@@ -1602,7 +1790,13 @@ extension ToolProcessor {
                         text: text, category: category, source: "agent_taught",
                         importance: importance, entities: entities
                     )
-                    content = taughtID != nil ? "📜 Scroll added to the Library: \"\(String(text.prefix(100)))\"" : "Failed to add scroll — is Ollama running?"
+                    if let taughtID {
+                        // User-taught facts get highest confidence
+                        await MemoryIndex.shared.updateConfidence(id: taughtID, confidence: 0.9)
+                        content = "📜 Scroll added to the Library: \"\(String(text.prefix(100)))\""
+                    } else {
+                        content = "Failed to add scroll — is Ollama running?"
+                    }
                 case "loa_forget":
                     let q = args["query"] as? String ?? ""
                     guard !q.isEmpty else {
@@ -1661,6 +1855,94 @@ extension ToolProcessor {
                                 "[\(fmt.string(from: r.timestamp))] (\(r.category)) \(r.text)"
                             }.joined(separator: "\n\n")
                     }
+                case "loa_pin":
+                    let action = args["action"] as? String ?? "pin"
+                    let memoryID = args["id"] as? Int64 ?? (args["id"] as? Int).map { Int64($0) }
+                    let query = args["query"] as? String
+
+                    if let memoryID {
+                        if action == "unpin" {
+                            await MemoryIndex.shared.unpin(id: memoryID)
+                            content = "📌 Unpinned memory #\(memoryID)"
+                        } else {
+                            await MemoryIndex.shared.pin(id: memoryID)
+                            await MemoryIndex.shared.updateConfidence(id: memoryID, confidence: 0.95)
+                            content = "📌 Pinned memory #\(memoryID) — it will never decay"
+                        }
+                    } else if let query, !query.isEmpty {
+                        let matches = await MemoryIndex.shared.hybridSearch(query: query, topK: 3)
+                        if let first = matches.first {
+                            if action == "unpin" {
+                                await MemoryIndex.shared.unpin(id: first.id)
+                                content = "📌 Unpinned: \"\(String(first.text.prefix(80)))...\""
+                            } else {
+                                await MemoryIndex.shared.pin(id: first.id)
+                                await MemoryIndex.shared.updateConfidence(id: first.id, confidence: 0.95)
+                                content = "📌 Pinned: \"\(String(first.text.prefix(80)))...\" — it will never decay"
+                            }
+                        } else {
+                            content = "No matching memory found for: \(query)"
+                        }
+                    } else {
+                        // List pinned memories
+                        let pinned = await MemoryIndex.shared.pinnedMemories()
+                        if pinned.isEmpty {
+                            content = "No memories are currently pinned."
+                        } else {
+                            content = "📌 Pinned Memories (\(pinned.count)):\n\n" +
+                                pinned.enumerated().map { i, e in
+                                    "[\(i+1)] #\(e.id) (\(e.category), importance: \(String(format: "%.1f", e.importance)))\n\(e.text)"
+                                }.joined(separator: "\n\n")
+                        }
+                    }
+
+                case "loa_history":
+                    let memoryID = args["id"] as? Int64 ?? (args["id"] as? Int).map { Int64($0) }
+                    let query = args["query"] as? String
+
+                    var targetID: Int64?
+                    if let memoryID {
+                        targetID = memoryID
+                    } else if let query, !query.isEmpty {
+                        let matches = await MemoryIndex.shared.hybridSearch(query: query, topK: 1)
+                        targetID = matches.first?.id
+                    }
+
+                    guard let targetID else {
+                        content = "Provide a memory ID or search query to see its version history."
+                        results.append(["role": "tool", "tool_call_id": id, "content": content])
+                        continue
+                    }
+
+                    let versions = await MemoryIndex.shared.versions(for: targetID)
+                    if versions.isEmpty {
+                        content = "Memory #\(targetID) has no version history — it hasn't been modified."
+                    } else {
+                        content = "📜 Version History for Memory #\(targetID) (\(versions.count) changes):\n\n" +
+                            versions.enumerated().map { i, v in
+                                "[\(i+1)] Changed: \(v.changedAt) | Reason: \(v.changeReason ?? "unknown")\nPrevious: \(v.previousText)\n(importance was \(String(format: "%.1f", v.previousImportance)))"
+                            }.joined(separator: "\n\n")
+                    }
+
+                case "loa_graph":
+                    let entity = args["entity"] as? String ?? ""
+                    let depth = args["depth"] as? Int ?? 2
+                    guard !entity.isEmpty else {
+                        content = "Provide an entity name to query the knowledge graph."
+                        results.append(["role": "tool", "tool_call_id": id, "content": content])
+                        continue
+                    }
+
+                    let rels = await EntityGraph.shared.subgraph(entity: entity, depth: depth)
+                    if rels.isEmpty {
+                        content = "No relationships found for entity: \(entity)"
+                    } else {
+                        content = "🕸️ Knowledge Graph — \(entity) (\(rels.count) relationships):\n\n" +
+                            rels.map { r in
+                                "\(r.subjectEntity) —[\(r.predicate)]→ \(r.objectEntity) (confidence: \(String(format: "%.1f", r.confidence)))"
+                            }.joined(separator: "\n")
+                    }
+
                 // GUI automation tools (macOS only)
                 #if os(macOS)
                 case "open_file":

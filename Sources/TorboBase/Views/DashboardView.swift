@@ -81,7 +81,7 @@ struct DashboardView: View {
                 .padding(.horizontal, 12)
                 .padding(.bottom, 12)
             }
-            .frame(minWidth: 160, maxWidth: 180)
+            .frame(minWidth: 160, maxWidth: 300)
             .background(Color(nsColor: NSColor(red: 0.06, green: 0.06, blue: 0.08, alpha: 1)))
         } detail: {
             // Content area
@@ -91,12 +91,18 @@ struct DashboardView: View {
                     HomeView()
                 case .agents:
                     AgentsView()
+                case .conversations:
+                    ConversationsView()
+                case .chambers:
+                    ChamberView()
+                case .jobs:
+                    JobsView()
+                case .calendar:
+                    CalendarDashboardView()
                 case .skills:
                     SkillsView()
                 case .models:
                     ModelsView()
-                case .spaces:
-                    SpacesView()
                 case .security:
                     SecurityView()
                 case .settings:
@@ -1224,6 +1230,8 @@ struct SettingsView: View {
     @State private var discordExpanded = false
     @State private var slackExpanded = false
     @State private var whatsappExpanded = false
+    @State private var emailExpanded = false
+    @State private var moreBridgesExpanded = false
     @State private var signalExpanded = false
     @State private var imessageExpanded = false
     @State private var sandboxExpanded = false
@@ -1565,27 +1573,66 @@ struct SettingsView: View {
                 }
                 .accentColor(.white.opacity(0.3))
 
-                DisclosureGroup(isExpanded: $signalExpanded) {
+                DisclosureGroup(isExpanded: $emailExpanded) {
                     VStack(alignment: .leading, spacing: 8) {
-                        Text("Requires signal-cli REST API running locally")
+                        Text("Uses AppleScript to send via Mail.app (macOS only)")
                             .font(.system(size: 11))
                             .foregroundStyle(.white.opacity(0.3))
-                        channelConfigRow(label: "Phone #", value: Binding(
-                            get: { state.signalPhoneNumber ?? "" },
-                            set: { state.signalPhoneNumber = $0.isEmpty ? nil : $0 }
-                        ))
-                        channelConfigRow(label: "API URL", value: Binding(
-                            get: { state.signalAPIURL ?? "" },
-                            set: { state.signalAPIURL = $0.isEmpty ? nil : $0 }
-                        ))
+                        Text("Email bridge is available via the email_send agent tool.")
+                            .font(.system(size: 11))
+                            .foregroundStyle(.white.opacity(0.4))
                     }
                     .padding(.top, 8)
                 } label: {
-                    Label("SIGNAL", systemImage: "lock.shield.fill")
+                    Label("EMAIL", systemImage: "envelope.fill")
                         .font(.system(size: 10, weight: .bold, design: .monospaced))
                         .foregroundStyle(.white.opacity(0.3))
                 }
                 .accentColor(.white.opacity(0.3))
+
+                // Optional bridges — behind expand button
+                DisclosureGroup(isExpanded: $moreBridgesExpanded) {
+                    VStack(alignment: .leading, spacing: 12) {
+                        DisclosureGroup(isExpanded: $signalExpanded) {
+                            VStack(alignment: .leading, spacing: 8) {
+                                Text("Requires signal-cli REST API running locally")
+                                    .font(.system(size: 11))
+                                    .foregroundStyle(.white.opacity(0.3))
+                                channelConfigRow(label: "Phone #", value: Binding(
+                                    get: { state.signalPhoneNumber ?? "" },
+                                    set: { state.signalPhoneNumber = $0.isEmpty ? nil : $0 }
+                                ))
+                                channelConfigRow(label: "API URL", value: Binding(
+                                    get: { state.signalAPIURL ?? "" },
+                                    set: { state.signalAPIURL = $0.isEmpty ? nil : $0 }
+                                ))
+                            }
+                            .padding(.top, 8)
+                        } label: {
+                            Label("SIGNAL", systemImage: "lock.shield.fill")
+                                .font(.system(size: 10, weight: .bold, design: .monospaced))
+                                .foregroundStyle(.white.opacity(0.3))
+                        }
+                        .accentColor(.white.opacity(0.3))
+
+                        optionalBridgeStub("IMESSAGE", icon: "message.fill", note: "Coming soon — requires SIP/Automation entitlement")
+                        optionalBridgeStub("HOME ASSISTANT", icon: "house.fill", note: "Coming soon — HTTP webhook integration")
+                        optionalBridgeStub("GOOGLE CHAT", icon: "bubble.left.fill", note: "Coming soon — Google Workspace API")
+                        optionalBridgeStub("MATRIX", icon: "grid", note: "Coming soon — Matrix/Element protocol")
+                        optionalBridgeStub("TEAMS", icon: "person.2.fill", note: "Coming soon — Microsoft Graph API")
+                        optionalBridgeStub("SMS", icon: "text.bubble.fill", note: "Coming soon — Twilio or carrier API")
+                    }
+                    .padding(.top, 8)
+                } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: "plus.circle")
+                            .font(.system(size: 10))
+                        Text("7 MORE BRIDGES")
+                            .font(.system(size: 10, weight: .bold, design: .monospaced))
+                    }
+                    .foregroundStyle(.white.opacity(0.25))
+                }
+                .accentColor(.white.opacity(0.25))
 
                 // MARK: Sandbox & Security
                 DisclosureGroup(isExpanded: $sandboxExpanded) {
@@ -1982,6 +2029,19 @@ struct SettingsView: View {
                     .cornerRadius(4)
             }
         }
+    }
+
+    private func optionalBridgeStub(_ name: String, icon: String, note: String) -> some View {
+        HStack(spacing: 8) {
+            Label(name, systemImage: icon)
+                .font(.system(size: 10, weight: .bold, design: .monospaced))
+                .foregroundStyle(.white.opacity(0.2))
+            Spacer()
+            Text(note)
+                .font(.system(size: 9, design: .monospaced))
+                .foregroundStyle(.white.opacity(0.15))
+        }
+        .padding(.vertical, 4)
     }
 
     private func applyPort() {

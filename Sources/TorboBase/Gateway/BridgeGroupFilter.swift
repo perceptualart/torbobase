@@ -54,6 +54,31 @@ enum BridgeGroupFilter {
             return FilterResult(shouldProcess: true, cleanedText: text)
         case .whatsapp:
             return filterWhatsApp(text: text)
+        case .imessage, .email, .sms:
+            // Inherently 1:1 — always process
+            return FilterResult(shouldProcess: true, cleanedText: text)
+        case .teams:
+            // Teams uses @mention in entities — handled by TeamsBridge before reaching filter
+            if containsTriggerKeyword(text) {
+                return FilterResult(shouldProcess: true, cleanedText: text)
+            }
+            return FilterResult(shouldProcess: false, cleanedText: text)
+        case .googlechat:
+            // Google Chat uses annotations for mentions — handled by GoogleChatBridge
+            if containsTriggerKeyword(text) {
+                return FilterResult(shouldProcess: true, cleanedText: text)
+            }
+            return FilterResult(shouldProcess: false, cleanedText: text)
+        case .matrix:
+            // Check for @bot:server mention in body
+            if !botIdentifier.isEmpty && text.contains(botIdentifier) {
+                let cleaned = text.replacingOccurrences(of: botIdentifier, with: "").trimmingCharacters(in: .whitespacesAndNewlines)
+                return FilterResult(shouldProcess: true, cleanedText: cleaned)
+            }
+            if containsTriggerKeyword(text) {
+                return FilterResult(shouldProcess: true, cleanedText: text)
+            }
+            return FilterResult(shouldProcess: false, cleanedText: text)
         }
     }
 

@@ -124,6 +124,12 @@ actor WhatsAppBridge {
                           let from = message["from"] as? String else { continue }
 
                     TorboLog.info("Received from +\(from): \(text.prefix(100))", subsystem: "WhatsApp")
+
+                    // Identity resolution
+                    let _ = await UserIdentity.shared.resolve(
+                        platform: "whatsapp", platformUserID: from
+                    )
+
                     await handleIncomingMessage(text, from: from)
                 }
             }

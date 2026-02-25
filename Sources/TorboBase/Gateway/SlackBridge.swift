@@ -160,6 +160,14 @@ actor SlackBridge {
 
             lastTimestamp = ts
             TorboLog.info("Received from \(user): \(text.prefix(100))", subsystem: "Slack")
+
+            // Identity resolution
+            if !user.isEmpty {
+                let _ = await UserIdentity.shared.resolve(
+                    platform: "slack", platformUserID: user, username: nil
+                )
+            }
+
             await handleIncomingMessage(text, threadTS: ts)
         }
     }

@@ -4,6 +4,22 @@
 // Conversation persistence — stores messages and sessions to disk
 import Foundation
 
+// MARK: - Agent Chat Message (Codable, per-agent persistence)
+
+struct AgentChatMessage: Identifiable, Codable {
+    let id: UUID
+    let role: String
+    let content: String
+    let timestamp: Date
+
+    init(role: String, content: String, timestamp: Date = Date()) {
+        self.id = UUID()
+        self.role = role
+        self.content = content
+        self.timestamp = timestamp
+    }
+}
+
 /// Manages persistent storage of conversations on disk.
 /// Data lives in ~/Library/Application Support/TorboBase/
 actor ConversationStore {
@@ -239,5 +255,62 @@ actor ConversationStore {
         let f = DateFormatter()
         f.dateFormat = "yyyy-MM-dd-HHmmss"
         return f.string(from: Date())
+    }
+
+    // MARK: - Per-Agent Chat Persistence
+
+    private var agentChatsDir: URL {
+        storageDir.appendingPathComponent("agent_chats", isDirectory: true)
+    }
+
+    private func ensureAgentChatsDir() {
+        if !FileManager.default.fileExists(atPath: agentChatsDir.path) {
+            try? FileManager.default.createDirectory(at: agentChatsDir, withIntermediateDirectories: true)
+        }
+    }
+
+    /// Save chat messages for a specific agent + session
+    func saveAgentChat(agentID: String, sessionID: UUID, messages: [AgentChatMessage]) {
+        ensureAgentChatsDir()
+        let file = agentChatsDir.appendingPathComponent("\(agentID)_\(sessionID.uuidString).json")
+        do {
+            let data = try encoder.encode(messages)
+            try data.write(to: file, options: .atomic)
+        } catch {
+            TorboLog.error("Failed to save agent chat \(agentID)/\(sessionID): \(error)", subsystem: "ConvStore")
+        }
+    }
+
+    /// Load chat messages for a specific agent + session
+    func loadAgentChat(agentID: String, sessionID: UUID) -> [AgentChatMessage] {
+        let file = agentChatsDir.appendingPathComponent("\(agentID)_\(sessionID.uuidString).json")
+        guard FileManager.default.fileExists(atPath: file.path) else { return [] }
+        do {
+            let data = try Data(contentsOf: file)
+            return try decoder.decode([AgentChatMessage].self, from: data)
+        } catch {
+            TorboLog.error("Failed to load agent chat \(agentID)/\(sessionID): \(error)", subsystem: "ConvStore")
+            return []
+        }
+    }
+
+    /// Load sessions filtered by agent ID
+    func loadSessions(forAgent agentID: String) -> [ConversationSession] {
+        let all = loadSessions()
+        return all.filter { $0.agentID == agentID }
+            .sorted { $0.lastActivity > $1.lastActivity }
+    }
+
+    /// Load all sessions grouped by agent ID
+    func loadSessionsGroupedByAgent() -> [String: [ConversationSession]] {
+        let all = loadSessions()
+        var grouped: [String: [ConversationSession]] = [:]
+        for session in all {
+            grouped[session.agentID, default: []].append(session)
+        }
+        for key in grouped.keys {
+            grouped[key]?.sort { $0.lastActivity > $1.lastActivity }
+        }
+        return grouped
     }
 }

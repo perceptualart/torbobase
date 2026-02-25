@@ -116,14 +116,28 @@ struct ConversationSession: Identifiable, Codable {
     var messageCount: Int
     var model: String
     var title: String
+    var agentID: String
 
-    init(model: String = "unknown") {
+    init(model: String = "unknown", agentID: String = "sid") {
         self.id = UUID()
         self.startedAt = Date()
         self.lastActivity = Date()
         self.messageCount = 0
         self.model = model
         self.title = "New Session"
+        self.agentID = agentID
+    }
+
+    // Backward compat: old sessions without agentID default to "sid"
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(UUID.self, forKey: .id)
+        startedAt = try c.decode(Date.self, forKey: .startedAt)
+        lastActivity = try c.decode(Date.self, forKey: .lastActivity)
+        messageCount = try c.decode(Int.self, forKey: .messageCount)
+        model = try c.decode(String.self, forKey: .model)
+        title = try c.decode(String.self, forKey: .title)
+        agentID = try c.decodeIfPresent(String.self, forKey: .agentID) ?? "sid"
     }
 }
 
@@ -555,6 +569,25 @@ final class AppState: _TorboObservable {
     // Navigation
     var currentTab: DashboardTab = .home { willSet { willChangeUI() } }
 
+    // Voice
+    var voiceEnabled: Bool = false { willSet { willChangeUI() } }
+    var voiceEngineType: String = "system" {
+        willSet { willChangeUI() }
+        didSet { UserDefaults.standard.set(voiceEngineType, forKey: "torboVoiceEngine") }
+    }
+    var elevenLabsVoiceID: String = "" {
+        willSet { willChangeUI() }
+        didSet { UserDefaults.standard.set(elevenLabsVoiceID, forKey: "torboElevenLabsVoiceID") }
+    }
+    var autoListen: Bool = true {
+        willSet { willChangeUI() }
+        didSet { UserDefaults.standard.set(autoListen, forKey: "torboAutoListen") }
+    }
+    var silenceThreshold: Double = 0.5 {
+        willSet { willChangeUI() }
+        didSet { UserDefaults.standard.set(silenceThreshold, forKey: "torboSilenceThreshold") }
+    }
+
     // Computed
     var localIP: String {
         Self.getLocalIP() ?? "127.0.0.1"
@@ -589,6 +622,12 @@ final class AppState: _TorboObservable {
         }
         self.serverToken = AppConfig.serverToken
 
+        // Load voice settings
+        let defaults = UserDefaults.standard
+        self.voiceEngineType = defaults.string(forKey: "torboVoiceEngine") ?? "system"
+        self.elevenLabsVoiceID = defaults.string(forKey: "torboElevenLabsVoiceID") ?? ""
+        self.autoListen = defaults.object(forKey: "torboAutoListen") == nil ? true : defaults.bool(forKey: "torboAutoListen")
+        self.silenceThreshold = defaults.object(forKey: "torboSilenceThreshold") == nil ? 0.5 : defaults.double(forKey: "torboSilenceThreshold")
     }
 
     func addAuditEntry(_ entry: AuditEntry) {
@@ -710,9 +749,12 @@ final class AppState: _TorboObservable {
 enum DashboardTab: String, CaseIterable {
     case home = "Home"
     case agents = "Agents"
+    case conversations = "Conversations"
+    case chambers = "Chambers"
+    case jobs = "Jobs"
+    case calendar = "Calendar"
     case skills = "Skills"
     case models = "Models"
-    case spaces = "Conversations"
     case security = "Security"
     case settings = "Settings"
 
@@ -720,9 +762,12 @@ enum DashboardTab: String, CaseIterable {
         switch self {
         case .home: return "circle.hexagongrid.fill"
         case .agents: return "person.2.fill"
+        case .conversations: return "bubble.left.and.bubble.right.fill"
+        case .chambers: return "person.3.sequence.fill"
+        case .jobs: return "point.3.connected.trianglepath.dotted"
+        case .calendar: return "calendar"
         case .skills: return "puzzlepiece.fill"
         case .models: return "cube.fill"
-        case .spaces: return "bubble.left.and.bubble.right.fill"
         case .security: return "shield.checkered"
         case .settings: return "gearshape.fill"
         }
@@ -732,9 +777,12 @@ enum DashboardTab: String, CaseIterable {
         switch self {
         case .home: return "dashboard"
         case .agents: return "agents"
+        case .conversations: return "conversations"
+        case .chambers: return "chambers"
+        case .jobs: return "jobs"
+        case .calendar: return "calendar"
         case .skills: return "skills"
         case .models: return "models"
-        case .spaces: return "conversations"
         case .security: return "security"
         case .settings: return "settings"
         }

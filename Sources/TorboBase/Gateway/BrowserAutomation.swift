@@ -39,6 +39,12 @@ actor BrowserAutomation {
     private var serverPort: Int = 3100
     private var isServerRunning = false
 
+    /// Use CDP (Chrome DevTools Protocol) as primary engine when available.
+    /// Falls back to Playwright when Chrome isn't running.
+    private var useCDP: Bool = true
+    private var cdpChecked: Bool = false
+    private var cdpAvailable: Bool = false
+
     init() {
         let config = URLSessionConfiguration.default
         config.timeoutIntervalForRequest = 60
@@ -52,7 +58,8 @@ actor BrowserAutomation {
 
     // MARK: - Execute Browser Actions
 
-    /// Execute a browser action by generating and running a Playwright script.
+    /// Execute a browser action. Routes through CDP when Chrome is available,
+    /// falls back to Playwright script execution otherwise.
     /// All URLs are validated against SSRF blocklist before execution.
     func execute(action: BrowserAction, params: [String: Any]) async -> BrowserResult {
         // SSRF protection — block private IPs, file://, metadata endpoints
@@ -63,6 +70,244 @@ actor BrowserAutomation {
             }
         }
 
+        // Try CDP first (persistent browser session — faster)
+        if useCDP {
+            if !cdpChecked {
+                cdpAvailable = await CDPClient.shared.isAvailable()
+                if !cdpAvailable {
+                    // Try launching Chrome headless
+                    cdpAvailable = await CDPClient.shared.launchBrowser(headless: true)
+                    if cdpAvailable {
+                        cdpAvailable = await CDPClient.shared.connect()
+                    }
+                } else {
+                    // Chrome is running — ensure we're connected
+                    let connected = await CDPClient.shared.connect()
+                    cdpAvailable = connected
+                }
+                cdpChecked = true
+                if cdpAvailable {
+                    TorboLog.info("Using CDP (Chrome DevTools Protocol) as browser engine", subsystem: "Browser")
+                }
+            }
+
+            if cdpAvailable {
+                let result = await executeCDP(action: action, params: params)
+                if !result.error.contains("Not connected") {
+                    return result
+                }
+                // CDP connection lost — fall back to Playwright
+                cdpAvailable = false
+                cdpChecked = false
+                TorboLog.warn("CDP connection lost, falling back to Playwright", subsystem: "Browser")
+            }
+        }
+
+        // Playwright fallback
+        return await executePlaywright(action: action, params: params)
+    }
+
+    // MARK: - CDP Backend
+
+    /// Execute a browser action via Chrome DevTools Protocol.
+    /// Persistent browser session — no cold start, much faster.
+    private func executeCDP(action: BrowserAction, params: [String: Any]) async -> BrowserResult {
+        let startTime = Date()
+        sessionCount += 1
+        let url = params["url"] as? String ?? "about:blank"
+        let selector = params["selector"] as? String ?? "body"
+
+        do {
+            switch action {
+            case .navigate:
+                let result = await CDPClient.shared.navigate(url: url)
+                if result["error"] != nil {
+                    let executionTime = Date().timeIntervalSince(startTime)
+                    return BrowserResult(success: false, output: "", error: result["error"] as? String ?? "Navigation failed", files: [], executionTime: executionTime)
+                }
+                try? await Task.sleep(nanoseconds: 500_000_000) // wait for load
+                let title = await CDPClient.shared.getPageTitle()
+                let currentURL = await CDPClient.shared.getCurrentURL()
+                let json: [String: Any] = ["title": title, "url": currentURL, "status": "navigated"]
+                let output = jsonString(json)
+                let executionTime = Date().timeIntervalSince(startTime)
+                return BrowserResult(success: true, output: output, error: "", files: [], executionTime: executionTime)
+
+            case .screenshot:
+                let _ = await CDPClient.shared.navigate(url: url)
+                try? await Task.sleep(nanoseconds: 1_000_000_000) // wait for render
+                let fullPage = params["fullPage"] as? Bool ?? false
+                guard let imageData = await CDPClient.shared.captureScreenshot(fullPage: fullPage) else {
+                    let executionTime = Date().timeIntervalSince(startTime)
+                    return BrowserResult(success: false, output: "", error: "Screenshot capture failed", files: [], executionTime: executionTime)
+                }
+                // Save to temp file
+                let workDir = "\(baseDir)/session_cdp_\(sessionCount)"
+                try? FileManager.default.createDirectory(atPath: workDir, withIntermediateDirectories: true)
+                let filePath = "\(workDir)/screenshot.png"
+                try imageData.write(to: URL(fileURLWithPath: filePath))
+                let json: [String: Any] = ["file": filePath, "status": "captured"]
+                let output = jsonString(json)
+                let executionTime = Date().timeIntervalSince(startTime)
+                // Schedule cleanup
+                Task {
+                    try? await Task.sleep(nanoseconds: 1800 * 1_000_000_000)
+                    try? FileManager.default.removeItem(atPath: workDir)
+                }
+                return BrowserResult(success: true, output: output, error: "", files: [BrowserFile(name: "screenshot.png", path: filePath, size: imageData.count)], executionTime: executionTime)
+
+            case .click:
+                let _ = await CDPClient.shared.navigate(url: url)
+                try? await Task.sleep(nanoseconds: 500_000_000)
+                let clicked = await CDPClient.shared.click(selector: selector)
+                try? await Task.sleep(nanoseconds: 500_000_000) // wait for any navigation
+                let title = await CDPClient.shared.getPageTitle()
+                let currentURL = await CDPClient.shared.getCurrentURL()
+                let json: [String: Any] = ["title": title, "url": currentURL, "status": clicked ? "clicked" : "element_not_found", "selector": selector]
+                let output = jsonString(json)
+                let executionTime = Date().timeIntervalSince(startTime)
+                return BrowserResult(success: clicked, output: output, error: clicked ? "" : "Element not found: \(selector)", files: [], executionTime: executionTime)
+
+            case .type:
+                let text = params["text"] as? String ?? ""
+                let _ = await CDPClient.shared.navigate(url: url)
+                try? await Task.sleep(nanoseconds: 500_000_000)
+                await CDPClient.shared.typeText(text, selector: selector)
+                let json: [String: Any] = ["status": "typed", "selector": selector, "text": text]
+                let output = jsonString(json)
+                let executionTime = Date().timeIntervalSince(startTime)
+                return BrowserResult(success: true, output: output, error: "", files: [], executionTime: executionTime)
+
+            case .extract:
+                let _ = await CDPClient.shared.navigate(url: url)
+                try? await Task.sleep(nanoseconds: 1_000_000_000) // wait for content
+                let content: String
+                if selector == "body" {
+                    content = await CDPClient.shared.getPageText()
+                } else {
+                    let result = await CDPClient.shared.evaluateJS("""
+                        (() => {
+                            const el = document.querySelector('\(selector.replacingOccurrences(of: "'", with: "\\'"))');
+                            return el ? (el.innerText || el.textContent || '') : '[Element not found]';
+                        })()
+                        """)
+                    if let resultObj = result["result"] as? [String: Any],
+                       let value = resultObj["value"] as? String {
+                        content = value
+                    } else {
+                        content = "[Extraction failed]"
+                    }
+                }
+                let title = await CDPClient.shared.getPageTitle()
+                let currentURL = await CDPClient.shared.getCurrentURL()
+                // Get links
+                let linksResult = await CDPClient.shared.evaluateJS("""
+                    JSON.stringify(Array.from(document.querySelectorAll('a[href]')).slice(0, 20).map(a => ({
+                        text: (a.innerText || '').trim().substring(0, 100),
+                        href: a.href
+                    })).filter(l => l.text && l.href.startsWith('http')))
+                    """)
+                var links: [[String: Any]] = []
+                if let resultObj = linksResult["result"] as? [String: Any],
+                   let linksJSON = resultObj["value"] as? String,
+                   let linksData = linksJSON.data(using: .utf8),
+                   let parsed = try? JSONSerialization.jsonObject(with: linksData) as? [[String: Any]] {
+                    links = parsed
+                }
+                let json: [String: Any] = ["title": title, "content": String(content.prefix(10000)), "links": links, "url": currentURL]
+                let output = jsonString(json)
+                let executionTime = Date().timeIntervalSince(startTime)
+                return BrowserResult(success: true, output: output, error: "", files: [], executionTime: executionTime)
+
+            case .evaluate:
+                let jsCode = params["javascript"] as? String ?? ""
+                let _ = await CDPClient.shared.navigate(url: url)
+                try? await Task.sleep(nanoseconds: 500_000_000)
+                let result = await CDPClient.shared.evaluateJS(jsCode)
+                let json: [String: Any] = ["result": result["result"] ?? [:], "status": "evaluated"]
+                let output = jsonString(json)
+                let executionTime = Date().timeIntervalSince(startTime)
+                return BrowserResult(success: true, output: output, error: "", files: [], executionTime: executionTime)
+
+            case .waitFor:
+                let _ = await CDPClient.shared.navigate(url: url)
+                let found = await CDPClient.shared.waitFor(selector: selector, timeoutMs: 15000)
+                let json: [String: Any] = ["found": found, "selector": selector, "status": "waited"]
+                let output = jsonString(json)
+                let executionTime = Date().timeIntervalSince(startTime)
+                return BrowserResult(success: found, output: output, error: found ? "" : "Selector not found: \(selector)", files: [], executionTime: executionTime)
+
+            case .scroll:
+                let direction = params["direction"] as? String ?? "down"
+                let amount = params["amount"] as? Int ?? 500
+                let _ = await CDPClient.shared.navigate(url: url)
+                try? await Task.sleep(nanoseconds: 500_000_000)
+                await CDPClient.shared.scroll(direction: direction, amount: amount)
+                let json: [String: Any] = ["status": "scrolled", "direction": direction]
+                let output = jsonString(json)
+                let executionTime = Date().timeIntervalSince(startTime)
+                return BrowserResult(success: true, output: output, error: "", files: [], executionTime: executionTime)
+
+            case .select:
+                let value = params["value"] as? String ?? ""
+                let _ = await CDPClient.shared.navigate(url: url)
+                try? await Task.sleep(nanoseconds: 500_000_000)
+                let result = await CDPClient.shared.evaluateJS("""
+                    (() => {
+                        const el = document.querySelector('\(selector.replacingOccurrences(of: "'", with: "\\'"))');
+                        if (el) { el.value = '\(value.replacingOccurrences(of: "'", with: "\\'"))'; el.dispatchEvent(new Event('change')); return true; }
+                        return false;
+                    })()
+                    """)
+                let selected = (result["result"] as? [String: Any])?["value"] as? Bool ?? false
+                let json: [String: Any] = ["status": selected ? "selected" : "element_not_found", "selector": selector, "value": value]
+                let output = jsonString(json)
+                let executionTime = Date().timeIntervalSince(startTime)
+                return BrowserResult(success: selected, output: output, error: selected ? "" : "Element not found: \(selector)", files: [], executionTime: executionTime)
+
+            case .pdf:
+                // PDF generation requires Playwright's built-in support — CDP's printToPDF
+                let _ = await CDPClient.shared.navigate(url: url)
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+                let pdfResult = await CDPClient.shared.sendCommand("Page.printToPDF", params: [
+                    "landscape": false,
+                    "printBackground": true,
+                    "preferCSSPageSize": true
+                ])
+                guard let base64 = pdfResult["data"] as? String,
+                      let pdfData = Data(base64Encoded: base64) else {
+                    let executionTime = Date().timeIntervalSince(startTime)
+                    return BrowserResult(success: false, output: "", error: "PDF generation failed", files: [], executionTime: executionTime)
+                }
+                let workDir = "\(baseDir)/session_cdp_\(sessionCount)"
+                try? FileManager.default.createDirectory(atPath: workDir, withIntermediateDirectories: true)
+                let filePath = "\(workDir)/page.pdf"
+                try pdfData.write(to: URL(fileURLWithPath: filePath))
+                let json: [String: Any] = ["file": filePath, "status": "saved"]
+                let output = jsonString(json)
+                let executionTime = Date().timeIntervalSince(startTime)
+                Task {
+                    try? await Task.sleep(nanoseconds: 1800 * 1_000_000_000)
+                    try? FileManager.default.removeItem(atPath: workDir)
+                }
+                return BrowserResult(success: true, output: output, error: "", files: [BrowserFile(name: "page.pdf", path: filePath, size: pdfData.count)], executionTime: executionTime)
+            }
+        } catch {
+            let executionTime = Date().timeIntervalSince(startTime)
+            return BrowserResult(success: false, output: "", error: "CDP error: \(error)", files: [], executionTime: executionTime)
+        }
+    }
+
+    private func jsonString(_ dict: [String: Any]) -> String {
+        guard let data = try? JSONSerialization.data(withJSONObject: dict),
+              let str = String(data: data, encoding: .utf8) else { return "{}" }
+        return str
+    }
+
+    // MARK: - Playwright Backend (Fallback)
+
+    /// Execute a browser action by generating and running a Playwright script.
+    private func executePlaywright(action: BrowserAction, params: [String: Any]) async -> BrowserResult {
         let startTime = Date()
         sessionCount += 1
         let sessionID = "\(sessionCount)_\(UUID().uuidString.prefix(8))"
@@ -84,7 +329,7 @@ actor BrowserAutomation {
         // Collect any generated files (screenshots, PDFs)
         let generatedFiles = collectFiles(in: workDir, excluding: ["script.js"])
 
-        TorboLog.info("\(action.rawValue) completed in \(String(format: "%.1f", executionTime))s — exit: \(result.exitCode)", subsystem: "Browser")
+        TorboLog.info("\(action.rawValue) completed in \(String(format: "%.1f", executionTime))s — exit: \(result.exitCode) (Playwright)", subsystem: "Browser")
 
         // Schedule cleanup (keep files for 30 minutes)
         Task {

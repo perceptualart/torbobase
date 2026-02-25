@@ -34,6 +34,8 @@ struct AgentConfig: Codable, Equatable, Identifiable {
     // Voice (TTS)
     var elevenLabsVoiceID: String
     var fallbackTTSVoice: String
+    var voiceEngine: String             // "system" or "elevenlabs"
+    var systemVoiceIdentifier: String   // AVSpeechSynthesisVoice identifier
 
     // Permissions
     var accessLevel: Int                // 0–5, capped by global level
@@ -59,6 +61,7 @@ struct AgentConfig: Codable, Equatable, Identifiable {
          voiceTone: String, personalityPreset: String, coreValues: String, topicsToAvoid: String,
          customInstructions: String, backgroundKnowledge: String,
          elevenLabsVoiceID: String, fallbackTTSVoice: String,
+         voiceEngine: String = "system", systemVoiceIdentifier: String = "",
          accessLevel: Int, directoryScopes: [String], enabledSkillIDs: [String],
          enabledCapabilities: [String: Bool] = [:], preferredModel: String = "",
          dailyTokenLimit: Int = 0, weeklyTokenLimit: Int = 0, monthlyTokenLimit: Int = 0,
@@ -69,6 +72,7 @@ struct AgentConfig: Codable, Equatable, Identifiable {
         self.coreValues = coreValues; self.topicsToAvoid = topicsToAvoid
         self.customInstructions = customInstructions; self.backgroundKnowledge = backgroundKnowledge
         self.elevenLabsVoiceID = elevenLabsVoiceID; self.fallbackTTSVoice = fallbackTTSVoice
+        self.voiceEngine = voiceEngine; self.systemVoiceIdentifier = systemVoiceIdentifier
         self.accessLevel = accessLevel; self.directoryScopes = directoryScopes
         self.enabledSkillIDs = enabledSkillIDs; self.enabledCapabilities = enabledCapabilities
         self.preferredModel = preferredModel
@@ -83,7 +87,7 @@ struct AgentConfig: Codable, Equatable, Identifiable {
         case id, isBuiltIn, createdAt, name, pronouns, role
         case voiceTone, personalityPreset, coreValues, topicsToAvoid
         case customInstructions, backgroundKnowledge
-        case elevenLabsVoiceID, fallbackTTSVoice
+        case elevenLabsVoiceID, fallbackTTSVoice, voiceEngine, systemVoiceIdentifier
         case accessLevel, directoryScopes, enabledSkillIDs, enabledCapabilities, preferredModel
         case dailyTokenLimit, weeklyTokenLimit, monthlyTokenLimit, hardStopOnBudget
         case lastModifiedAt
@@ -105,6 +109,8 @@ struct AgentConfig: Codable, Equatable, Identifiable {
         backgroundKnowledge = try c.decode(String.self, forKey: .backgroundKnowledge)
         elevenLabsVoiceID = try c.decode(String.self, forKey: .elevenLabsVoiceID)
         fallbackTTSVoice = try c.decode(String.self, forKey: .fallbackTTSVoice)
+        voiceEngine = try c.decodeIfPresent(String.self, forKey: .voiceEngine) ?? "system"
+        systemVoiceIdentifier = try c.decodeIfPresent(String.self, forKey: .systemVoiceIdentifier) ?? ""
         accessLevel = try c.decode(Int.self, forKey: .accessLevel)
         directoryScopes = try c.decode([String].self, forKey: .directoryScopes)
         enabledSkillIDs = try c.decode([String].self, forKey: .enabledSkillIDs)

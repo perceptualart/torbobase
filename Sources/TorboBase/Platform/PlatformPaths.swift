@@ -60,6 +60,9 @@ enum PlatformPaths {
     /// Briefings storage directory.
     static var briefingsDir: String { dataDir + "/briefings" }
 
+    /// FileVault directory — temporary storage for generated files with signed download URLs.
+    static var fileVaultDir: String { dataDir + "/filevault" }
+
     // MARK: - Files
 
     /// Task queue persistence file.
@@ -91,7 +94,7 @@ enum PlatformPaths {
     /// Ensure all required directories exist.
     static func ensureDirectories() {
         let fm = FileManager.default
-        let dirs = [dataDir, configDir, agentsDir, skillsDir, memoryDir, documentsDir, briefingsDir]
+        let dirs = [dataDir, configDir, agentsDir, skillsDir, memoryDir, documentsDir, briefingsDir, fileVaultDir]
         for dir in dirs {
             try? fm.createDirectory(atPath: dir, withIntermediateDirectories: true)
         }

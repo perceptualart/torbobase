@@ -58,6 +58,8 @@ actor MemoryIndex {
         let entities: [String]
         var lastAccessedAt: Date
         var accessCount: Int
+        var pinned: Bool          // Pinned memories exempt from decay
+        var confidence: Float     // 0-1, reliability score
     }
 
     struct SearchResult {
@@ -120,6 +122,25 @@ actor MemoryIndex {
         exec("ALTER TABLE memories ADD COLUMN last_accessed_at TEXT DEFAULT NULL")
         exec("ALTER TABLE memories ADD COLUMN access_count INTEGER DEFAULT 0")
 
+        // Phase 2 — The River: pinning, versioning, confidence
+        exec("ALTER TABLE memories ADD COLUMN pinned INTEGER DEFAULT 0")
+        exec("ALTER TABLE memories ADD COLUMN pinned_by TEXT")
+        exec("ALTER TABLE memories ADD COLUMN pinned_at TEXT")
+        exec("ALTER TABLE memories ADD COLUMN confidence REAL DEFAULT 0.8")
+
+        // Memory version history table (fact versioning)
+        exec("""
+            CREATE TABLE IF NOT EXISTS memory_versions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                memory_id INTEGER NOT NULL REFERENCES memories(id),
+                previous_text TEXT NOT NULL,
+                previous_importance REAL NOT NULL,
+                changed_at TEXT NOT NULL,
+                change_reason TEXT
+            )
+        """)
+        exec("CREATE INDEX IF NOT EXISTS idx_versions_memory ON memory_versions(memory_id)")
+
         // Load all entries into memory for fast search
         await loadAllEntries()
 
@@ -171,7 +192,8 @@ actor MemoryIndex {
             entries.append(IndexEntry(
                 id: id, text: text, category: category, source: source,
                 timestamp: timestamp, embedding: embedding, importance: importance,
-                entities: [], lastAccessedAt: Date(), accessCount: 0
+                entities: [], lastAccessedAt: Date(), accessCount: 0,
+                pinned: false, confidence: 0.8
             ))
             bm25.addEntry(id: id, text: text)
 
@@ -226,8 +248,9 @@ actor MemoryIndex {
 
             let similarity = cosineSimilarity(queryEmbedding, entry.embedding)
 
-            // Boost by importance (0.7 * similarity + 0.3 * importance)
-            let boostedScore = similarity * 0.7 + entry.importance * 0.3
+            // Score: similarity + importance + confidence + temporal boost + access boost
+            let accessBoost = min(Float(entry.accessCount) * 0.005, 0.1)
+            let boostedScore = similarity * 0.5 + entry.importance * 0.2 + entry.confidence * 0.2 + accessBoost
 
             var finalScore = boostedScore
             // Temporal boost: recent memories get a small boost, very old get a slight penalty
@@ -445,7 +468,8 @@ actor MemoryIndex {
                                      source: old.source, timestamp: old.timestamp,
                                      embedding: old.embedding, importance: clamped,
                                      entities: old.entities, lastAccessedAt: old.lastAccessedAt,
-                                     accessCount: old.accessCount)
+                                     accessCount: old.accessCount,
+                                     pinned: old.pinned, confidence: old.confidence)
         }
     }
 
@@ -469,7 +493,8 @@ actor MemoryIndex {
                                      source: old.source, timestamp: old.timestamp,
                                      embedding: old.embedding, importance: 0.1,
                                      entities: old.entities, lastAccessedAt: old.lastAccessedAt,
-                                     accessCount: old.accessCount)
+                                     accessCount: old.accessCount,
+                                     pinned: old.pinned, confidence: 0.2)
         }
     }
 
@@ -500,6 +525,145 @@ actor MemoryIndex {
         sqlite3_finalize(stmt)
         entries.removeAll { $0.importance < importance }
         TorboLog.info("Purged \(toRemove.count) low-importance memories", subsystem: "LoA·Index")
+    }
+
+    // MARK: - Pinning
+
+    /// Pin a memory so it's exempt from decay and always included in context.
+    func pin(id: Int64, by: String = "user") {
+        guard let db else { return }
+        let sql = "UPDATE memories SET pinned = 1, pinned_by = ?, pinned_at = ? WHERE id = ?"
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return }
+        defer { sqlite3_finalize(stmt) }
+
+        let SQLITE_TRANSIENT = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
+        let now = ISO8601DateFormatter().string(from: Date())
+        sqlite3_bind_text(stmt, 1, (by as NSString).utf8String, -1, SQLITE_TRANSIENT)
+        sqlite3_bind_text(stmt, 2, (now as NSString).utf8String, -1, SQLITE_TRANSIENT)
+        sqlite3_bind_int64(stmt, 3, id)
+        sqlite3_step(stmt)
+
+        // Update in-memory cache
+        if let idx = entries.firstIndex(where: { $0.id == id }) {
+            entries[idx].pinned = true
+        }
+        TorboLog.info("Pinned memory #\(id) by \(by)", subsystem: "LoA·Index")
+    }
+
+    /// Unpin a memory, making it subject to normal decay again.
+    func unpin(id: Int64) {
+        guard let db else { return }
+        let sql = "UPDATE memories SET pinned = 0, pinned_by = NULL, pinned_at = NULL WHERE id = ?"
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return }
+        defer { sqlite3_finalize(stmt) }
+        sqlite3_bind_int64(stmt, 1, id)
+        sqlite3_step(stmt)
+
+        if let idx = entries.firstIndex(where: { $0.id == id }) {
+            entries[idx].pinned = false
+        }
+        TorboLog.info("Unpinned memory #\(id)", subsystem: "LoA·Index")
+    }
+
+    /// All pinned memories, sorted by importance.
+    func pinnedMemories() -> [IndexEntry] {
+        return entries.filter { $0.pinned }.sorted { $0.importance > $1.importance }
+    }
+
+    // MARK: - Versioning
+
+    /// Update a memory's text while preserving the old version in history.
+    func updateWithVersion(id: Int64, newText: String, reason: String = "update") {
+        guard let db else { return }
+
+        // Find current text and importance
+        guard let entry = entries.first(where: { $0.id == id }) else { return }
+
+        // Save old version
+        let versionSQL = "INSERT INTO memory_versions (memory_id, previous_text, previous_importance, changed_at, change_reason) VALUES (?, ?, ?, ?, ?)"
+        var vStmt: OpaquePointer?
+        if sqlite3_prepare_v2(db, versionSQL, -1, &vStmt, nil) == SQLITE_OK {
+            let SQLITE_TRANSIENT = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
+            let now = ISO8601DateFormatter().string(from: Date())
+            sqlite3_bind_int64(vStmt, 1, id)
+            sqlite3_bind_text(vStmt, 2, (entry.text as NSString).utf8String, -1, SQLITE_TRANSIENT)
+            sqlite3_bind_double(vStmt, 3, Double(entry.importance))
+            sqlite3_bind_text(vStmt, 4, (now as NSString).utf8String, -1, SQLITE_TRANSIENT)
+            sqlite3_bind_text(vStmt, 5, (reason as NSString).utf8String, -1, SQLITE_TRANSIENT)
+            sqlite3_step(vStmt)
+            sqlite3_finalize(vStmt)
+        }
+
+        // Update the memory text
+        let updateSQL = "UPDATE memories SET text = ?, text_hash = ? WHERE id = ?"
+        var uStmt: OpaquePointer?
+        if sqlite3_prepare_v2(db, updateSQL, -1, &uStmt, nil) == SQLITE_OK {
+            let SQLITE_TRANSIENT = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
+            let hash = textHash(newText)
+            sqlite3_bind_text(uStmt, 1, (newText as NSString).utf8String, -1, SQLITE_TRANSIENT)
+            sqlite3_bind_text(uStmt, 2, (hash as NSString).utf8String, -1, SQLITE_TRANSIENT)
+            sqlite3_bind_int64(uStmt, 3, id)
+            sqlite3_step(uStmt)
+            sqlite3_finalize(uStmt)
+        }
+
+        TorboLog.info("Versioned memory #\(id) — reason: \(reason)", subsystem: "LoA·Index")
+    }
+
+    /// Get version history for a memory.
+    struct MemoryVersion {
+        let id: Int64
+        let memoryID: Int64
+        let previousText: String
+        let previousImportance: Float
+        let changedAt: String
+        let changeReason: String?
+    }
+
+    func versions(for memoryID: Int64) -> [MemoryVersion] {
+        guard let db else { return [] }
+        let sql = "SELECT id, memory_id, previous_text, previous_importance, changed_at, change_reason FROM memory_versions WHERE memory_id = ? ORDER BY id DESC"
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return [] }
+        defer { sqlite3_finalize(stmt) }
+
+        sqlite3_bind_int64(stmt, 1, memoryID)
+
+        var results: [MemoryVersion] = []
+        while sqlite3_step(stmt) == SQLITE_ROW {
+            let id = sqlite3_column_int64(stmt, 0)
+            let mID = sqlite3_column_int64(stmt, 1)
+            let text = sqlite3_column_text(stmt, 2).map { String(cString: $0) } ?? ""
+            let imp = Float(sqlite3_column_double(stmt, 3))
+            let changedAt = sqlite3_column_text(stmt, 4).map { String(cString: $0) } ?? ""
+            let reason = sqlite3_column_text(stmt, 5).map { String(cString: $0) }
+
+            results.append(MemoryVersion(id: id, memoryID: mID, previousText: text,
+                                         previousImportance: imp, changedAt: changedAt,
+                                         changeReason: reason))
+        }
+        return results
+    }
+
+    // MARK: - Confidence
+
+    /// Update a memory's confidence score.
+    func updateConfidence(id: Int64, confidence: Float) {
+        guard let db else { return }
+        let sql = "UPDATE memories SET confidence = ? WHERE id = ?"
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return }
+        defer { sqlite3_finalize(stmt) }
+
+        sqlite3_bind_double(stmt, 1, Double(confidence))
+        sqlite3_bind_int64(stmt, 2, id)
+        sqlite3_step(stmt)
+
+        if let idx = entries.firstIndex(where: { $0.id == id }) {
+            entries[idx].confidence = confidence
+        }
     }
 
     // MARK: - Embeddings via Ollama
@@ -589,7 +753,7 @@ actor MemoryIndex {
     private func loadAllEntries() async {
         guard let db else { return }
 
-        let sql = "SELECT id, text, category, source, timestamp, importance, embedding, entities, last_accessed_at, access_count FROM memories"
+        let sql = "SELECT id, text, category, source, timestamp, importance, embedding, entities, last_accessed_at, access_count, pinned, confidence FROM memories"
         var stmt: OpaquePointer?
         guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return }
         defer { sqlite3_finalize(stmt) }
@@ -637,11 +801,14 @@ actor MemoryIndex {
             }
 
             let accessCount = Int(sqlite3_column_int(stmt, 9))
+            let pinned = sqlite3_column_int(stmt, 10) != 0
+            let confidence = Float(sqlite3_column_double(stmt, 11))
 
             loaded.append(IndexEntry(
                 id: id, text: text, category: category, source: source,
                 timestamp: timestamp, embedding: embedding, importance: importance,
-                entities: entities, lastAccessedAt: lastAccessedAt, accessCount: accessCount
+                entities: entities, lastAccessedAt: lastAccessedAt, accessCount: accessCount,
+                pinned: pinned, confidence: confidence > 0 ? confidence : 0.8
             ))
         }
 
@@ -785,7 +952,8 @@ actor MemoryIndex {
                                                  source: old.source, timestamp: old.timestamp,
                                                  embedding: old.embedding, importance: newImportance,
                                                  entities: old.entities, lastAccessedAt: old.lastAccessedAt,
-                                                 accessCount: old.accessCount)
+                                                 accessCount: old.accessCount,
+                                                 pinned: old.pinned, confidence: old.confidence)
                         pendingImportanceUpdates[id] = newImportance
                         TorboLog.info("Memory #\(id) promoted to importance \(String(format: "%.2f", newImportance)) (accessed \(newCount) times)", subsystem: "LoA·Index")
                     }
@@ -856,7 +1024,8 @@ actor MemoryIndex {
             entries.append(IndexEntry(
                 id: id, text: text, category: category, source: source,
                 timestamp: timestamp, embedding: embedding, importance: importance,
-                entities: entities, lastAccessedAt: Date(), accessCount: 0
+                entities: entities, lastAccessedAt: Date(), accessCount: 0,
+                pinned: false, confidence: 0.8
             ))
             bm25.addEntry(id: id, text: text)
             // Update entity index

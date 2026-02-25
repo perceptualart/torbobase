@@ -50,6 +50,10 @@
             </array>
         </dict>
     </array>
+    <key>NSMicrophoneUsageDescription</key>
+    <string>Torbo Base uses the microphone for voice conversations with AI agents.</string>
+    <key>NSSpeechRecognitionUsageDescription</key>
+    <string>Torbo Base uses speech recognition to transcribe your voice for AI conversations.</string>
     <key>NSHumanReadableCopyright</key>
     <string>© 2026 Perceptual Art LLC. All rights reserved.</string>
 </dict>

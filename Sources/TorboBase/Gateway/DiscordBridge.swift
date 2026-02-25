@@ -151,6 +151,16 @@ actor DiscordBridge {
 
             lastMessageID = id
             TorboLog.info("Received: \(content.prefix(100))", subsystem: "Discord")
+
+            // Identity resolution
+            let authorID = author["id"] as? String
+            let authorName = author["username"] as? String
+            if let authorID {
+                let _ = await UserIdentity.shared.resolve(
+                    platform: "discord", platformUserID: authorID, username: authorName
+                )
+            }
+
             await handleIncomingMessage(content)
         }
 

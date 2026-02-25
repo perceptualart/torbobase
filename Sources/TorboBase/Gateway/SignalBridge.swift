@@ -136,6 +136,12 @@ actor SignalBridge {
             lastTimestamp = timestamp
 
             TorboLog.info("Received from \(source): \(text.prefix(100))", subsystem: "Signal")
+
+            // Identity resolution
+            let _ = await UserIdentity.shared.resolve(
+                platform: "signal", platformUserID: source
+            )
+
             await handleIncomingMessage(text, from: source)
         }
     }

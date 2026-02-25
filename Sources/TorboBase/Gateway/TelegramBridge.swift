@@ -188,8 +188,16 @@ actor TelegramBridge {
                     let chatType = chat["type"] as? String ?? "private"
                     let isDM = chatType == "private"
 
-                    // Sender name
-                    let from = (message["from"] as? [String: Any])?["first_name"] as? String
+                    // Sender info + identity resolution
+                    let fromDict = message["from"] as? [String: Any]
+                    let from = fromDict?["first_name"] as? String
+                    let senderID = (fromDict?["id"] as? Int).map { String($0) }
+                    let senderUsername = fromDict?["username"] as? String
+                    if let senderID {
+                        let _ = await UserIdentity.shared.resolve(
+                            platform: "telegram", platformUserID: senderID, username: senderUsername ?? from
+                        )
+                    }
 
                     // Group filter — require @mention or /command in groups
                     let filterResult = BridgeGroupFilter.filter(

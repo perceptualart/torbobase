@@ -76,69 +76,48 @@ actor MemoryRouter {
         let userContent = extractText(from: userMessage?["content"])
         guard !userContent.isEmpty else { return }
 
-        // Retrieve relevant memories (skip if memory system is disabled)
-        let memoryBlock: String?
-        if AppConfig.memoryEnabled {
-            memoryBlock = await memoryArmy.searcherRetrieve(
-                userMessage: userContent,
-                conversationHistory: messages
-            )
-        } else {
-            memoryBlock = nil
-        }
+        // Determine model for budget selection
+        let modelName = body["model"] as? String ?? "default"
+        let budget = ContextWeaver.budgetForModel(modelName)
 
-        // Also get the existing MemoryManager's prompt (for backward compatibility)
+        // Determine channel key for stream context
+        let channelKey = platform.map { "\($0):gateway" } ?? "web:gateway"
+
+        // Delegate to ContextWeaver for token-budget-aware prompt assembly
+        var systemPrompt = await ContextWeaver.shared.weave(
+            agentID: agentID,
+            channelKey: channelKey,
+            userMessage: userContent,
+            platform: platform,
+            budget: budget,
+            accessLevel: accessLevel,
+            toolNames: toolNames,
+            clientProvidedSystem: clientProvidedSystem,
+            conversationHistory: messages
+        )
+
+        // Legacy memory (structured facts — always include if available)
         let legacyMemory = await MemoryManager.shared.assembleMemoryPrompt()
-
-        // Build the enriched system prompt
-        var systemParts: [String] = []
-
-        // 1. Agent identity block (skip if client provided their own system prompt)
-        if !clientProvidedSystem {
-            let agentConfig: AgentConfig
-            if let found = await agentConfigManager.agent(agentID) {
-                agentConfig = found
-            } else {
-                agentConfig = await agentConfigManager.defaultAgent
-            }
-            let identityBlock = agentConfig.buildIdentityBlock(accessLevel: accessLevel, availableTools: toolNames)
-            systemParts.append(identityBlock)
-        }
-
-        // 1.5. Platform context (for bridge conversations)
-        if let platform = platform, !platform.isEmpty {
-            systemParts.append(platformContextNote(platform))
-        }
-
-        // 2. Memory context (from vector search)
-        //    Sanitize to prevent prompt injection via crafted memories.
-        if let memoryBlock, !memoryBlock.isEmpty {
-            systemParts.append(Self.sanitizeMemoryBlock(memoryBlock))
-        }
-
-        // 3. Legacy memory (structured facts — always include if available)
-        //    Legacy holds identity/user/project knowledge that vector search may not surface.
         if !legacyMemory.isEmpty {
-            systemParts.append(Self.sanitizeMemoryBlock(legacyMemory))
+            systemPrompt += "\n\n" + Self.sanitizeMemoryBlock(legacyMemory)
         }
 
-        // 4. Skills prompt additions (enabled skills at current access level, filtered by agent)
-        if !clientProvidedSystem {
-            let agentSkillIDs = await agentConfigManager.agent(agentID)?.enabledSkillIDs ?? []
-            let skillsBlock = await SkillsManager.shared.skillsPromptBlock(forAccessLevel: accessLevel, allowedSkillIDs: agentSkillIDs)
-            if !skillsBlock.isEmpty {
-                systemParts.append(skillsBlock)
+        // Debate trigger — auto-invoke multi-agent debate for decision questions
+        if DebateTrigger.shouldDebate(userContent) {
+            let debateResult = await DebateOrchestrator.shared.runDebate(
+                question: userContent,
+                triggerConfidence: DebateTrigger.confidence(for: userContent)
+            )
+            var debateBlock = "<debate_synthesis>\n"
+            debateBlock += "Multiple agents analyzed this decision question:\n"
+            for p in debateResult.perspectives {
+                debateBlock += "- \(p.agentName) (\(p.role), \(p.stance)): \(p.perspective)\n"
             }
+            debateBlock += "\nSynthesis: \(debateResult.synthesis)\n"
+            debateBlock += "Recommendation: \(debateResult.recommendation)\n"
+            debateBlock += "</debate_synthesis>"
+            systemPrompt += "\n\n" + debateBlock
         }
-
-        // 5. Commitments nudges (overdue follow-ups injected into system prompt)
-        let nudges = await CommitmentsFollowUp.shared.consumeNudges()
-        if !nudges.isEmpty {
-            let nudgeBlock = "<commitments>\n" + nudges.joined(separator: "\n") + "\n</commitments>"
-            systemParts.append(nudgeBlock)
-        }
-
-        let systemPrompt = systemParts.joined(separator: "\n\n")
 
         // Inject or merge with existing system message
         if let firstIdx = messages.indices.first, messages[firstIdx]["role"] as? String == "system" {
@@ -263,20 +242,5 @@ actor MemoryRouter {
         return ""
     }
 
-    private func platformContextNote(_ platform: String) -> String {
-        switch platform {
-        case "discord":
-            return "<platform>User is messaging via Discord. Use Discord markdown (```code```, **bold**, > quotes). Keep responses concise — long messages feel heavy in chat. Emoji are natural here.</platform>"
-        case "telegram":
-            return "<platform>User is messaging via Telegram. Use Telegram Markdown (*bold*, _italic_, `code`). Messages can be moderate length. Markdown links work: [text](url).</platform>"
-        case "slack":
-            return "<platform>User is messaging via Slack. Use Slack mrkdwn (*bold*, _italic_, `code`, ```code blocks```). Keep professional tone. Thread-aware context.</platform>"
-        case "signal":
-            return "<platform>User is messaging via Signal. Plain text only — no markdown rendering. Keep responses short and direct. Privacy-conscious context.</platform>"
-        case "whatsapp":
-            return "<platform>User is messaging via WhatsApp. Use WhatsApp formatting (*bold*, _italic_, ```code```). Keep responses mobile-friendly and concise.</platform>"
-        default:
-            return ""
-        }
-    }
+    // Platform context note moved to ContextWeaver — no longer needed here
 }

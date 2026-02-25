@@ -2,11 +2,11 @@
 // Licensed under Apache 2.0 — see LICENSE file.
 // Torbo Base — Channel Manager
 // ChannelManager.swift — Orchestrates all messaging bridges
-// Unified interface for multi-channel messaging (Telegram, Discord, Slack, WhatsApp, Signal)
+// Unified interface for multi-channel messaging (11 channels)
 
 import Foundation
 
-// MARK: - Channel Configuration (stored in AppState)
+// MARK: - Channel Configuration (stored in channels.json)
 
 struct ChannelConfig: Codable {
     // Discord
@@ -25,11 +25,35 @@ struct ChannelConfig: Codable {
 
     // Signal (via signal-cli REST API)
     var signalPhoneNumber: String?
-    var signalAPIURL: String?       // e.g., http://localhost:8080
+    var signalAPIURL: String?
 
     // iMessage (via AppleScript on macOS)
     var imessageEnabled: Bool?
-    var imessageRecipient: String?  // Phone or email to watch
+    var imessageRecipient: String?
+
+    // Email (IMAP/SMTP or macOS Mail.app)
+    var emailFromAddress: String?
+    var emailSmtpHost: String?
+    var emailSmtpPort: Int?
+    var emailSmtpUser: String?
+    var emailSmtpPass: String?
+
+    // Microsoft Teams
+    var teamsAppID: String?
+    var teamsAppSecret: String?
+
+    // Google Chat
+    var googleChatServiceAccountKey: String?
+
+    // Matrix
+    var matrixHomeserver: String?
+    var matrixAccessToken: String?
+    var matrixBotUserID: String?
+
+    // SMS (Twilio)
+    var twilioAccountSID: String?
+    var twilioAuthToken: String?
+    var twilioPhoneNumber: String?
 
     static var empty: ChannelConfig { ChannelConfig() }
 }
@@ -46,6 +70,11 @@ actor ChannelManager {
         case whatsapp
         case signal
         case imessage
+        case email
+        case teams
+        case googlechat
+        case matrix
+        case sms
     }
 
     private var activeChannels: Set<Channel> = []
@@ -58,7 +87,6 @@ actor ChannelManager {
         TorboLog.info("Initializing messaging bridges...", subsystem: "Channels")
 
         // Telegram (already handled by TelegramBridge in startup)
-        // Just track its status
         let telegramEnabled = await MainActor.run {
             !AppState.shared.telegramConfig.botToken.isEmpty
         }
@@ -89,7 +117,7 @@ actor ChannelManager {
             TorboLog.info("Slack bridge started", subsystem: "Channels")
         }
 
-        // WhatsApp (webhook-based — needs external webhook forwarding)
+        // WhatsApp (webhook-based)
         if let token = config.whatsappAccessToken, !token.isEmpty,
            let phoneID = config.whatsappPhoneNumberID, !phoneID.isEmpty {
             await MainActor.run {
@@ -113,6 +141,72 @@ actor ChannelManager {
             TorboLog.info("Signal bridge started", subsystem: "Channels")
         }
 
+        // iMessage (macOS only)
+        #if os(macOS)
+        if config.imessageEnabled == true {
+            await iMessageBridge.shared.configure(
+                enabled: true,
+                recipient: config.imessageRecipient ?? ""
+            )
+            Task { await iMessageBridge.shared.startPolling() }
+            activeChannels.insert(.imessage)
+            TorboLog.info("iMessage bridge started", subsystem: "Channels")
+        }
+        #endif
+
+        // Email
+        if let fromAddr = config.emailFromAddress, !fromAddr.isEmpty {
+            var emailCfg = EmailBridge.EmailConfig()
+            emailCfg.fromAddress = fromAddr
+            emailCfg.smtpHost = config.emailSmtpHost ?? ""
+            emailCfg.smtpPort = config.emailSmtpPort ?? 587
+            emailCfg.smtpUser = config.emailSmtpUser ?? ""
+            emailCfg.smtpPass = config.emailSmtpPass ?? ""
+            await EmailBridge.shared.configure(emailCfg)
+            Task { await EmailBridge.shared.startPolling() }
+            activeChannels.insert(.email)
+            TorboLog.info("Email bridge started", subsystem: "Channels")
+        }
+
+        // Microsoft Teams
+        if let appID = config.teamsAppID, !appID.isEmpty,
+           let appSecret = config.teamsAppSecret, !appSecret.isEmpty {
+            await TeamsBridge.shared.configure(appID: appID, appSecret: appSecret)
+            activeChannels.insert(.teams)
+            TorboLog.info("Teams bridge ready (webhook-based)", subsystem: "Channels")
+        }
+
+        // Google Chat
+        if let key = config.googleChatServiceAccountKey, !key.isEmpty {
+            await GoogleChatBridge.shared.configure(serviceAccountKey: key)
+            activeChannels.insert(.googlechat)
+            TorboLog.info("Google Chat bridge ready (webhook-based)", subsystem: "Channels")
+        }
+
+        // Matrix
+        if let hs = config.matrixHomeserver, !hs.isEmpty,
+           let token = config.matrixAccessToken, !token.isEmpty {
+            await MatrixBridge.shared.configure(
+                homeserver: hs,
+                accessToken: token,
+                botUserID: config.matrixBotUserID ?? ""
+            )
+            Task { await MatrixBridge.shared.startPolling() }
+            activeChannels.insert(.matrix)
+            TorboLog.info("Matrix bridge started", subsystem: "Channels")
+        }
+
+        // SMS (Twilio)
+        if let sid = config.twilioAccountSID, !sid.isEmpty,
+           let authToken = config.twilioAuthToken, !authToken.isEmpty,
+           let phone = config.twilioPhoneNumber, !phone.isEmpty {
+            await SMSBridge.shared.configure(
+                accountSID: sid, authToken: authToken, phoneNumber: phone
+            )
+            activeChannels.insert(.sms)
+            TorboLog.info("SMS bridge ready (webhook-based)", subsystem: "Channels")
+        }
+
         TorboLog.info("Active: \(activeChannels.map { $0.rawValue }.sorted().joined(separator: ", ")) (\(activeChannels.count) channel(s))", subsystem: "Channels")
     }
 
@@ -133,7 +227,17 @@ actor ChannelManager {
             case .signal:
                 await SignalBridge.shared.send(message)
             case .imessage:
-                break // iMessage needs a recipient — skip for broadcast
+                await iMessageBridge.shared.notify(message)
+            case .email:
+                await EmailBridge.shared.notify(message)
+            case .teams:
+                await TeamsBridge.shared.notify(message)
+            case .googlechat:
+                await GoogleChatBridge.shared.notify(message)
+            case .matrix:
+                await MatrixBridge.shared.notify(message)
+            case .sms:
+                await SMSBridge.shared.notify(message)
             }
         }
     }
@@ -147,7 +251,12 @@ actor ChannelManager {
             case .slack: await SlackBridge.shared.notify(message)
             case .whatsapp: break
             case .signal: await SignalBridge.shared.notify(message)
-            case .imessage: break
+            case .imessage: await iMessageBridge.shared.notify(message)
+            case .email: await EmailBridge.shared.notify(message)
+            case .teams: await TeamsBridge.shared.notify(message)
+            case .googlechat: await GoogleChatBridge.shared.notify(message)
+            case .matrix: await MatrixBridge.shared.notify(message)
+            case .sms: await SMSBridge.shared.notify(message)
             }
         }
     }

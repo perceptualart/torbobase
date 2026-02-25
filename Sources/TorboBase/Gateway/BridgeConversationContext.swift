@@ -78,6 +78,14 @@ actor BridgeConversationContext {
         var buffer = channels[channelKey] ?? []
         buffer.append(BufferedMessage(role: role, content: safeContent, timestamp: Date()))
 
+        // Write-through to StreamStore (unified event stream)
+        await StreamStore.shared.append(
+            kind: .message,
+            channelKey: channelKey,
+            content: safeContent,
+            metadata: ["role": role]
+        )
+
         // Summarize before trimming if over capacity
         if buffer.count > maxMessagesPerChannel {
             let oldMessages = Array(buffer.prefix(10))

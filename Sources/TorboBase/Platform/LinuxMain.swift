@@ -80,6 +80,9 @@ struct TorboBaseServer {
         // Initialize subsystems
         TorboLog.info("Initializing memory system...", subsystem: "Main")
         await MemoryIndex.shared.initialize()
+        await StreamStore.shared.initialize()
+        await EntityGraph.shared.initialize()
+        await UserIdentity.shared.initialize()
 
         TorboLog.info("Initializing conversation search...", subsystem: "Main")
         await ConversationSearch.shared.initialize()

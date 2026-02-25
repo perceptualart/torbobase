@@ -80,9 +80,8 @@ actor MemoryArmy {
         // Migrate existing MemoryManager facts into the vector index
         await migrateExistingMemories()
 
-        // Start background workers
-        startRepairer()
-        startWatcher()
+        // Background workers now managed by ConsciousnessLoop
+        // (Pulse/Tide/Dream frequencies replace the old timer loops)
 
         let scrollCount = await memoryIndex.count
         TorboLog.info("Library of Alexandria deployed — \(scrollCount) scrolls indexed", subsystem: "LoA")
@@ -120,26 +119,60 @@ actor MemoryArmy {
         // Step 2: Index each extracted memory
         var indexed = 0
         for memory in checkedMemories {
-            if await memoryIndex.addWithEntities(
+            if let memID = await memoryIndex.addWithEntities(
                 text: memory.text,
                 category: memory.category,
                 source: "conversation",
                 importance: memory.importance,
                 entities: memory.entities
-            ) != nil {
+            ) {
                 indexed += 1
+                // Set confidence based on category:
+                // personal/identity = direct user statements (0.9)
+                // fact/project/technical = clear factual (0.8, the default)
+                // preference/episode = inferred (0.6)
+                let confidence: Float
+                switch memory.category {
+                case "personal", "identity": confidence = 0.9
+                case "preference", "episode": confidence = 0.6
+                default: confidence = 0.8
+                }
+                if confidence != 0.8 {
+                    await memoryIndex.updateConfidence(id: memID, confidence: confidence)
+                }
+            }
+        }
+
+        // Step 2.5: Extract entity relationships for the knowledge graph
+        for memory in checkedMemories {
+            guard memory.entities.count >= 2 else { continue }
+            // Create relationships between co-occurring entities
+            for i in 0..<memory.entities.count {
+                for j in (i+1)..<memory.entities.count {
+                    await EntityGraph.shared.add(
+                        subject: memory.entities[i],
+                        predicate: "related_to",
+                        object: memory.entities[j],
+                        confidence: 0.6,
+                        source: "co-occurrence"
+                    )
+                }
             }
         }
 
         // Step 3: Create an episode summary (what happened in this exchange)
         let episodeSummary = await summarizeEpisode(userMessage: userMessage, assistantResponse: assistantResponse)
         if let episode = episodeSummary {
-            await memoryIndex.add(
+            let episodeID = await memoryIndex.add(
                 text: episode,
                 category: "episode",
                 source: "librarian",
                 importance: 0.6
             )
+            if let episodeID {
+                // Episodes are summarized content — lower confidence
+                await memoryIndex.updateConfidence(id: episodeID, confidence: 0.6)
+            }
             indexed += 1
         }
 
@@ -278,16 +311,10 @@ actor MemoryArmy {
 
     // MARK: - Watcher: System Health Monitor
 
-    private func startWatcher() {
-        watcherTask = Task {
-            while isRunning {
-                try? await Task.sleep(nanoseconds: 300_000_000_000) // 5 min
-                await watcherCheck()
-            }
-        }
-    }
+    // startWatcher() removed — ConsciousnessLoop.tide() calls watcherCheck() directly
 
-    private func watcherCheck() async {
+    /// Health check — called by ConsciousnessLoop (Tide frequency).
+    func watcherCheck() async {
         lastWatcherCheck = Date()
         stats.lastWatcherRun = Date()
 
@@ -316,7 +343,8 @@ actor MemoryArmy {
     /// Generate reflections — meta-memories that identify patterns in recent knowledge.
     /// Called after every 50 new memories are indexed. Reflections help the system
     /// understand user interests and recurring themes over time.
-    private func generateReflection() async {
+    /// Generate meta-memories identifying patterns — called by ConsciousnessLoop (Dream frequency).
+    func generateReflection() async {
         let index = memoryIndex
         let allEntries = await index.allEntries
 
@@ -414,18 +442,7 @@ actor MemoryArmy {
         }
     }
 
-    private func startRepairer() {
-        repairTask = Task {
-            // Initial delay — let the system warm up
-            try? await Task.sleep(nanoseconds: 60_000_000_000) // 1 min
-
-            while isRunning {
-                // Run repair every 2 hours
-                try? await Task.sleep(nanoseconds: 7_200_000_000_000)
-                await runRepairCycle()
-            }
-        }
-    }
+    // startRepairer() removed — ConsciousnessLoop.dream() calls runRepairCycle() directly
 
     // MARK: - Internal: Memory Extraction
 
@@ -549,6 +566,8 @@ actor MemoryArmy {
                 let isUpdate = await checkIfUpdate(oldFact: candidate.text, newFact: memory.text)
 
                 if isUpdate {
+                    // Preserve old version in history before deprecating
+                    await index.updateWithVersion(id: candidate.id, newText: "[outdated] \(candidate.text)", reason: "contradiction")
                     // Soft-deprecate the old memory
                     await index.softDeprecate(id: candidate.id)
 
@@ -773,15 +792,22 @@ actor MemoryArmy {
 
             guard !validFacts.isEmpty else { continue }
 
-            // Add compressed facts as new memories
+            // Add compressed facts as new memories (confidence 0.4 — lossy compression)
             for (text, importance) in validFacts {
-                await index.add(
+                if let compressedID = await index.add(
                     text: text,
                     category: "fact",
                     source: "repairer-compression",
                     importance: importance,
                     timestamp: batch.first?.timestamp ?? Date()
-                )
+                ) {
+                    await index.updateConfidence(id: compressedID, confidence: 0.4)
+                }
+            }
+
+            // Preserve old episode text in version history before removing
+            for episode in batch {
+                await index.updateWithVersion(id: episode.id, newText: "[compressed]", reason: "compression")
             }
 
             // Remove the old episode entries
@@ -805,6 +831,9 @@ actor MemoryArmy {
         var decayed = 0
 
         for entry in allEntries {
+            // Skip pinned memories (exempt from ALL decay)
+            if entry.pinned { continue }
+
             // Skip identity and high-importance memories (critical info doesn't decay)
             if entry.category == "identity" || entry.importance >= 0.9 { continue }
 

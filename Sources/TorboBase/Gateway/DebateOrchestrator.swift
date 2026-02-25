@@ -30,6 +30,22 @@ struct DebateResult: Codable {
 actor DebateOrchestrator {
     static let shared = DebateOrchestrator()
 
+    private var history: [DebateResult] = []
+    private let maxHistory = 100
+
+    func addToHistory(_ result: DebateResult) {
+        history.insert(result, at: 0)
+        if history.count > maxHistory { history = Array(history.prefix(maxHistory)) }
+    }
+
+    func getHistory(limit: Int = 20) -> [DebateResult] {
+        Array(history.prefix(limit))
+    }
+
+    func getDebate(id: String) -> DebateResult? {
+        history.first(where: { $0.id == id })
+    }
+
     private struct Panelist {
         let id: String
         let name: String
@@ -73,7 +89,7 @@ actor DebateOrchestrator {
 
         TorboLog.info("Debate \(debateID) complete in \(durationMs)ms — \(perspectives.count) perspectives", subsystem: "Debate")
 
-        return DebateResult(
+        let result = DebateResult(
             id: String(debateID),
             question: question,
             perspectives: perspectives,
@@ -83,6 +99,8 @@ actor DebateOrchestrator {
             timestamp: Date().timeIntervalSince1970,
             durationMs: durationMs
         )
+        addToHistory(result)
+        return result
     }
 
     // MARK: - Private
@@ -272,7 +290,7 @@ actor DebateOrchestrator {
     }
 
     /// Encode a DebateResult as a JSON-friendly dictionary.
-    func encodeResult(_ result: DebateResult) -> [String: Any] {
+    nonisolated func encodeResult(_ result: DebateResult) -> [String: Any] {
         let perspectives = result.perspectives.map { p in
             ["agentID": p.agentID, "agentName": p.agentName, "role": p.role,
              "perspective": p.perspective, "stance": p.stance] as [String: Any]

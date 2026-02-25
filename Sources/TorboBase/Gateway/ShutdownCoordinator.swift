@@ -39,6 +39,10 @@ actor ShutdownCoordinator {
         TorboLog.info("Initiating graceful shutdown...", subsystem: "Shutdown")
         let startTime = Date().timeIntervalSinceReferenceDate
 
+        // 0. Stop ConsciousnessLoop (ambient processing)
+        TorboLog.info("Stopping ConsciousnessLoop...", subsystem: "Shutdown")
+        await ConsciousnessLoop.shared.stop()
+
         // 1. Stop the Memory Army (background workers)
         TorboLog.info("Stopping Memory Army...", subsystem: "Shutdown")
         await MemoryArmy.shared.stop()
@@ -61,7 +65,11 @@ actor ShutdownCoordinator {
             await callback()
         }
 
-        // 5. Flush pending token tracking records (L-13)
+        // 5. Clean up FileVault (remove temp files, cancel cleanup timer)
+        TorboLog.info("Shutting down FileVault...", subsystem: "Shutdown")
+        await FileVault.shared.shutdown()
+
+        // 6. Flush pending token tracking records (L-13)
         TorboLog.info("Flushing token tracker...", subsystem: "Shutdown")
         await TokenTracker.shared.flush()
 

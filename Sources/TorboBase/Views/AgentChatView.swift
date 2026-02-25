@@ -29,6 +29,9 @@ struct ChatMessage: Identifiable {
 struct AgentChatView: View {
     let agentID: String
     let agentName: String
+    var showHeader: Bool = true
+    var sessionID: UUID? = nil
+    var onSwitchToVoice: (() -> Void)?
     @EnvironmentObject private var state: AppState
 
     @State private var messages: [ChatMessage] = []
@@ -37,13 +40,21 @@ struct AgentChatView: View {
     @State private var scrollProxy: ScrollViewProxy?
     @State private var showExportPanel = false
     @State private var streamTask: Task<Void, Never>?
+    @State private var currentSessionID: UUID = UUID()
+    @State private var saveTask: Task<Void, Never>?
+
+    // Voice-to-chat bridge
+    @ObservedObject private var voiceEngine = VoiceEngine.shared
+    @State private var lastVoiceTrigger: Int = 0
+    @State private var voiceAssistantIndex: Int? = nil
 
     var body: some View {
         VStack(spacing: 0) {
-            // Chat header
-            chatHeader
-
-            Divider().background(Color.white.opacity(0.06))
+            // Chat header (optional)
+            if showHeader {
+                chatHeader
+                Divider().background(Color.white.opacity(0.06))
+            }
 
             // Messages area
             ScrollViewReader { proxy in
@@ -69,6 +80,61 @@ struct AgentChatView: View {
 
             // Input area
             inputArea
+        }
+        // Voice-to-chat: inject user message when voice transcript is finalized
+        .onChange(of: voiceEngine.voiceChatTrigger) { newTrigger in
+            guard newTrigger != lastVoiceTrigger else { return }
+            guard voiceEngine.activeAgentID == agentID else { return }
+            lastVoiceTrigger = newTrigger
+            let userText = voiceEngine.lastUserTranscript
+            guard !userText.isEmpty else { return }
+
+            // Add user message
+            messages.append(ChatMessage(role: "user", content: userText, timestamp: Date(), isStreaming: false))
+
+            // Add streaming assistant placeholder
+            messages.append(ChatMessage(role: "assistant", content: "", timestamp: Date(), isStreaming: true))
+            voiceAssistantIndex = messages.count - 1
+        }
+        // Voice-to-chat: update assistant message as response streams in
+        .onChange(of: voiceEngine.lastAssistantResponse) { newValue in
+            guard let idx = voiceAssistantIndex, idx < messages.count else { return }
+            guard voiceEngine.activeAgentID == agentID else { return }
+            messages[idx].content = newValue
+        }
+        // Voice-to-chat: finalize when speaking finishes
+        .onChange(of: voiceEngine.state) { newState in
+            guard let idx = voiceAssistantIndex, idx < messages.count else { return }
+            if newState == .idle || newState == .listening {
+                messages[idx].isStreaming = false
+                voiceAssistantIndex = nil
+            }
+        }
+        // Persistence: load on appear
+        .task(id: sessionID ?? currentSessionID) {
+            let sid = sessionID ?? currentSessionID
+            currentSessionID = sid
+            let loaded = await ConversationStore.shared.loadAgentChat(agentID: agentID, sessionID: sid)
+            if !loaded.isEmpty {
+                messages = loaded.map {
+                    ChatMessage(role: $0.role, content: $0.content, timestamp: $0.timestamp, isStreaming: false)
+                }
+            }
+        }
+        // Persistence: debounced save on message changes
+        .onChange(of: messages.count) { _ in
+            saveTask?.cancel()
+            saveTask = Task {
+                try? await Task.sleep(nanoseconds: 1_000_000_000) // 1s debounce
+                guard !Task.isCancelled else { return }
+                let toSave = messages.filter { !$0.isStreaming }.map {
+                    AgentChatMessage(role: $0.role, content: $0.content, timestamp: $0.timestamp)
+                }
+                guard !toSave.isEmpty else { return }
+                await ConversationStore.shared.saveAgentChat(
+                    agentID: agentID, sessionID: currentSessionID, messages: toSave
+                )
+            }
         }
     }
 
@@ -139,6 +205,18 @@ struct AgentChatView: View {
 
     // MARK: - Chat Bubble
 
+    private func bubbleBackground(isUser: Bool, isTool: Bool) -> Color {
+        if isUser { return Color.cyan.opacity(0.08) }
+        if isTool { return Color.orange.opacity(0.06) }
+        return Color.white.opacity(0.03)
+    }
+
+    private func bubbleStroke(isUser: Bool, isTool: Bool) -> Color {
+        if isUser { return Color.cyan.opacity(0.15) }
+        if isTool { return Color.orange.opacity(0.1) }
+        return Color.white.opacity(0.04)
+    }
+
     @ViewBuilder
     private func chatBubble(_ msg: ChatMessage) -> some View {
         let isUser = msg.role == "user"
@@ -165,25 +243,34 @@ struct AgentChatView: View {
 
                 // Message content with markdown
                 if !msg.content.isEmpty {
-                    Text(renderMarkdown(msg.content))
-                        .font(.system(size: 13))
-                        .foregroundStyle(.white.opacity(0.85))
-                        .textSelection(.enabled)
-                        .padding(.horizontal, 14)
-                        .padding(.vertical, 10)
-                        .background(
-                            isUser ? Color.cyan.opacity(0.08) :
-                            (isTool ? Color.orange.opacity(0.06) : Color.white.opacity(0.03))
-                        )
-                        .clipShape(RoundedRectangle(cornerRadius: 12))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 12)
-                                .stroke(
-                                    isUser ? Color.cyan.opacity(0.15) :
-                                    (isTool ? Color.orange.opacity(0.1) : Color.white.opacity(0.04)),
-                                    lineWidth: 1
-                                )
-                        )
+                    HStack(alignment: .top, spacing: 0) {
+                        Text(renderMarkdown(msg.content))
+                            .font(.system(size: 13))
+                            .foregroundStyle(.white.opacity(0.85))
+                            .textSelection(.enabled)
+
+                        // Speaker icon on assistant messages — tap to speak via TTS
+                        if !isUser && !isTool && !msg.isStreaming {
+                            Button {
+                                TTSManager.shared.speak(msg.content)
+                            } label: {
+                                Image(systemName: "speaker.wave.2")
+                                    .font(.system(size: 10))
+                                    .foregroundStyle(.white.opacity(0.25))
+                                    .padding(.leading, 6)
+                                    .padding(.top, 2)
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 10)
+                    .background(bubbleBackground(isUser: isUser, isTool: isTool))
+                    .clipShape(RoundedRectangle(cornerRadius: 12))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 12)
+                            .stroke(bubbleStroke(isUser: isUser, isTool: isTool), lineWidth: 1)
+                    )
                 }
 
                 // Tool calls display
@@ -302,6 +389,20 @@ struct AgentChatView: View {
             )
             .onSubmit { sendMessage() }
 
+            // Mic button — switches to voice mode
+            if let switchToVoice = onSwitchToVoice {
+                Button {
+                    switchToVoice()
+                } label: {
+                    Image(systemName: "mic.fill")
+                        .font(.system(size: 16))
+                        .foregroundStyle(.white.opacity(0.3))
+                        .padding(6)
+                }
+                .buttonStyle(.plain)
+                .help("Switch to voice mode")
+            }
+
             // Send button
             Button {
                 sendMessage()
@@ -375,10 +476,11 @@ struct AgentChatView: View {
 
         // Add streaming assistant message
         let assistantMsg = ChatMessage(role: "assistant", content: "", timestamp: Date(), isStreaming: true)
+        var assistantIndex = 0
         await MainActor.run {
             messages.append(assistantMsg)
+            assistantIndex = messages.count - 1
         }
-        let assistantIndex = messages.count - 1
 
         do {
             let (bytes, response) = try await URLSession.shared.bytes(for: request)

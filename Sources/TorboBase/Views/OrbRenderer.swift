@@ -12,10 +12,20 @@ struct OrbRenderer: View {
     let isActive: Bool
     var baseHue: Double? = nil
     var baseSaturation: Double = 0.85
+    /// When set, uses this fixed radius instead of deriving from Canvas size.
+    /// Allows a large Canvas frame for petal/blur overflow while keeping a controlled orb size.
+    var orbRadius: CGFloat? = nil
 
     @State private var smoothLevel: Float = 0.15
     @State private var targetLevel: Float = 0.15
     @State private var appearScale: CGFloat = 0.001
+    @State private var breathePhase: Double = 0
+
+    /// Canvas frame size — when orbRadius is set, we make the canvas big enough for petals + blur.
+    private var canvasFrame: CGFloat? {
+        guard let r = orbRadius else { return nil }
+        return r * 6.0  // ~3x radius on each side of center — room for all petal extensions + blur
+    }
 
     private func wrapHue(_ h: Double) -> Double { h - floor(h) }
 
@@ -41,82 +51,18 @@ struct OrbRenderer: View {
     }
 
     var body: some View {
-        TimelineView(.animation(minimumInterval: 1/30)) { timeline in
+        TimelineView(.animation(minimumInterval: 1/60)) { timeline in
             let t = timeline.date.timeIntervalSinceReferenceDate
 
-            Canvas { context, size in
-                // Guard against zero-size frames during initial layout —
-                // applying transforms/scales to a zero-dimension view produces
-                // a singular CGAffineTransform that crashes on Intel Macs.
-                guard size.width > 1, size.height > 1 else { return }
-
-                let center = CGPoint(x: size.width / 2, y: size.height / 2)
-                let baseRadius = min(size.width, size.height) * 0.45
-
-                let level = smoothLevel
-                let restingScale: CGFloat = 0.85
-                let audioBoost: CGFloat = CGFloat(max(0, level - 0.1)) * 0.3
-                let audioScale: CGFloat = restingScale + audioBoost
-                let radius = baseRadius * min(audioScale, 1.1)
-                let intensity = Double(max(0, level - 0.1)) * 1.5
-                let p = palette
-
-                // Layer 1: Deep outer glow
-                drawAuroraRibbon(context: context, center: center, radius: radius * 1.15,
-                                color: Color(hue: p[0].hue, saturation: p[0].sat, brightness: p[0].bri),
-                                phase: t * 0.08, wavePhase: t * 0.25,
-                                scaleX: 1.1, scaleY: 0.45, rotation: t * 0.015,
-                                intensity: intensity, blur: 18, opacity: 0.12)
-
-                // Layer 2
-                drawAuroraRibbon(context: context, center: center, radius: radius,
-                                color: Color(hue: p[1].hue, saturation: p[1].sat, brightness: p[1].bri),
-                                phase: t * 0.12, wavePhase: t * 0.35,
-                                scaleX: 1.0, scaleY: 0.5, rotation: t * 0.02,
-                                intensity: intensity, blur: 12, opacity: 0.18)
-
-                // Layer 3
-                drawAuroraRibbon(context: context, center: center, radius: radius * 0.95,
-                                color: Color(hue: p[2].hue, saturation: p[2].sat, brightness: p[2].bri),
-                                phase: t * 0.1 + 1.5, wavePhase: t * 0.3 + 2,
-                                scaleX: 0.85, scaleY: 0.65, rotation: t * 0.018 + .pi * 0.3,
-                                intensity: intensity, blur: 10, opacity: 0.2)
-
-                // Layer 4
-                drawAuroraRibbon(context: context, center: center, radius: radius * 0.9,
-                                color: Color(hue: p[3].hue, saturation: p[3].sat, brightness: p[3].bri),
-                                phase: t * 0.14 + 3, wavePhase: t * 0.4 + 1,
-                                scaleX: 0.75, scaleY: 0.8, rotation: t * 0.022 + .pi * 0.7,
-                                intensity: intensity, blur: 8, opacity: 0.22)
-
-                // Layer 5
-                drawAuroraRibbon(context: context, center: center, radius: radius * 0.85,
-                                color: Color(hue: p[4].hue, saturation: p[4].sat, brightness: p[4].bri),
-                                phase: t * 0.09 + 2, wavePhase: t * 0.28 + 3,
-                                scaleX: 0.7, scaleY: 0.75, rotation: t * 0.025 + .pi * 1.1,
-                                intensity: intensity, blur: 6, opacity: 0.25)
-
-                // Layer 6
-                drawAuroraRibbon(context: context, center: center, radius: radius * 0.75,
-                                color: Color(hue: p[5].hue, saturation: p[5].sat, brightness: p[5].bri),
-                                phase: t * 0.16 + 4, wavePhase: t * 0.45 + 2,
-                                scaleX: 0.6, scaleY: 0.7, rotation: t * 0.028 + .pi * 0.5,
-                                intensity: intensity, blur: 4, opacity: 0.28)
-
-                // Layer 7: Inner glow
-                drawAuroraRibbon(context: context, center: center, radius: radius * 0.6,
-                                color: Color(hue: p[6].hue, saturation: p[6].sat, brightness: p[6].bri),
-                                phase: t * 0.11 + 1, wavePhase: t * 0.32 + 4,
-                                scaleX: 0.55, scaleY: 0.6, rotation: t * 0.03 + .pi * 1.4,
-                                intensity: intensity, blur: 3, opacity: 0.3)
-            }
+            // Canvas with explicit frame when orbRadius is set — prevents petal clipping
+            canvas(t: t)
         }
         .scaleEffect(appearScale)
         .onChange(of: audioLevels) { newLevels in
             targetLevel = calculateSmoothedLevel(from: newLevels)
         }
         .onChange(of: targetLevel) { newTarget in
-            withAnimation(.easeOut(duration: 0.08)) {
+            withAnimation(.interpolatingSpring(stiffness: 80, damping: 12)) {
                 smoothLevel = newTarget
             }
         }
@@ -129,18 +75,95 @@ struct OrbRenderer: View {
         }
     }
 
+    @ViewBuilder
+    private func canvas(t: Double) -> some View {
+        let cv = Canvas { context, size in
+            guard size.width > 1, size.height > 1 else { return }
+
+            let center = CGPoint(x: size.width / 2, y: size.height / 2)
+            let baseRadius = orbRadius ?? min(size.width, size.height) * 0.45
+
+            let level = smoothLevel
+            let restingScale: CGFloat = 0.85
+            let breathe = CGFloat(sin(t * 0.8) * 0.02 + cos(t * 0.5) * 0.015)
+            let audioBoost: CGFloat = CGFloat(max(0, level - 0.1)) * 0.4
+            let audioScale: CGFloat = restingScale + audioBoost + breathe
+            let radius = baseRadius * min(audioScale, 1.15)
+            let intensity = Double(max(0, level - 0.08)) * 2.0
+            let p = palette
+
+            // Layer 1: Deep outer glow — slow drift
+            drawAuroraRibbon(context: context, center: center, radius: radius * 1.18,
+                            color: Color(hue: p[0].hue, saturation: p[0].sat, brightness: p[0].bri),
+                            phase: t * 0.15, wavePhase: t * 0.4,
+                            scaleX: 1.12, scaleY: 0.48, rotation: t * 0.025,
+                            intensity: intensity, blur: 22, opacity: 0.10)
+
+            // Layer 2: Warm flowing ribbon
+            drawAuroraRibbon(context: context, center: center, radius: radius * 1.05,
+                            color: Color(hue: p[1].hue, saturation: p[1].sat, brightness: p[1].bri),
+                            phase: t * 0.22, wavePhase: t * 0.55,
+                            scaleX: 1.0, scaleY: 0.52, rotation: t * 0.035,
+                            intensity: intensity, blur: 16, opacity: 0.15)
+
+            // Layer 3: Cross-flowing ribbon
+            drawAuroraRibbon(context: context, center: center, radius: radius * 0.95,
+                            color: Color(hue: p[2].hue, saturation: p[2].sat, brightness: p[2].bri),
+                            phase: t * 0.18 + 1.5, wavePhase: t * 0.48 + 2,
+                            scaleX: 0.88, scaleY: 0.68, rotation: t * 0.03 + .pi * 0.3,
+                            intensity: intensity, blur: 12, opacity: 0.18)
+
+            // Layer 4: Active mid ribbon
+            drawAuroraRibbon(context: context, center: center, radius: radius * 0.88,
+                            color: Color(hue: p[3].hue, saturation: p[3].sat, brightness: p[3].bri),
+                            phase: t * 0.25 + 3, wavePhase: t * 0.6 + 1,
+                            scaleX: 0.78, scaleY: 0.82, rotation: t * 0.04 + .pi * 0.7,
+                            intensity: intensity, blur: 9, opacity: 0.22)
+
+            // Layer 5: Bright inner ribbon
+            drawAuroraRibbon(context: context, center: center, radius: radius * 0.82,
+                            color: Color(hue: p[4].hue, saturation: p[4].sat, brightness: p[4].bri),
+                            phase: t * 0.2 + 2, wavePhase: t * 0.5 + 3,
+                            scaleX: 0.72, scaleY: 0.78, rotation: t * 0.045 + .pi * 1.1,
+                            intensity: intensity, blur: 7, opacity: 0.25)
+
+            // Layer 6: Vivid accent
+            drawAuroraRibbon(context: context, center: center, radius: radius * 0.72,
+                            color: Color(hue: p[5].hue, saturation: p[5].sat, brightness: p[5].bri),
+                            phase: t * 0.28 + 4, wavePhase: t * 0.65 + 2,
+                            scaleX: 0.62, scaleY: 0.72, rotation: t * 0.05 + .pi * 0.5,
+                            intensity: intensity, blur: 5, opacity: 0.28)
+
+            // Layer 7: Inner core glow
+            drawAuroraRibbon(context: context, center: center, radius: radius * 0.58,
+                            color: Color(hue: p[6].hue, saturation: p[6].sat, brightness: p[6].bri),
+                            phase: t * 0.2 + 1, wavePhase: t * 0.52 + 4,
+                            scaleX: 0.55, scaleY: 0.62, rotation: t * 0.055 + .pi * 1.4,
+                            intensity: intensity, blur: 3, opacity: 0.32)
+        }
+
+        if let cs = canvasFrame {
+            cv.frame(width: cs, height: cs)
+        } else {
+            cv
+        }
+    }
+
     private func calculateSmoothedLevel(from levels: [Float]) -> Float {
         guard !levels.isEmpty else { return 0.15 }
-        let count = min(6, levels.count)
+        let count = min(10, levels.count)
         let recent = Array(levels.suffix(count))
         var weighted: Float = 0
         var weightSum: Float = 0
         for (i, level) in recent.enumerated() {
-            let weight = Float(pow(2.0, Double(i)))
+            let weight = Float(pow(1.6, Double(i)))
             weighted += level * weight
             weightSum += weight
         }
-        return max(0.1, min(1.0, weighted / weightSum))
+        let raw = weighted / weightSum
+        // Smooth exponential curve for more organic feel
+        let curved = powf(raw, 0.7) * 1.2
+        return max(0.1, min(1.0, curved))
     }
 
     private func drawAuroraRibbon(context: GraphicsContext, center: CGPoint, radius: CGFloat,
@@ -148,21 +171,25 @@ struct OrbRenderer: View {
                                    scaleX: CGFloat, scaleY: CGFloat, rotation: Double,
                                    intensity: Double, blur: CGFloat, opacity: Double) {
         var path = Path()
-        let segments = 64
+        let segments = 80
 
         for i in 0...segments {
             let angle = Double(i) / Double(segments) * .pi * 2
-            let wave1 = sin(angle * 2 + phase) * 0.25
-            let wave2 = sin(angle * 3 + wavePhase) * 0.18
-            let wave3 = cos(angle * 4 + phase * 0.8) * 0.12
-            let wave4 = sin(angle * 1.5 + wavePhase * 1.3) * 0.15
-            let audioPulse = sin(angle * 2 + phase * 3) * intensity * 0.35
-            let audioPulse2 = cos(angle * 3 + wavePhase * 2) * intensity * 0.25
-            let audioPulse3 = sin(angle * 5 + phase * 4) * intensity * 0.18
-            let waveSum = wave1 + wave2 + wave3 + wave4 + audioPulse + audioPulse2 + audioPulse3
+            // Organic wave composition — multiple harmonics
+            let wave1 = sin(angle * 2 + phase) * 0.22
+            let wave2 = sin(angle * 3 + wavePhase) * 0.16
+            let wave3 = cos(angle * 5 + phase * 0.7) * 0.09
+            let wave4 = sin(angle * 1.5 + wavePhase * 1.2) * 0.13
+            let wave5 = cos(angle * 4 + phase * 1.5) * 0.06
+            // Audio-reactive perturbation — more dramatic
+            let audioPulse = sin(angle * 2 + phase * 3.5) * intensity * 0.30
+            let audioPulse2 = cos(angle * 3 + wavePhase * 2.5) * intensity * 0.22
+            let audioPulse3 = sin(angle * 5 + phase * 4.5) * intensity * 0.15
+            let audioPulse4 = cos(angle * 7 + wavePhase * 3) * intensity * 0.10
+            let waveSum = wave1 + wave2 + wave3 + wave4 + wave5 + audioPulse + audioPulse2 + audioPulse3 + audioPulse4
             let r = Double(radius) * (0.55 + waveSum)
-            let breatheX = Double(scaleX) * (1.0 + sin(wavePhase * 0.3) * 0.08)
-            let breatheY = Double(scaleY) * (1.0 + cos(wavePhase * 0.25) * 0.08)
+            let breatheX = Double(scaleX) * (1.0 + sin(wavePhase * 0.4) * 0.06)
+            let breatheY = Double(scaleY) * (1.0 + cos(wavePhase * 0.35) * 0.06)
             let x = cos(angle) * r * breatheX
             let y = sin(angle) * r * breatheY
             let rotatedX = x * cos(rotation) - y * sin(rotation)
@@ -179,8 +206,32 @@ struct OrbRenderer: View {
 
         var coreCtx = context
         coreCtx.blendMode = .plusLighter
-        coreCtx.addFilter(.blur(radius: blur * 0.4))
-        coreCtx.fill(path, with: .color(color.opacity(opacity * 0.49)))
+        coreCtx.addFilter(.blur(radius: blur * 0.35))
+        coreCtx.fill(path, with: .color(color.opacity(opacity * 0.55)))
+    }
+
+    // MARK: - Shared Agent Hue/Saturation (reusable across views)
+
+    /// Maps an agent ID to its orb hue. Used by AgentView and OrbAccessView.
+    static func agentHue(for agentID: String) -> Double {
+        switch agentID.lowercased() {
+        case "sid":   return 0.55   // blue-cyan
+        case "ada":   return 0.3    // green-gold
+        case "mira":  return 0.45   // teal
+        case "orion": return 0.75   // purple
+        case "x":     return 0.0    // white (low saturation)
+        default:
+            let hash = agentID.utf8.reduce(0) { ($0 &+ Int($1)) &* 31 }
+            return Double(abs(hash) % 1000) / 1000.0
+        }
+    }
+
+    /// Maps an agent ID + access level to its orb saturation.
+    static func agentSaturation(for agentID: String, accessLevel: Int = 5) -> Double {
+        if agentID.lowercased() == "x" { return 0.08 }
+        if accessLevel == 0 { return 0.08 }
+        let level = min(max(accessLevel, 1), 5)
+        return 0.45 + Double(level) * 0.10
     }
 }
 #endif

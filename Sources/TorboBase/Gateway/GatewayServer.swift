@@ -121,6 +121,7 @@ actor GatewayServer {
     #endif
     private weak var appState: AppState?
     private var requestLog: [String: [Date]] = [:]
+    private var tokenRequestLog: [String: [Date]] = [:]
 
     // Webchat session tokens — ephemeral, expire with server restart.
     // These grant chat-level access without exposing the master server token.
@@ -224,6 +225,13 @@ actor GatewayServer {
                 PairingManager.shared.startAdvertising(port: port)
             }
 
+            // Start StreamStore (unified event stream) + EntityGraph + UserIdentity
+            Task {
+                await StreamStore.shared.initialize()
+                await EntityGraph.shared.initialize()
+                await UserIdentity.shared.initialize()
+            }
+
             // Start Memory Router
             Task {
                 await MemoryRouter.shared.initialize()
@@ -267,6 +275,9 @@ actor GatewayServer {
                     source: "Gateway")
             }
 
+            // Initialize FileVault (signed-URL file storage for tool outputs)
+            Task { await FileVault.shared.initialize() }
+
             // Initialize Token Tracker
             Task { await TokenTracker.shared.initialize() }
 
@@ -287,6 +298,9 @@ actor GatewayServer {
 
             // Start Calendar Manager (requests access on first use)
             // CalendarManager.shared is lazy — initialized when first called
+
+            // Start ConsciousnessLoop (Pulse/Tide/Dream ambient processing)
+            Task { await ConsciousnessLoop.shared.start() }
 
             // Start all messaging channels (Telegram, Discord, Slack, Signal, WhatsApp)
             Task {
@@ -535,6 +549,19 @@ actor GatewayServer {
         return s
     }
 
+    /// Format uptime as human-readable string (e.g. "2d 5h 30m 12s")
+    nonisolated static func formatUptime(_ seconds: TimeInterval) -> String {
+        let s = Int(seconds)
+        let days = s / 86400
+        let hours = (s % 86400) / 3600
+        let minutes = (s % 3600) / 60
+        let secs = s % 60
+        if days > 0 { return "\(days)d \(hours)h \(minutes)m \(secs)s" }
+        if hours > 0 { return "\(hours)h \(minutes)m \(secs)s" }
+        if minutes > 0 { return "\(minutes)m \(secs)s" }
+        return "\(secs)s"
+    }
+
     #if canImport(Network)
     private func processRequest(_ data: Data, on conn: NWConnection) async {
         let writer = NWConnectionWriter(connection: conn)
@@ -687,6 +714,19 @@ actor GatewayServer {
             return HTTPResponse.json(response)
         }
 
+        // GET /api/health — lightweight health check with uptime
+        if req.method == "GET" && req.path == "/api/health" {
+            let uptime = Date().timeIntervalSince(GatewayServer.serverStartTime)
+            let response: [String: Any] = [
+                "status": "ok",
+                "service": "torbo-base",
+                "version": TorboVersion.current,
+                "uptime_seconds": Int(uptime),
+                "uptime_human": Self.formatUptime(uptime)
+            ]
+            return HTTPResponse.json(response)
+        }
+
         // Web chat UI — serves the built-in chat interface
         // Ephemeral session token auto-injected — no login prompt.
         // Session tokens are scoped to webchat and expire on server restart.
@@ -721,6 +761,31 @@ actor GatewayServer {
         // Legal documents — serve static HTML (no auth required)
         if req.method == "GET" && req.path.hasPrefix("/legal/") {
             return serveLegalPage(path: req.path)
+        }
+
+        // FileVault file download — HMAC-signed token IS the auth (no bearer token needed)
+        if req.method == "GET" && req.path.hasPrefix("/v1/files/") {
+            let fileID = String(req.path.dropFirst("/v1/files/".count))
+            let token = req.queryParam("token") ?? ""
+            guard !fileID.isEmpty, !token.isEmpty else {
+                return HTTPResponse(statusCode: 400,
+                    headers: ["Content-Type": "application/json"],
+                    body: Data("{\"error\":\"Missing file ID or token\"}".utf8))
+            }
+            guard let (data, entry) = await FileVault.shared.retrieve(id: fileID, token: token) else {
+                return HTTPResponse(statusCode: 404,
+                    headers: ["Content-Type": "application/json"],
+                    body: Data("{\"error\":\"File not found or expired\"}".utf8))
+            }
+            return HTTPResponse(statusCode: 200,
+                headers: [
+                    "Content-Type": entry.mimeType,
+                    "Content-Disposition": "inline; filename=\"\(entry.originalName)\"",
+                    "Content-Length": "\(data.count)",
+                    "Cache-Control": "private, max-age=3600",
+                    "X-Content-Type-Options": "nosniff"
+                ],
+                body: data)
         }
 
         // L-1: Access level — return only a boolean "active" without exposing exact level
@@ -779,9 +844,23 @@ actor GatewayServer {
 
         if isRateLimited(clientIP: clientIP) {
             await audit(clientIP: clientIP, method: req.method, path: req.path,
-                       required: .chatOnly, granted: false, detail: "Rate limited")
+                       required: .chatOnly, granted: false, detail: "Rate limited (IP)")
             return HTTPResponse(statusCode: 429, headers: ["Content-Type": "application/json"],
                               body: Data("{\"error\":\"Rate limited\"}".utf8))
+        }
+
+        // Per-token rate limiting: 100 requests/hour per bearer token
+        if let token = Self.extractBearerToken(from: req) {
+            let (limited, retryAfter) = isTokenRateLimited(token: token)
+            if limited {
+                let masked = Self.maskToken(token)
+                TorboLog.warn("Token rate limited: \(masked) — \(tokenRateLimitMax) req/hr exceeded", subsystem: "Gateway")
+                await audit(clientIP: clientIP, method: req.method, path: req.path,
+                           required: .chatOnly, granted: false, detail: "Rate limited (token: \(masked))")
+                return HTTPResponse(statusCode: 429,
+                                  headers: ["Content-Type": "application/json", "Retry-After": "\(retryAfter)"],
+                                  body: Data("{\"error\":\"Rate limited\",\"retry_after\":\(retryAfter)}".utf8))
+            }
         }
 
         let stateRef = appState
@@ -792,6 +871,12 @@ actor GatewayServer {
 
         let agentID = req.headers["x-torbo-agent-id"] ?? req.headers["X-Torbo-Agent-Id"] ?? "sid"
         let platform = req.headers["x-torbo-platform"] ?? req.headers["X-Torbo-Platform"]
+
+        // Request logging — log every authenticated request with metadata
+        let maskedToken = Self.extractBearerToken(from: req).map { Self.maskToken($0) } ?? "localhost"
+        let model = (req.jsonBody?["model"] as? String) ?? "-"
+        TorboLog.info("\(req.method) \(req.path) | token=\(maskedToken) agent=\(agentID) model=\(model) ip=\(clientIP)", subsystem: "RequestLog")
+
         // Resolve access level: use the per-agent level from config, capped by global.
         // The x-torbo-access-level header can only LOWER the level, never raise it.
         let currentLevel: AccessLevel = await MainActor.run {
@@ -909,6 +994,30 @@ actor GatewayServer {
             return await handleAmbientIntelligenceRoute(req, clientIP: clientIP)
         }
 
+        // MARK: - Stream (Unified Event Stream)
+        if req.method == "GET" && req.path == "/v1/stream" {
+            let query = req.queryParams
+            let channelKey = query["channel"]
+            let kindFilter = query["kind"]?.components(separatedBy: ",").compactMap { StreamStore.EventKind(rawValue: $0) }
+            let userID = query["user_id"]
+            let since = query["since"].flatMap { Double($0) }.map { Date(timeIntervalSince1970: $0) }
+            let limit = Int(query["limit"] ?? "50") ?? 50
+
+            let events = await StreamStore.shared.query(
+                channelKey: channelKey,
+                kinds: kindFilter,
+                userID: userID,
+                since: since,
+                limit: limit
+            )
+
+            let stats = await StreamStore.shared.stats()
+            return .json([
+                "events": events.map { $0.toDict() },
+                "stats": stats
+            ] as [String: Any])
+        }
+
         // MARK: - LoA (Library of Alexandria) Shortcuts
         if req.path.hasPrefix("/v1/loa") {
             return await handleLoARoute(req, clientIP: clientIP)
@@ -917,6 +1026,16 @@ actor GatewayServer {
         // MARK: - HomeKit Ambient Intelligence
         if req.path.hasPrefix("/v1/homekit") || req.path == "/v1/soc/homekit" {
             return await handleHomeKitRoute(req, clientIP: clientIP)
+        }
+
+        // MARK: - Home Assistant API
+        if req.path.hasPrefix("/v1/ha") {
+            return await handleHomeAssistantRoute(req, clientIP: clientIP, currentLevel: currentLevel)
+        }
+
+        // MARK: - Skills Registry
+        if req.path.hasPrefix("/v1/skills/registry") || req.path.hasPrefix("/v1/skills/install") || req.path.hasPrefix("/v1/skills/search") || req.path.hasPrefix("/v1/skills/create") {
+            return await handleSkillsRegistryRoute(req, clientIP: clientIP, currentLevel: currentLevel)
         }
 
         // MARK: - Debate API (multi-agent decision analysis)
@@ -1403,6 +1522,39 @@ actor GatewayServer {
                 await ChannelManager.shared.broadcast(message)
                 return HTTPResponse.json(["status": "sent"])
             }
+
+        // --- Webhook Bridges (Teams, Google Chat, SMS) ---
+        case ("POST", "/v1/teams/webhook"):
+            guard let body = req.jsonBody else {
+                return HTTPResponse.badRequest("Invalid JSON")
+            }
+            let result = await TeamsBridge.shared.handleWebhook(body)
+            return HTTPResponse.json(result)
+
+        case ("POST", "/v1/googlechat/webhook"):
+            guard let body = req.jsonBody else {
+                return HTTPResponse.badRequest("Invalid JSON")
+            }
+            let result = await GoogleChatBridge.shared.handleWebhook(body)
+            return HTTPResponse.json(result)
+
+        case ("POST", "/v1/sms/webhook"):
+            // Twilio sends form-encoded data — parse from query string or body
+            var params: [String: String] = [:]
+            if let body = req.body, let bodyStr = String(data: body, encoding: .utf8) {
+                for pair in bodyStr.split(separator: "&") {
+                    let kv = pair.split(separator: "=", maxSplits: 1)
+                    if kv.count == 2 {
+                        let key = String(kv[0]).removingPercentEncoding ?? String(kv[0])
+                        let val = String(kv[1]).removingPercentEncoding ?? String(kv[1])
+                        params[key] = val
+                    }
+                }
+            }
+            let twiml = await SMSBridge.shared.handleWebhook(params)
+            return HTTPResponse(statusCode: 200,
+                              headers: ["Content-Type": "text/xml"],
+                              body: Data(twiml.utf8))
 
         // --- Agents (Multi-Agent CRUD) ---
         case ("GET", "/v1/agents"):
@@ -2016,6 +2168,52 @@ actor GatewayServer {
         }
 
         return timestamps.count > limit
+    }
+
+    // MARK: - Per-Token Rate Limiting
+    // Tracks requests per bearer token with an hourly window (100 req/hour).
+    // Separate from IP-based rate limiting — both must pass for a request to proceed.
+
+    private var lastTokenRateLimitPrune: Date = Date()
+    private let tokenRateLimitWindow: TimeInterval = 3600 // 1 hour
+    private let tokenRateLimitMax = 100
+
+    /// Extract the bearer token from a request (masked for logging, raw for tracking)
+    private static func extractBearerToken(from req: HTTPRequest) -> String? {
+        guard let auth = req.headers["authorization"] ?? req.headers["Authorization"] else { return nil }
+        return auth.hasPrefix("Bearer ") ? String(auth.dropFirst(7)) : auth
+    }
+
+    /// Mask a token for safe logging: show first 8 chars + "..."
+    private static func maskToken(_ token: String) -> String {
+        if token.count <= 8 { return String(repeating: "*", count: token.count) }
+        return String(token.prefix(8)) + "..."
+    }
+
+    /// Returns (isLimited, retryAfterSeconds) for per-token rate limiting
+    private func isTokenRateLimited(token: String) -> (limited: Bool, retryAfter: Int) {
+        let now = Date()
+        var timestamps = tokenRequestLog[token] ?? []
+        timestamps = timestamps.filter { now.timeIntervalSince($0) < tokenRateLimitWindow }
+        timestamps.append(now)
+        tokenRequestLog[token] = timestamps
+
+        // Prune stale token entries every 5 minutes
+        if now.timeIntervalSince(lastTokenRateLimitPrune) > 300 {
+            lastTokenRateLimitPrune = now
+            let cutoff = now.addingTimeInterval(-tokenRateLimitWindow)
+            tokenRequestLog = tokenRequestLog.filter { _, dates in
+                dates.contains { $0 > cutoff }
+            }
+        }
+
+        if timestamps.count > tokenRateLimitMax {
+            // Calculate seconds until the oldest request in the window expires
+            let oldest = timestamps.first ?? now
+            let retryAfter = max(1, Int(tokenRateLimitWindow - now.timeIntervalSince(oldest)))
+            return (true, retryAfter)
+        }
+        return (false, 0)
     }
 
     // MARK: - Audit
@@ -2848,6 +3046,7 @@ actor GatewayServer {
         }
 
         // Log user message (handles both string and array/vision content)
+        let channelKey = platform.map { "\($0):gateway" } ?? "web:\(clientIP)"
         if let messages = body["messages"] as? [[String: Any]],
            let last = messages.last(where: { $0["role"] as? String == "user" }),
            let content = extractTextContent(from: last["content"]) {
@@ -2859,6 +3058,12 @@ actor GatewayServer {
                 let s = appState
                 await MainActor.run { s?.addMessage(userMsg) }
             }
+
+            // Write to StreamStore (unified event stream)
+            await StreamStore.shared.append(
+                kind: .message, channelKey: channelKey, agentID: agentID,
+                content: content, metadata: ["role": "user", "model": model]
+            )
         }
 
         // Tool execution loop — auto-execute built-in tools (web_search, web_fetch)
@@ -2899,6 +3104,24 @@ actor GatewayServer {
             // Execute built-in tools
             let toolResults = await ToolProcessor.shared.executeBuiltInTools(builtInCalls, accessLevel: accessLevel, agentID: agentID)
             TorboLog.info("Executed \(builtInCalls.count) built-in tool(s)", subsystem: "Gateway")
+
+            // Log tool calls to StreamStore
+            for call in builtInCalls {
+                let toolName = (call["function"] as? [String: Any])?["name"] as? String ?? "unknown"
+                let callID = await StreamStore.shared.append(
+                    kind: .toolCall, channelKey: channelKey, agentID: agentID,
+                    content: toolName, metadata: ["tool_name": toolName]
+                )
+                // Log tool result
+                if let matchingResult = toolResults.first(where: { $0["tool_call_id"] as? String == call["id"] as? String }) {
+                    let resultContent = String((matchingResult["content"] as? String ?? "").prefix(500))
+                    await StreamStore.shared.append(
+                        kind: .toolResult, channelKey: channelKey, agentID: agentID,
+                        content: resultContent, metadata: ["tool_name": toolName],
+                        parentID: callID
+                    )
+                }
+            }
 
             // Append assistant message + tool results to conversation
             var messages = currentBody["messages"] as? [[String: Any]] ?? []
@@ -2996,7 +3219,7 @@ actor GatewayServer {
 
     /// Default fallback models per provider
     private let fallbackModels: [String: String] = [
-        "ANTHROPIC": "claude-sonnet-4-6-20260217",
+        "ANTHROPIC": "claude-sonnet-4-6",
         "OPENAI": "gpt-4o",
         "GOOGLE": "gemini-2.0-flash",
         "XAI": "grok-3"
@@ -3450,7 +3673,7 @@ actor GatewayServer {
                 let keys = await MainActor.run { AppState.shared.cloudAPIKeys }
                 if let k = keys["ANTHROPIC_API_KEY"], !k.isEmpty {
                     list.append(["id": "claude-opus-4-6", "object": "model", "owned_by": "anthropic"])
-                    list.append(["id": "claude-sonnet-4-6-20260217", "object": "model", "owned_by": "anthropic"])
+                    list.append(["id": "claude-sonnet-4-6", "object": "model", "owned_by": "anthropic"])
                     list.append(["id": "claude-sonnet-4-5-20250929", "object": "model", "owned_by": "anthropic"])
                     list.append(["id": "claude-haiku-4-5-20251001", "object": "model", "owned_by": "anthropic"])
                 }
@@ -5450,10 +5673,174 @@ actor GatewayServer {
         return HTTPResponse.notFound()
     }
 
-    // MARK: - Debate Routes (stub)
+    // MARK: - Debate Routes
 
     private func handleDebateRoute(_ req: HTTPRequest, clientIP: String, currentLevel: AccessLevel, agentID: String) async -> HTTPResponse {
-        return HTTPResponse.json(["error": "Debate API not yet implemented"] as [String: Any])
+
+        // POST /v1/debate — Start a new multi-agent debate
+        if req.method == "POST" && req.path == "/v1/debate" {
+            return await guardedRoute(level: .chatOnly, current: currentLevel, clientIP: clientIP, req: req) {
+                guard let body = req.jsonBody,
+                      let topic = body["topic"] as? String, !topic.isEmpty else {
+                    return HTTPResponse.badRequest("Missing 'topic' field")
+                }
+                let model = body["model"] as? String
+                let confidence = DebateTrigger.confidence(for: topic)
+                let result = await DebateOrchestrator.shared.runDebate(
+                    question: topic, model: model, triggerConfidence: confidence)
+                await EventBus.shared.publish("debate.completed",
+                    payload: ["debate_id": result.id, "topic": String(topic.prefix(80))],
+                    source: "DebateAPI")
+                return HTTPResponse.json(DebateOrchestrator.shared.encodeResult(result))
+            }
+        }
+
+        // GET /v1/debate/history — List past debates
+        if req.method == "GET" && req.path == "/v1/debate/history" {
+            return await guardedRoute(level: .chatOnly, current: currentLevel, clientIP: clientIP, req: req) {
+                let limit = Int(req.queryParam("limit") ?? "20") ?? 20
+                let debates = await DebateOrchestrator.shared.getHistory(limit: min(limit, 100))
+                let summaries: [[String: Any]] = debates.map { d in
+                    ["id": d.id, "question": d.question, "recommendation": d.recommendation,
+                     "confidence": d.confidence, "timestamp": d.timestamp,
+                     "perspectives_count": d.perspectives.count, "durationMs": d.durationMs]
+                }
+                return HTTPResponse.json(["debates": summaries, "count": summaries.count] as [String: Any])
+            }
+        }
+
+        // GET /v1/debate/{id} — Full debate with all perspectives + synthesis
+        if req.method == "GET" && req.path.hasPrefix("/v1/debate/") {
+            let debateID = String(req.path.dropFirst("/v1/debate/".count))
+            guard !debateID.isEmpty && debateID != "history" else {
+                return HTTPResponse.notFound()
+            }
+            return await guardedRoute(level: .chatOnly, current: currentLevel, clientIP: clientIP, req: req) {
+                guard let result = await DebateOrchestrator.shared.getDebate(id: debateID) else {
+                    return HTTPResponse.json(["error": "Debate not found"] as [String: Any])
+                }
+                return HTTPResponse.json(DebateOrchestrator.shared.encodeResult(result))
+            }
+        }
+
+        return HTTPResponse.notFound()
+    }
+
+    // MARK: - Home Assistant Routes
+
+    private func handleHomeAssistantRoute(_ req: HTTPRequest, clientIP: String, currentLevel: AccessLevel) async -> HTTPResponse {
+        // GET /v1/ha/entities — List all entities
+        if req.method == "GET" && req.path == "/v1/ha/entities" {
+            return await guardedRoute(level: .readFiles, current: currentLevel, clientIP: clientIP, req: req) {
+                let domain = req.queryParam("domain")
+                let entities = await HomeAssistantBridge.shared.listEntities(domain: domain)
+                return HTTPResponse.json(["entities": entities, "count": entities.count] as [String: Any])
+            }
+        }
+
+        // GET /v1/ha/state/{entity_id} — Get specific entity state
+        if req.method == "GET" && req.path.hasPrefix("/v1/ha/state/") {
+            let entityID = String(req.path.dropFirst("/v1/ha/state/".count))
+            return await guardedRoute(level: .readFiles, current: currentLevel, clientIP: clientIP, req: req) {
+                guard let state = await HomeAssistantBridge.shared.getState(entityID: entityID) else {
+                    return HTTPResponse.json(["error": "Entity not found"] as [String: Any])
+                }
+                return HTTPResponse.json(state)
+            }
+        }
+
+        // POST /v1/ha/control — Control an entity
+        if req.method == "POST" && req.path == "/v1/ha/control" {
+            return await guardedRoute(level: .writeFiles, current: currentLevel, clientIP: clientIP, req: req) {
+                guard let body = req.jsonBody,
+                      let domain = body["domain"] as? String,
+                      let service = body["service"] as? String,
+                      let entityID = body["entity_id"] as? String else {
+                    return HTTPResponse.badRequest("Missing domain, service, or entity_id")
+                }
+                let serviceData = body["data"] as? [String: Any] ?? [:]
+                let success = await HomeAssistantBridge.shared.callService(
+                    domain: domain, service: service, entityID: entityID, data: serviceData)
+                return HTTPResponse.json(["success": success, "entity_id": entityID, "service": "\(domain).\(service)"] as [String: Any])
+            }
+        }
+
+        // POST /v1/ha/command — Natural language command
+        if req.method == "POST" && req.path == "/v1/ha/command" {
+            return await guardedRoute(level: .writeFiles, current: currentLevel, clientIP: clientIP, req: req) {
+                guard let body = req.jsonBody, let command = body["command"] as? String else {
+                    return HTTPResponse.badRequest("Missing 'command'")
+                }
+                let result = await HomeAssistantBridge.shared.executeNaturalLanguage(command)
+                return HTTPResponse.json(result)
+            }
+        }
+
+        // GET /v1/ha/history/{entity_id} — State history
+        if req.method == "GET" && req.path.hasPrefix("/v1/ha/history/") {
+            let entityID = String(req.path.dropFirst("/v1/ha/history/".count))
+            return await guardedRoute(level: .readFiles, current: currentLevel, clientIP: clientIP, req: req) {
+                let hours = Int(req.queryParam("hours") ?? "24") ?? 24
+                let history = await HomeAssistantBridge.shared.getHistory(entityID: entityID, hours: hours)
+                return HTTPResponse.json(["entity_id": entityID, "history": history, "count": history.count] as [String: Any])
+            }
+        }
+
+        return HTTPResponse.notFound()
+    }
+
+    // MARK: - Skills Registry Routes
+
+    private func handleSkillsRegistryRoute(_ req: HTTPRequest, clientIP: String, currentLevel: AccessLevel) async -> HTTPResponse {
+        // GET /v1/skills/registry — Browse available skills
+        if req.method == "GET" && req.path == "/v1/skills/registry" {
+            return await guardedRoute(level: .chatOnly, current: currentLevel, clientIP: clientIP, req: req) {
+                let registry = await SkillsRegistry.shared.browse(
+                    tag: req.queryParam("tag"),
+                    page: Int(req.queryParam("page") ?? "1") ?? 1,
+                    limit: Int(req.queryParam("limit") ?? "20") ?? 20
+                )
+                return HTTPResponse.json(registry)
+            }
+        }
+
+        // GET /v1/skills/search — Search skills
+        if req.method == "GET" && req.path == "/v1/skills/search" {
+            return await guardedRoute(level: .chatOnly, current: currentLevel, clientIP: clientIP, req: req) {
+                let query = req.queryParam("q") ?? ""
+                let results = await SkillsRegistry.shared.search(query: query)
+                return HTTPResponse.json(["results": results, "query": query] as [String: Any])
+            }
+        }
+
+        // POST /v1/skills/install — Install a skill
+        if req.method == "POST" && req.path == "/v1/skills/install" {
+            return await guardedRoute(level: .writeFiles, current: currentLevel, clientIP: clientIP, req: req) {
+                guard let body = req.jsonBody, let skillID = body["id"] as? String else {
+                    return HTTPResponse.badRequest("Missing skill 'id'")
+                }
+                let success = await SkillsRegistry.shared.install(skillID: skillID)
+                return HTTPResponse.json(["success": success, "id": skillID] as [String: Any])
+            }
+        }
+
+        // POST /v1/skills/create — Auto-create a skill from context
+        if req.method == "POST" && req.path == "/v1/skills/create" {
+            return await guardedRoute(level: .writeFiles, current: currentLevel, clientIP: clientIP, req: req) {
+                guard let body = req.jsonBody,
+                      let name = body["name"] as? String,
+                      let description = body["description"] as? String else {
+                    return HTTPResponse.badRequest("Missing 'name' and 'description'")
+                }
+                let prompt = body["prompt"] as? String ?? ""
+                let tags = body["tags"] as? [String] ?? []
+                let result = await SkillsRegistry.shared.createSkill(
+                    name: name, description: description, prompt: prompt, tags: tags)
+                return HTTPResponse.json(result)
+            }
+        }
+
+        return HTTPResponse.notFound()
     }
 
     // MARK: - Commitments Detection
