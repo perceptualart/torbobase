@@ -2059,6 +2059,13 @@ actor GatewayServer {
                 }
             }
 
+            // Schedule Management routes
+            if req.path.hasPrefix("/v1/schedules") {
+                if let response = await handleSchedulesRoute(req, clientIP: clientIP) {
+                    return response
+                }
+            }
+
             // TaskQueue routes
             if req.path.hasPrefix("/v1/tasks") {
                 if let response = await handleTaskQueueRoute(req, clientIP: clientIP) {

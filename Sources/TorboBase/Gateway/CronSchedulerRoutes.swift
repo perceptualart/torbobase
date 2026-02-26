@@ -286,6 +286,202 @@ extension GatewayServer {
         if let result = task.lastResult { dict["last_result"] = result }
         if let error = task.lastError { dict["last_error"] = error }
         if let tz = task.timezone { dict["timezone"] = tz }
+        if let cat = task.category { dict["category"] = cat }
+        if let tags = task.tags { dict["tags"] = tags }
+        if let maxRetries = task.maxRetries { dict["max_retries"] = maxRetries }
+        if let retryCount = task.retryCount, retryCount > 0 { dict["retry_count"] = retryCount }
+        if task.isPaused {
+            dict["paused"] = true
+            if let until = task.pausedUntil, until != .distantFuture {
+                dict["paused_until"] = df.string(from: until)
+            }
+        }
+        if let isDefault = task.isDefault { dict["is_default"] = isDefault }
+        if let rate = task.successRate { dict["success_rate"] = rate }
         return dict
+    }
+
+    // MARK: - Schedule Management Routes (/v1/schedules)
+
+    /// Handle all /v1/schedules/* routes. Returns nil if not a schedules route.
+    func handleSchedulesRoute(_ req: HTTPRequest, clientIP: String) async -> HTTPResponse? {
+        let path = req.path
+        let method = req.method
+
+        // GET /v1/schedules — list all (same as /v1/cron/tasks, with category grouping)
+        if method == "GET" && path == "/v1/schedules" {
+            let grouped = await CronScheduler.shared.schedulesGroupedByCategory()
+            var sections: [[String: Any]] = []
+            for group in grouped {
+                let items = group.schedules.map { cronTaskJSON($0) }
+                sections.append(["category": group.category, "schedules": items, "count": items.count])
+            }
+            let all = await CronScheduler.shared.listTasks()
+            return HTTPResponse.json([
+                "categories": sections,
+                "total": all.count,
+                "enabled": all.filter(\.enabled).count
+            ])
+        }
+
+        // GET /v1/schedules/categories — list categories
+        if method == "GET" && path == "/v1/schedules/categories" {
+            let cats = await CronScheduler.shared.categories()
+            return HTTPResponse.json(["categories": cats])
+        }
+
+        // GET /v1/schedules/stats — full stats
+        if method == "GET" && path == "/v1/schedules/stats" {
+            let stats = await CronScheduler.shared.stats()
+            let data = (try? JSONSerialization.data(withJSONObject: stats)) ?? Data()
+            return HTTPResponse(statusCode: 200, headers: ["Content-Type": "application/json"], body: data)
+        }
+
+        // GET /v1/schedules/export — export all schedules as JSON
+        if method == "GET" && path == "/v1/schedules/export" {
+            guard let data = await CronScheduler.shared.exportSchedules() else {
+                return HTTPResponse.serverError("Failed to export schedules")
+            }
+            return HTTPResponse(statusCode: 200, headers: [
+                "Content-Type": "application/json",
+                "Content-Disposition": "attachment; filename=schedules.json"
+            ], body: data)
+        }
+
+        // POST /v1/schedules/import — import schedules from JSON
+        if method == "POST" && path == "/v1/schedules/import" {
+            guard let bodyData = req.body, !bodyData.isEmpty else {
+                return HTTPResponse.badRequest("Missing request body")
+            }
+            let replace = req.jsonBody?["replace_existing"] as? Bool ?? false
+            let count = await CronScheduler.shared.importSchedules(data: bodyData, replaceExisting: replace)
+            return HTTPResponse.json(["imported": count, "replace_existing": replace])
+        }
+
+        // POST /v1/schedules/install-defaults — install default schedules
+        if method == "POST" && path == "/v1/schedules/install-defaults" {
+            await CronScheduler.shared.installDefaultSchedules()
+            let tasks = await CronScheduler.shared.listTasks()
+            return HTTPResponse.json(["status": "installed", "total": tasks.count])
+        }
+
+        // POST /v1/schedules/bulk/enable — enable all schedules
+        if method == "POST" && path == "/v1/schedules/bulk/enable" {
+            await CronScheduler.shared.enableAll()
+            let tasks = await CronScheduler.shared.listTasks()
+            return HTTPResponse.json(["status": "enabled", "count": tasks.count])
+        }
+
+        // POST /v1/schedules/bulk/disable — disable all schedules
+        if method == "POST" && path == "/v1/schedules/bulk/disable" {
+            await CronScheduler.shared.disableAll()
+            let tasks = await CronScheduler.shared.listTasks()
+            return HTTPResponse.json(["status": "disabled", "count": tasks.count])
+        }
+
+        // POST /v1/schedules/bulk/delete — delete all schedules
+        if method == "POST" && path == "/v1/schedules/bulk/delete" {
+            let count = await CronScheduler.shared.deleteAll()
+            return HTTPResponse.json(["status": "deleted", "count": count])
+        }
+
+        // — Dynamic path routes: /v1/schedules/{id}... —
+        guard path.hasPrefix("/v1/schedules/") else { return nil }
+
+        let pathParts = path.split(separator: "/").map(String.init)
+        guard pathParts.count >= 3 else { return nil }
+        let scheduleID = pathParts[2]
+
+        // Skip known top-level paths
+        let reserved = ["categories", "stats", "export", "import", "install-defaults", "bulk"]
+        if reserved.contains(scheduleID) { return nil }
+
+        // POST /v1/schedules/{id}/clone — clone a schedule
+        if method == "POST" && pathParts.count == 4 && pathParts[3] == "clone" {
+            let newName = req.jsonBody?["name"] as? String
+            guard let cloned = await CronScheduler.shared.cloneSchedule(id: scheduleID, newName: newName) else {
+                return HTTPResponse.notFound()
+            }
+            let data = (try? JSONSerialization.data(withJSONObject: cronTaskJSON(cloned))) ?? Data()
+            return HTTPResponse(statusCode: 201, headers: ["Content-Type": "application/json"], body: data)
+        }
+
+        // POST /v1/schedules/{id}/pause — pause a schedule
+        if method == "POST" && pathParts.count == 4 && pathParts[3] == "pause" {
+            let untilStr = req.jsonBody?["until"] as? String
+            var until: Date? = nil
+            if let str = untilStr {
+                let df = ISO8601DateFormatter()
+                until = df.date(from: str)
+            }
+            guard let paused = await CronScheduler.shared.pauseSchedule(id: scheduleID, until: until) else {
+                return HTTPResponse.notFound()
+            }
+            return HTTPResponse.json(cronTaskJSON(paused))
+        }
+
+        // POST /v1/schedules/{id}/resume — resume a paused schedule
+        if method == "POST" && pathParts.count == 4 && pathParts[3] == "resume" {
+            guard let resumed = await CronScheduler.shared.resumeSchedule(id: scheduleID) else {
+                return HTTPResponse.notFound()
+            }
+            return HTTPResponse.json(cronTaskJSON(resumed))
+        }
+
+        // DELETE /v1/schedules/{id}/history — clear execution history
+        if method == "DELETE" && pathParts.count == 4 && pathParts[3] == "history" {
+            let success = await CronScheduler.shared.clearHistory(scheduleID: scheduleID)
+            if success {
+                return HTTPResponse.json(["status": "cleared", "schedule_id": scheduleID])
+            }
+            return HTTPResponse.notFound()
+        }
+
+        // GET /v1/schedules/{id} — get single schedule (delegates to cron handler)
+        if method == "GET" && pathParts.count == 3 {
+            guard let task = await CronScheduler.shared.getTask(id: scheduleID) else {
+                return HTTPResponse.notFound()
+            }
+            return HTTPResponse.json(cronTaskJSON(task))
+        }
+
+        // PUT /v1/schedules/{id} — update schedule (delegates to cron handler)
+        if method == "PUT" && pathParts.count == 3 {
+            guard let body = req.jsonBody else {
+                return HTTPResponse.badRequest("Missing request body")
+            }
+
+            if let cron = body["cron_expression"] as? String {
+                let validation = CronParser.validate(cron)
+                if !validation.isValid {
+                    return HTTPResponse.badRequest("Invalid cron expression: \(HTTPResponse.jsonEscape(validation.error ?? "unknown"))")
+                }
+            }
+
+            let updated = await CronScheduler.shared.updateTask(
+                id: scheduleID,
+                name: body["name"] as? String,
+                cronExpression: body["cron_expression"] as? String,
+                agentID: body["agent_id"] as? String,
+                prompt: body["prompt"] as? String,
+                enabled: body["enabled"] as? Bool
+            )
+
+            guard let task = updated else {
+                return HTTPResponse.notFound()
+            }
+            return HTTPResponse.json(cronTaskJSON(task))
+        }
+
+        // DELETE /v1/schedules/{id} — delete schedule
+        if method == "DELETE" && pathParts.count == 3 {
+            let success = await CronScheduler.shared.deleteTask(id: scheduleID)
+            if success {
+                return HTTPResponse.json(["status": "deleted", "id": scheduleID])
+            }
+            return HTTPResponse.notFound()
+        }
+
+        return nil
     }
 }

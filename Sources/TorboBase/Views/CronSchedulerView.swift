@@ -52,36 +52,96 @@ struct CronSchedulerView: View {
     // MARK: - Header
 
     private var headerBar: some View {
-        HStack {
-            Image(systemName: "clock.badge.checkmark")
-                .foregroundColor(.yellow)
-            Text("Cron Scheduler")
-                .font(.headline)
-                .foregroundColor(.white)
+        VStack(spacing: 0) {
+            HStack {
+                Image(systemName: "clock.badge.checkmark")
+                    .foregroundColor(.yellow)
+                Text("Cron Scheduler")
+                    .font(.headline)
+                    .foregroundColor(.white)
 
-            Spacer()
+                Spacer()
 
-            let enabled = schedules.filter(\.enabled).count
-            Text("\(schedules.count) schedules (\(enabled) active)")
-                .font(.caption)
-                .foregroundColor(.white.opacity(0.5))
-
-            Button(action: { showingTemplateSheet = true }) {
-                Label("Templates", systemImage: "doc.on.doc")
+                let enabled = schedules.filter(\.enabled).count
+                let paused = schedules.filter { $0.isPaused }.count
+                Text("\(schedules.count) schedules (\(enabled) active\(paused > 0 ? ", \(paused) paused" : ""))")
                     .font(.caption)
-            }
-            .buttonStyle(.bordered)
+                    .foregroundColor(.white.opacity(0.5))
 
-            Button(action: { showingCreateSheet = true }) {
-                Label("New Schedule", systemImage: "plus")
-                    .font(.caption)
+                Menu {
+                    Button("Enable All") { bulkEnable() }
+                    Button("Disable All") { bulkDisable() }
+                    Divider()
+                    Button("Install Defaults") { installDefaults() }
+                    Divider()
+                    Button("Delete All", role: .destructive) { bulkDeleteAll() }
+                } label: {
+                    Label("Bulk", systemImage: "ellipsis.circle")
+                        .font(.caption)
+                }
+                .menuStyle(.borderlessButton)
+                .frame(width: 60)
+
+                Button(action: { showingTemplateSheet = true }) {
+                    Label("Templates", systemImage: "doc.on.doc")
+                        .font(.caption)
+                }
+                .buttonStyle(.bordered)
+
+                Button(action: { showingCreateSheet = true }) {
+                    Label("New Schedule", systemImage: "plus")
+                        .font(.caption)
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(.yellow)
             }
-            .buttonStyle(.borderedProminent)
-            .tint(.yellow)
+            .padding(.horizontal)
+            .padding(.vertical, 8)
+
+            // Stats row
+            if !schedules.isEmpty {
+                HStack(spacing: 16) {
+                    let totalRuns = schedules.reduce(0) { $0 + $1.runCount }
+                    let allHistory = schedules.flatMap(\.executionLog)
+                    let successCount = allHistory.filter(\.success).count
+
+                    statsChip(label: "Total Runs", value: "\(totalRuns)", color: .white)
+                    if !allHistory.isEmpty {
+                        let rate = Int(Double(successCount) / Double(allHistory.count) * 100)
+                        statsChip(label: "Success", value: "\(rate)%", color: rate >= 90 ? .green : rate >= 70 ? .yellow : .red)
+                    }
+                    let cats = Set(schedules.compactMap(\.category))
+                    statsChip(label: "Categories", value: "\(cats.count)", color: .cyan)
+
+                    if let nextDue = schedules.filter({ $0.enabled && $0.nextRun != nil })
+                        .min(by: { ($0.nextRun ?? .distantFuture) < ($1.nextRun ?? .distantFuture) }),
+                       let nextRun = nextDue.nextRun {
+                        let interval = nextRun.timeIntervalSinceNow
+                        let timeStr = interval < 60 ? "<1m" : interval < 3600 ? "\(Int(interval/60))m" : "\(Int(interval/3600))h"
+                        statsChip(label: "Next Due", value: timeStr, color: .yellow)
+                    }
+                    Spacer()
+                }
+                .padding(.horizontal)
+                .padding(.bottom, 6)
+            }
         }
-        .padding(.horizontal)
-        .padding(.vertical, 8)
         .background(Color.black)
+    }
+
+    private func statsChip(label: String, value: String, color: Color) -> some View {
+        HStack(spacing: 4) {
+            Text(value)
+                .font(.system(size: 12, weight: .bold, design: .monospaced))
+                .foregroundColor(color)
+            Text(label)
+                .font(.system(size: 10))
+                .foregroundColor(.white.opacity(0.35))
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 3)
+        .background(Color.white.opacity(0.05))
+        .cornerRadius(6)
     }
 
     // MARK: - Schedule List
@@ -103,22 +163,46 @@ struct CronSchedulerView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .padding(.top, 60)
             } else {
-                ForEach(schedules) { schedule in
-                    ScheduleRow(schedule: schedule, isSelected: selectedScheduleID == schedule.id)
-                        .tag(schedule.id)
-                        .contextMenu {
-                            Button("Run Now") { triggerSchedule(schedule.id) }
-                            Divider()
-                            Button(schedule.enabled ? "Disable" : "Enable") {
-                                toggleSchedule(schedule.id)
-                            }
-                            Divider()
-                            Button("Delete", role: .destructive) { deleteSchedule(schedule.id) }
+                let grouped = groupedSchedules
+                ForEach(grouped, id: \.category) { group in
+                    Section(header: Text(group.category.capitalized)
+                        .font(.caption.bold())
+                        .foregroundColor(.yellow.opacity(0.7))) {
+                        ForEach(group.schedules) { schedule in
+                            ScheduleRow(schedule: schedule, isSelected: selectedScheduleID == schedule.id)
+                                .tag(schedule.id)
+                                .contextMenu {
+                                    Button("Run Now") { triggerSchedule(schedule.id) }
+                                    Button("Clone") { cloneSchedule(schedule.id) }
+                                    Divider()
+                                    Button(schedule.enabled ? "Disable" : "Enable") {
+                                        toggleSchedule(schedule.id)
+                                    }
+                                    if schedule.isPaused {
+                                        Button("Resume") { resumeSchedule(schedule.id) }
+                                    } else {
+                                        Button("Pause (1h)") { pauseSchedule(schedule.id, hours: 1) }
+                                        Button("Pause (24h)") { pauseSchedule(schedule.id, hours: 24) }
+                                    }
+                                    Divider()
+                                    Button("Delete", role: .destructive) { deleteSchedule(schedule.id) }
+                                }
                         }
+                    }
                 }
             }
         }
         .listStyle(.sidebar)
+    }
+
+    private var groupedSchedules: [(category: String, schedules: [CronTask])] {
+        var groups: [String: [CronTask]] = [:]
+        for schedule in schedules {
+            let cat = schedule.category ?? "uncategorized"
+            groups[cat, default: []].append(schedule)
+        }
+        return groups.map { (category: $0.key, schedules: $0.value) }
+            .sorted { $0.category < $1.category }
     }
 
     // MARK: - Detail Panel
@@ -182,6 +266,62 @@ struct CronSchedulerView: View {
             loadSchedules()
         }
     }
+
+    private func cloneSchedule(_ id: String) {
+        Task {
+            if let cloned = await CronScheduler.shared.cloneSchedule(id: id) {
+                await MainActor.run {
+                    schedules.append(cloned)
+                    selectedScheduleID = cloned.id
+                }
+            }
+            loadSchedules()
+        }
+    }
+
+    private func pauseSchedule(_ id: String, hours: Int) {
+        Task {
+            let until = Date().addingTimeInterval(TimeInterval(hours * 3600))
+            _ = await CronScheduler.shared.pauseSchedule(id: id, until: until)
+            loadSchedules()
+        }
+    }
+
+    private func resumeSchedule(_ id: String) {
+        Task {
+            _ = await CronScheduler.shared.resumeSchedule(id: id)
+            loadSchedules()
+        }
+    }
+
+    private func bulkEnable() {
+        Task {
+            await CronScheduler.shared.enableAll()
+            loadSchedules()
+        }
+    }
+
+    private func bulkDisable() {
+        Task {
+            await CronScheduler.shared.disableAll()
+            loadSchedules()
+        }
+    }
+
+    private func bulkDeleteAll() {
+        Task {
+            _ = await CronScheduler.shared.deleteAll()
+            selectedScheduleID = nil
+            loadSchedules()
+        }
+    }
+
+    private func installDefaults() {
+        Task {
+            await CronScheduler.shared.installDefaultSchedules()
+            loadSchedules()
+        }
+    }
 }
 
 // MARK: - Schedule Row
@@ -194,14 +334,34 @@ private struct ScheduleRow: View {
         HStack(spacing: 10) {
             // Status indicator
             Circle()
-                .fill(schedule.enabled ? Color.green : Color.gray)
+                .fill(schedule.isPaused ? Color.orange : schedule.enabled ? Color.green : Color.gray)
                 .frame(width: 8, height: 8)
 
             VStack(alignment: .leading, spacing: 2) {
-                Text(schedule.name)
-                    .font(.system(.body, design: .default))
-                    .foregroundColor(.white)
-                    .lineLimit(1)
+                HStack(spacing: 6) {
+                    Text(schedule.name)
+                        .font(.system(.body, design: .default))
+                        .foregroundColor(.white)
+                        .lineLimit(1)
+                    if schedule.isPaused {
+                        Text("PAUSED")
+                            .font(.system(size: 8, weight: .bold))
+                            .foregroundColor(.orange)
+                            .padding(.horizontal, 4)
+                            .padding(.vertical, 1)
+                            .background(Color.orange.opacity(0.15))
+                            .cornerRadius(3)
+                    }
+                    if schedule.isDefault == true {
+                        Text("DEFAULT")
+                            .font(.system(size: 8, weight: .medium))
+                            .foregroundColor(.white.opacity(0.3))
+                            .padding(.horizontal, 4)
+                            .padding(.vertical, 1)
+                            .background(Color.white.opacity(0.05))
+                            .cornerRadius(3)
+                    }
+                }
 
                 HStack(spacing: 6) {
                     Text(schedule.cronExpression)
@@ -217,8 +377,17 @@ private struct ScheduleRow: View {
 
             Spacer()
 
-            // Next run
-            if let nextRun = schedule.nextRun {
+            // Next run or paused until
+            if schedule.isPaused, let until = schedule.pausedUntil, until != .distantFuture {
+                VStack(alignment: .trailing, spacing: 1) {
+                    Text("Paused")
+                        .font(.system(size: 9))
+                        .foregroundColor(.orange.opacity(0.5))
+                    Text(relativeTime(until))
+                        .font(.caption2)
+                        .foregroundColor(.orange.opacity(0.7))
+                }
+            } else if let nextRun = schedule.nextRun {
                 VStack(alignment: .trailing, spacing: 1) {
                     Text("Next")
                         .font(.system(size: 9))
@@ -303,6 +472,30 @@ private struct ScheduleDetailView: View {
                 }
                 .groupBoxStyle(DarkGroupBoxStyle())
 
+                // Paused banner
+                if schedule.isPaused {
+                    HStack {
+                        Image(systemName: "pause.circle.fill")
+                            .foregroundColor(.orange)
+                        Text("Schedule is paused")
+                            .font(.caption.bold())
+                            .foregroundColor(.orange)
+                        if let until = schedule.pausedUntil, until != .distantFuture {
+                            Text("until \(formatDateFull(until))")
+                                .font(.caption)
+                                .foregroundColor(.orange.opacity(0.7))
+                        } else {
+                            Text("indefinitely")
+                                .font(.caption)
+                                .foregroundColor(.orange.opacity(0.7))
+                        }
+                        Spacer()
+                    }
+                    .padding(8)
+                    .background(Color.orange.opacity(0.1))
+                    .cornerRadius(8)
+                }
+
                 // Task details
                 GroupBox {
                     VStack(alignment: .leading, spacing: 8) {
@@ -314,7 +507,7 @@ private struct ScheduleDetailView: View {
                             .foregroundColor(.white.opacity(0.8))
                             .lineLimit(6)
 
-                        HStack {
+                        HStack(spacing: 12) {
                             Label(schedule.agentID, systemImage: "person.circle")
                                 .font(.caption)
                                 .foregroundColor(.white.opacity(0.5))
@@ -323,10 +516,42 @@ private struct ScheduleDetailView: View {
                                     .font(.caption)
                                     .foregroundColor(.white.opacity(0.5))
                             }
+                            if let cat = schedule.category {
+                                Label(cat.capitalized, systemImage: "folder")
+                                    .font(.caption)
+                                    .foregroundColor(.white.opacity(0.5))
+                            }
                             Label(schedule.effectiveCatchUp ? "Catch-up enabled" : "Skip missed",
                                   systemImage: schedule.effectiveCatchUp ? "arrow.clockwise" : "forward")
                                 .font(.caption)
                                 .foregroundColor(.white.opacity(0.5))
+                        }
+
+                        if schedule.effectiveMaxRetries > 0 {
+                            HStack(spacing: 6) {
+                                Label("Max retries: \(schedule.effectiveMaxRetries)", systemImage: "arrow.counterclockwise")
+                                    .font(.caption)
+                                    .foregroundColor(.white.opacity(0.5))
+                                if let retries = schedule.retryCount, retries > 0 {
+                                    Text("(\(retries) pending)")
+                                        .font(.caption)
+                                        .foregroundColor(.yellow.opacity(0.7))
+                                }
+                            }
+                        }
+
+                        if let tags = schedule.tags, !tags.isEmpty {
+                            HStack(spacing: 4) {
+                                ForEach(tags, id: \.self) { tag in
+                                    Text(tag)
+                                        .font(.system(size: 10))
+                                        .foregroundColor(.white.opacity(0.5))
+                                        .padding(.horizontal, 6)
+                                        .padding(.vertical, 2)
+                                        .background(Color.white.opacity(0.08))
+                                        .cornerRadius(4)
+                                }
+                            }
                         }
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -336,6 +561,9 @@ private struct ScheduleDetailView: View {
                 // Stats row
                 HStack(spacing: 20) {
                     StatBox(label: "Total Runs", value: "\(schedule.runCount)")
+                    if let rate = schedule.successRate {
+                        StatBox(label: "Success Rate", value: "\(rate)%")
+                    }
                     if let lastRun = schedule.lastRun {
                         StatBox(label: "Last Run", value: formatDate(lastRun))
                     }
