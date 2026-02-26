@@ -758,6 +758,7 @@ enum DashboardTab: String, CaseIterable {
     case security = "Security"
     case iam = "IAM"
     case governance = "Governance"
+    case teams = "Teams"
     case scheduler = "Scheduler"
     case settings = "Settings"
 
@@ -774,6 +775,7 @@ enum DashboardTab: String, CaseIterable {
         case .security: return "shield.checkered"
         case .iam: return "person.badge.shield.checkmark.fill"
         case .governance: return "shield.lefthalf.filled"
+        case .teams: return "person.3.fill"
         case .scheduler: return "clock.badge.checkmark"
         case .settings: return "gearshape.fill"
         }
@@ -792,6 +794,7 @@ enum DashboardTab: String, CaseIterable {
         case .security: return "security"
         case .iam: return "agent IAM"
         case .governance: return "governance"
+        case .teams: return "agent teams"
         case .scheduler: return "cron scheduler"
         case .settings: return "settings"
         }

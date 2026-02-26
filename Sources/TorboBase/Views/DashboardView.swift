@@ -152,6 +152,8 @@ struct DashboardView: View {
                     AgentIAMDashboardView()
                 case .governance:
                     GovernanceDashboardView()
+                case .teams:
+                    AgentTeamsView()
                 case .scheduler:
                     CronSchedulerView()
                 case .settings:
