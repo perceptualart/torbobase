@@ -13,6 +13,9 @@ DerivedData/
 dist/
 Resources/ORBBase.entitlements
 
+# Large binary frameworks (sherpa-onnx dylibs ~85MB — install locally)
+Frameworks/
+
 # Internal docs — do not publish
 CLAUDE.md
 LEGAL_AND_REGULATORY_GUIDE.md

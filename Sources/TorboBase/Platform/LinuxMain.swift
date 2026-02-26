@@ -124,6 +124,9 @@ struct TorboBaseServer {
         TorboLog.info("Starting cron scheduler...", subsystem: "Main")
         await CronScheduler.shared.initialize()
 
+        TorboLog.info("Starting visual workflow triggers...", subsystem: "Main")
+        await WorkflowIntegrationManager.shared.registerAllTriggers()
+
         TorboLog.info("Starting LoA Memory Engine...", subsystem: "Main")
         await LoAMemoryEngine.shared.initialize()
         await LoADistillation.shared.registerCronJob()
@@ -171,6 +174,7 @@ struct TorboBaseServer {
         TorboLog.info("API:       http://\(host):\(port)/v1/", subsystem: "Main")
         TorboLog.info("Chat:      http://\(host):\(port)/chat", subsystem: "Main")
         TorboLog.info("Dashboard: http://\(host):\(port)/dashboard", subsystem: "Main")
+        TorboLog.info("Workflows: http://\(host):\(port)/workflow-designer", subsystem: "Main")
         if await SupabaseAuth.shared.isEnabled {
             TorboLog.info("Auth:      POST http://\(host):\(port)/v1/auth/magic-link", subsystem: "Main")
             TorboLog.info("Billing:   GET  http://\(host):\(port)/v1/billing/status", subsystem: "Main")

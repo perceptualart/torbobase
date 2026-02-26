@@ -267,6 +267,11 @@ actor GatewayServer {
                 await CronScheduler.shared.initialize()
             }
 
+            // Start Visual Workflow triggers
+            Task {
+                await WorkflowIntegrationManager.shared.registerAllTriggers()
+            }
+
             // Start Event Bus
             Task {
                 await EventBus.shared.initialize()
@@ -346,6 +351,7 @@ actor GatewayServer {
         }
         Task { await TelegramBridge.shared.notify("Gateway stopped") }
         Task { await EventBus.shared.publish("system.gateway.stopped", source: "Gateway") }
+        Task { await WorkflowIntegrationManager.shared.shutdown() }
         TorboLog.info("Stopped", subsystem: "Gateway")
     }
 
@@ -487,6 +493,7 @@ actor GatewayServer {
             PairingManager.shared.stopAdvertising()
         }
         Task { await TelegramBridge.shared.notify("Gateway stopped") }
+        Task { await WorkflowIntegrationManager.shared.shutdown() }
         TorboLog.info("Stopped", subsystem: "Gateway")
     }
     #endif
@@ -2021,6 +2028,26 @@ actor GatewayServer {
                         return HTTPResponse.json(["status": "cancelled", "id": wfID])
                     }
                 }
+            }
+
+            // Visual Workflow Designer routes: /v1/visual-workflows/*
+            if req.path.hasPrefix("/v1/visual-workflows") {
+                if let result = await WorkflowDesignerRoutes.handle(
+                    method: req.method, path: req.path, body: req.body,
+                    queryParams: req.queryParams
+                ) {
+                    return HTTPResponse(
+                        statusCode: result.statusCode,
+                        headers: ["Content-Type": result.contentType],
+                        body: result.responseData()
+                    )
+                }
+            }
+
+            // Visual Workflow Designer web UI
+            if req.path == "/workflow-designer" && req.method == "GET" {
+                let html = WorkflowDesignerHTML.page()
+                return HTTPResponse(statusCode: 200, headers: ["Content-Type": "text/html"], body: Data(html.utf8))
             }
 
             // Code sandbox file serving: /v1/code/files/{path...}

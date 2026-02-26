@@ -760,6 +760,7 @@ enum DashboardTab: String, CaseIterable {
     case governance = "Governance"
     case teams = "Teams"
     case scheduler = "Scheduler"
+    case workflows = "Workflows"
     case settings = "Settings"
 
     var icon: String {
@@ -777,6 +778,7 @@ enum DashboardTab: String, CaseIterable {
         case .governance: return "shield.lefthalf.filled"
         case .teams: return "person.3.fill"
         case .scheduler: return "clock.badge.checkmark"
+        case .workflows: return "arrow.triangle.branch"
         case .settings: return "gearshape.fill"
         }
     }
@@ -796,6 +798,7 @@ enum DashboardTab: String, CaseIterable {
         case .governance: return "governance"
         case .teams: return "agent teams"
         case .scheduler: return "cron scheduler"
+        case .workflows: return "visual workflows"
         case .settings: return "settings"
         }
     }

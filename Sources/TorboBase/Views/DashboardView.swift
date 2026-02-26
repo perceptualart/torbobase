@@ -156,6 +156,8 @@ struct DashboardView: View {
                     AgentTeamsView()
                 case .scheduler:
                     CronSchedulerView()
+                case .workflows:
+                    WorkflowCanvasView()
                 case .settings:
                     SettingsView()
                 }
