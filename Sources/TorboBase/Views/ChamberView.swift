@@ -253,9 +253,7 @@ struct ChamberView: View {
                     OrbRenderer(
                         audioLevels: levels,
                         color: orbColor,
-                        isActive: true,
-                        baseHue: agentOrbHue(agentID),
-                        baseSaturation: isSpeaking ? 0.9 : 0.5
+                        isActive: true
                     )
                     .frame(width: displaySize, height: displaySize)
                     .animation(.easeInOut(duration: 0.3), value: isSpeaking)

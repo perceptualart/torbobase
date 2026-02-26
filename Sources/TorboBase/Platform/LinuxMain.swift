@@ -83,6 +83,7 @@ struct TorboBaseServer {
         await StreamStore.shared.initialize()
         await EntityGraph.shared.initialize()
         await UserIdentity.shared.initialize()
+        await GovernanceEngine.shared.initialize()
 
         TorboLog.info("Initializing conversation search...", subsystem: "Main")
         await ConversationSearch.shared.initialize()
@@ -143,6 +144,10 @@ struct TorboBaseServer {
         TorboLog.info("Starting ambient monitor...", subsystem: "Main")
         await HomeKitSOCReceiver.shared.start()
         await AmbientMonitor.shared.start()
+
+        // Initialize Agent IAM — migrate existing agents on first boot
+        TorboLog.info("Initializing Agent IAM...", subsystem: "Main")
+        await AgentIAMMigration.migrateIfNeeded()
 
         // Start bridge polling (if configured via env vars)
         if ProcessInfo.processInfo.environment["TELEGRAM_BOT_TOKEN"] != nil {

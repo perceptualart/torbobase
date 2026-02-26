@@ -29,6 +29,7 @@ struct AgentsView: View {
     enum AgentViewMode: String, CaseIterable {
         case chat = "Chat"
         case settings = "Settings"
+        case tasks = "Tasks"
         case voxEngine = "Vox Engine"
     }
 
@@ -60,6 +61,7 @@ struct AgentsView: View {
     @State private var detailWidth: CGFloat = 400
     @State private var confirmingFull = false
 
+
     // Resizable panes
     @State private var listPaneWidth: CGFloat = 240
     @State private var dragStartWidth: CGFloat = 240
@@ -68,13 +70,14 @@ struct AgentsView: View {
 
     // Vox Engine
     @State private var voxTestText = "Hello, I'm your AI assistant. How can I help you today?"
+    @State private var showAddEngineSheet = false
     @State private var availableSystemVoices: [AVSpeechSynthesisVoice] = []
 
     // Audio monitoring
     @ObservedObject private var speechRecognizer = SpeechRecognizer.shared
 
-    // Orb collapse
-    @State private var orbCollapsed = false
+    // Orb collapse (persisted)
+    // orbCollapsed removed — orb always visible
 
     // Chat history / conversations
     @State private var chatHistoryExpanded = true
@@ -325,63 +328,15 @@ struct AgentsView: View {
 
     private var agentDetailPanel: some View {
         VStack(spacing: 0) {
-            // Orb + agent name + level picker (collapsible)
-            if orbCollapsed {
-                // Compact collapsed bar
-                HStack(spacing: 10) {
-                    Button {
-                        withAnimation(.easeInOut(duration: 0.2)) { orbCollapsed = false }
-                    } label: {
-                        Image(systemName: "chevron.down")
-                            .font(.system(size: 9, weight: .bold))
-                            .foregroundStyle(.white.opacity(0.3))
-                    }
-                    .buttonStyle(.plain)
+            // Orb section (collapsible — only the orb graphic itself)
+            orbSection
+                .padding(.top, 0)
+                .padding(.bottom, 8)
 
-                    Text(editConfig.name)
-                        .font(.system(size: 13, weight: .bold, design: .monospaced))
-                        .foregroundStyle(.white.opacity(0.6))
-                        .tracking(1)
-
-                    let levelNames = ["OFF", "CHAT", "READ", "WRITE", "EXEC", "FULL"]
-                    let lvl = min(editConfig.accessLevel, 5)
-                    Text(levelNames[lvl])
-                        .font(.system(size: 9, weight: .bold, design: .monospaced))
-                        .foregroundStyle(AccessLevel(rawValue: lvl)?.color ?? .gray)
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 2)
-                        .background((AccessLevel(rawValue: lvl)?.color ?? .gray).opacity(0.1))
-                        .clipShape(RoundedRectangle(cornerRadius: 3))
-
-                    Spacer()
-                }
-                .padding(.horizontal, 16)
-                .padding(.vertical, 10)
-                .background(Color.white.opacity(0.02))
-            } else {
-                orbSection
-                    .padding(.top, 16)
-                    .padding(.bottom, 8)
-                    .overlay(alignment: .topTrailing) {
-                        Button {
-                            withAnimation(.easeInOut(duration: 0.2)) { orbCollapsed = true }
-                        } label: {
-                            Image(systemName: "chevron.up")
-                                .font(.system(size: 10, weight: .bold))
-                                .foregroundStyle(.white.opacity(0.3))
-                                .padding(8)
-                        }
-                        .buttonStyle(.plain)
-                        .help("Collapse orb")
-                    }
-            }
-
-            // Model picker — prominent, right below orb
-            if !orbCollapsed {
-                modelPickerSection
-                    .padding(.horizontal, 24)
-                    .padding(.bottom, 12)
-            }
+            // Model picker — always visible
+            modelPickerSection
+                .padding(.horizontal, 24)
+                .padding(.bottom, 12)
 
             // Action bar: Chat/Settings toggle + buttons
             HStack(spacing: 8) {
@@ -407,15 +362,9 @@ struct AgentsView: View {
                 .padding(2)
                 .background(Color.white.opacity(0.06))
                 .clipShape(RoundedRectangle(cornerRadius: 7))
-                .frame(width: 260)
+                .frame(width: 340)
 
                 Spacer()
-
-                if orbCollapsed {
-                    // Show model picker inline when orb is collapsed
-                    modelPickerSection
-                        .frame(maxWidth: 180)
-                }
 
                 Button {
                     openWindow(id: "canvas")
@@ -491,11 +440,33 @@ struct AgentsView: View {
 
             Divider().overlay(Color.white.opacity(0.06))
 
-            // View mode switch: Canvas (unified chat+voice), Settings, or Vox Engine
+            // View mode switch: Chat, Settings, Tasks, or Vox Engine
             if viewMode == .chat {
                 canvasPanel
             } else if viewMode == .voxEngine {
                 voxEnginePanel
+                    .sheet(isPresented: $showAddEngineSheet) {
+                        VStack(spacing: 20) {
+                            Image(systemName: "waveform.badge.plus")
+                                .font(.system(size: 36))
+                                .foregroundStyle(.white.opacity(0.3))
+                            Text("Add Voice Engine")
+                                .font(.system(size: 16, weight: .semibold))
+                                .foregroundStyle(.white.opacity(0.8))
+                            Text("Additional voice engines (Coqui, Bark, and more) are coming soon.")
+                                .font(.system(size: 12))
+                                .foregroundStyle(.white.opacity(0.4))
+                                .multilineTextAlignment(.center)
+                            Button("OK") { showAddEngineSheet = false }
+                                .buttonStyle(.bordered)
+                                .controlSize(.small)
+                        }
+                        .padding(40)
+                        .frame(width: 320, height: 220)
+                        .background(Color(nsColor: NSColor(red: 0.10, green: 0.10, blue: 0.12, alpha: 1)))
+                    }
+            } else if viewMode == .tasks {
+                tasksPanel
             } else {
             ScrollView {
             VStack(alignment: .leading, spacing: 0) {
@@ -1504,7 +1475,7 @@ struct AgentsView: View {
                 } label: {
                     Image(systemName: isVoiceActive ? "power.circle.fill" : "power.circle")
                         .font(.system(size: 16))
-                        .foregroundStyle(isVoiceActive ? .green : .white.opacity(0.3))
+                        .foregroundStyle(isVoiceActive ? .green : .red.opacity(0.6))
                 }
                 .buttonStyle(.plain)
                 .help("Toggle voice")
@@ -1686,7 +1657,7 @@ struct AgentsView: View {
     // Live audio level meter — shows mic input or TTS output
     private var audioLevelMeter: some View {
         GeometryReader { geo in
-            let levels: [Float] = isVoiceActive ? voiceEngine.currentAudioLevels : Array(repeating: 0, count: 40)
+            let levels: [Float] = isVoiceActive ? voiceEngine.currentAudioLevels : Array(repeating: Float(0), count: 40)
             let barCount = min(40, Int(geo.size.width / 3))
             let stride = max(1, levels.count / max(barCount, 1))
 
@@ -1713,6 +1684,208 @@ struct AgentsView: View {
         }
     }
 
+    // MARK: - Tasks Panel
+
+    private var tasksPanel: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 12) {
+                // Summary bar
+                let pending = agentTasks.filter { $0.status == .pending }
+                let running = agentTasks.filter { $0.status == .inProgress }
+                let completed = agentTasks.filter { $0.status == .completed }
+                let failed = agentTasks.filter { $0.status == .failed }
+
+                HStack(spacing: 12) {
+                    agentStatPill(value: "\(running.count)", label: "Running", color: .green)
+                    agentStatPill(value: "\(pending.count)", label: "Queued", color: .white.opacity(0.5))
+                    agentStatPill(value: "\(completed.count)", label: "Done", color: .white.opacity(0.4))
+                    agentStatPill(value: "\(failed.count)", label: "Failed", color: failed.isEmpty ? .white.opacity(0.2) : .red)
+                    Spacer()
+                }
+
+                // Bulk controls
+                if !running.isEmpty || !pending.isEmpty {
+                    HStack(spacing: 8) {
+                        Button {
+                            Task {
+                                for task in running {
+                                    await ParallelExecutor.shared.cancel(taskID: task.id)
+                                    await TaskQueue.shared.cancelTask(id: task.id)
+                                }
+                                agentTasks = await TaskQueue.shared.tasksForAgent(editConfig.id)
+                                agentActiveTasks = await ParallelExecutor.shared.activeTaskIDs
+                            }
+                        } label: {
+                            HStack(spacing: 4) {
+                                Image(systemName: "stop.fill").font(.system(size: 9))
+                                Text("Stop All").font(.system(size: 10, weight: .medium))
+                            }
+                            .foregroundStyle(running.isEmpty ? .white.opacity(0.15) : .red.opacity(0.7))
+                            .padding(.horizontal, 10).padding(.vertical, 5)
+                            .background(running.isEmpty ? Color.white.opacity(0.02) : Color.red.opacity(0.06))
+                            .clipShape(RoundedRectangle(cornerRadius: 5))
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(running.isEmpty)
+
+                        Button {
+                            Task {
+                                for task in pending {
+                                    await TaskQueue.shared.cancelTask(id: task.id)
+                                }
+                                agentTasks = await TaskQueue.shared.tasksForAgent(editConfig.id)
+                            }
+                        } label: {
+                            HStack(spacing: 4) {
+                                Image(systemName: "xmark.circle").font(.system(size: 9))
+                                Text("Clear Queue").font(.system(size: 10, weight: .medium))
+                            }
+                            .foregroundStyle(pending.isEmpty ? .white.opacity(0.15) : .orange.opacity(0.7))
+                            .padding(.horizontal, 10).padding(.vertical, 5)
+                            .background(pending.isEmpty ? Color.white.opacity(0.02) : Color.orange.opacity(0.06))
+                            .clipShape(RoundedRectangle(cornerRadius: 5))
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(pending.isEmpty)
+
+                        Spacer()
+                    }
+                }
+
+                // Running tasks
+                if !running.isEmpty {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("RUNNING")
+                            .font(.system(size: 9, weight: .bold, design: .monospaced))
+                            .foregroundStyle(.green.opacity(0.5))
+                        ForEach(running, id: \.id) { task in
+                            VStack(alignment: .leading, spacing: 4) {
+                                HStack(spacing: 8) {
+                                    ProgressView().scaleEffect(0.6)
+                                    Text(task.title)
+                                        .font(.system(size: 11, weight: .medium))
+                                        .foregroundStyle(.white.opacity(0.7))
+                                        .lineLimit(2)
+                                    Spacer()
+                                    if let started = task.startedAt {
+                                        Text(relativeTime(started))
+                                            .font(.system(size: 9, design: .monospaced))
+                                            .foregroundStyle(.white.opacity(0.2))
+                                    }
+                                    Button {
+                                        Task {
+                                            await ParallelExecutor.shared.cancel(taskID: task.id)
+                                            await TaskQueue.shared.cancelTask(id: task.id)
+                                            agentTasks = await TaskQueue.shared.tasksForAgent(editConfig.id)
+                                            agentActiveTasks = await ParallelExecutor.shared.activeTaskIDs
+                                        }
+                                    } label: {
+                                        Image(systemName: "xmark")
+                                            .font(.system(size: 8, weight: .bold))
+                                            .foregroundStyle(.red.opacity(0.5))
+                                            .padding(4)
+                                    }
+                                    .buttonStyle(.plain)
+                                }
+                                if let started = task.startedAt {
+                                    let elapsed = Date().timeIntervalSince(started)
+                                    let fraction = min(elapsed / 120.0, 1.0)
+                                    GeometryReader { geo in
+                                        ZStack(alignment: .leading) {
+                                            RoundedRectangle(cornerRadius: 2).fill(Color.white.opacity(0.04))
+                                            RoundedRectangle(cornerRadius: 2).fill(Color.green.opacity(0.3))
+                                                .frame(width: geo.size.width * fraction)
+                                        }
+                                    }
+                                    .frame(height: 3)
+                                }
+                            }
+                            .padding(.horizontal, 10).padding(.vertical, 6)
+                            .background(Color.green.opacity(0.04))
+                            .cornerRadius(4)
+                        }
+                    }
+                }
+
+                // Queued tasks
+                if !pending.isEmpty {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("QUEUED")
+                            .font(.system(size: 9, weight: .bold, design: .monospaced))
+                            .foregroundStyle(.white.opacity(0.3))
+                        ForEach(pending, id: \.id) { task in
+                            HStack(spacing: 6) {
+                                Circle().fill(Color.white.opacity(0.2)).frame(width: 4, height: 4)
+                                Text(task.title)
+                                    .font(.system(size: 11))
+                                    .foregroundStyle(.white.opacity(0.5))
+                                    .lineLimit(1)
+                                Spacer()
+                                Button {
+                                    Task {
+                                        await TaskQueue.shared.cancelTask(id: task.id)
+                                        agentTasks = await TaskQueue.shared.tasksForAgent(editConfig.id)
+                                    }
+                                } label: {
+                                    Image(systemName: "xmark")
+                                        .font(.system(size: 7))
+                                        .foregroundStyle(.white.opacity(0.2))
+                                }
+                                .buttonStyle(.plain)
+                            }
+                        }
+                    }
+                }
+
+                // History (completed + failed)
+                let history = (completed + failed).sorted { ($0.completedAt ?? .distantPast) > ($1.completedAt ?? .distantPast) }
+                if !history.isEmpty {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("HISTORY")
+                            .font(.system(size: 9, weight: .bold, design: .monospaced))
+                            .foregroundStyle(.white.opacity(0.3))
+                        ForEach(history.prefix(20), id: \.id) { task in
+                            HStack(spacing: 6) {
+                                Image(systemName: task.status == .completed ? "checkmark.circle.fill" : "xmark.circle.fill")
+                                    .font(.system(size: 9))
+                                    .foregroundStyle(task.status == .completed ? .green.opacity(0.5) : .red.opacity(0.5))
+                                Text(task.title)
+                                    .font(.system(size: 11))
+                                    .foregroundStyle(.white.opacity(0.5))
+                                    .lineLimit(1)
+                                Spacer()
+                                if let done = task.completedAt {
+                                    Text(relativeTime(done))
+                                        .font(.system(size: 9, design: .monospaced))
+                                        .foregroundStyle(.white.opacity(0.15))
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Empty state
+                if agentTasks.isEmpty {
+                    VStack(spacing: 8) {
+                        Image(systemName: "checklist")
+                            .font(.system(size: 28))
+                            .foregroundStyle(.white.opacity(0.1))
+                        Text("No tasks")
+                            .font(.system(size: 12))
+                            .foregroundStyle(.white.opacity(0.2))
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 40)
+                }
+            }
+            .padding(20)
+        }
+        .task {
+            agentTasks = await TaskQueue.shared.tasksForAgent(editConfig.id)
+            agentActiveTasks = await ParallelExecutor.shared.activeTaskIDs
+        }
+    }
+
     // MARK: - Vox Engine Panel (per-agent voice config)
 
     private var voxEnginePanel: some View {
@@ -1721,8 +1894,74 @@ struct AgentsView: View {
                 // Engine Selection
                 voxSectionCard(title: "TTS Engine", icon: "speaker.wave.3.fill") {
                     HStack(spacing: 12) {
+                        voxEngineButton(label: "TORBO", subtitle: "On-Device", engine: "torbo", color: .orange)
                         voxEngineButton(label: "System", subtitle: "AVSpeech", engine: "system", color: .cyan)
                         voxEngineButton(label: "ElevenLabs", subtitle: "Cloud AI", engine: "elevenlabs", color: .purple)
+
+                        // Add Engine placeholder
+                        Button {
+                            showAddEngineSheet = true
+                        } label: {
+                            VStack(spacing: 2) {
+                                Image(systemName: "plus")
+                                    .font(.system(size: 14, weight: .medium))
+                                Text("Add")
+                                    .font(.system(size: 8, weight: .medium))
+                            }
+                            .foregroundStyle(.white.opacity(0.25))
+                            .frame(width: 60, height: 48)
+                            .background(Color.white.opacity(0.03))
+                            .clipShape(RoundedRectangle(cornerRadius: 8))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 8)
+                                    .strokeBorder(Color.white.opacity(0.06), style: StrokeStyle(lineWidth: 1, dash: [4, 3]))
+                            )
+                        }
+                        .buttonStyle(.plain)
+                        .help("Add voice engine")
+                    }
+
+                    // TORBO engine config
+                    if editConfig.voiceEngine == "torbo" {
+                        let piperEngine = PiperTTSEngine.shared
+                        let hasVoice = piperEngine.hasCustomVoice(for: editConfig.id)
+                        let hasFallback = piperEngine.hasVoice(for: editConfig.id)
+                        let isAvailable = piperEngine.isAvailable
+
+                        voxFieldRow(label: "Voice Status") {
+                            HStack(spacing: 6) {
+                                if isAvailable && hasVoice {
+                                    Image(systemName: "checkmark.circle.fill")
+                                        .foregroundStyle(.green)
+                                        .font(.system(size: 12))
+                                    Text("Custom voice loaded")
+                                        .font(.system(size: 11))
+                                        .foregroundStyle(.white.opacity(0.5))
+                                } else if isAvailable && hasFallback {
+                                    Image(systemName: "arrow.triangle.branch")
+                                        .foregroundStyle(.orange)
+                                        .font(.system(size: 12))
+                                    Text("Using SiD fallback voice")
+                                        .font(.system(size: 11))
+                                        .foregroundStyle(.white.opacity(0.5))
+                                } else {
+                                    Image(systemName: "exclamationmark.triangle")
+                                        .foregroundStyle(.orange)
+                                        .font(.system(size: 12))
+                                    Text("Piper not available — will use system voice")
+                                        .font(.system(size: 11))
+                                        .foregroundStyle(.white.opacity(0.5))
+                                }
+                            }
+                        }
+
+                        if let modelName = PiperTTSEngine.agentModels[editConfig.id] {
+                            voxFieldRow(label: "Model") {
+                                Text(modelName + ".onnx")
+                                    .font(.system(size: 11, design: .monospaced))
+                                    .foregroundStyle(.white.opacity(0.4))
+                            }
+                        }
                     }
 
                     if editConfig.voiceEngine == "elevenlabs" {
@@ -1759,9 +1998,10 @@ struct AgentsView: View {
 
                         Button {
                             ttsManager.engine = editConfig.voiceEngine
+                            ttsManager.agentID = editConfig.id
                             if editConfig.voiceEngine == "elevenlabs" {
                                 ttsManager.elevenLabsVoiceID = editConfig.elevenLabsVoiceID.isEmpty ? "21m00Tcm4TlvDq8ikWAM" : editConfig.elevenLabsVoiceID
-                            } else {
+                            } else if editConfig.voiceEngine == "system" {
                                 ttsManager.systemVoiceIdentifier = editConfig.systemVoiceIdentifier
                             }
                             ttsManager.speak(voxTestText)
@@ -2035,22 +2275,87 @@ struct AgentsView: View {
     private var orbSize: CGFloat { min(detailWidth * 0.78, 560) }
     private var glowSize: CGFloat { orbSize * 1.3 }
 
-    private var agentOrbHue: Double? {
-        OrbRenderer.agentHue(for: editConfig.id)
-    }
-
-    private var agentOrbSaturation: Double {
-        OrbRenderer.agentSaturation(for: editConfig.id, accessLevel: editConfig.accessLevel)
+    private var agentVoiceStateColor: Color {
+        switch voiceEngine.state {
+        case .idle:      return .gray
+        case .listening: return .green
+        case .thinking:  return .orange
+        case .speaking:  return .cyan
+        }
     }
 
     private var orbSection: some View {
         VStack(spacing: 0) {
-            // Orb with glow — glow in .background() so it overflows without clipping
+            // Control panel — mic, agent name/status, speaker, power
+            HStack(spacing: 12) {
+                Button { voiceEngine.isMicMuted.toggle() } label: {
+                    Image(systemName: voiceEngine.isMicMuted ? "mic.slash.fill" : "mic.fill")
+                        .font(.system(size: 13))
+                        .foregroundStyle(voiceEngine.isMicMuted ? .red : .white.opacity(0.6))
+                        .frame(width: 28, height: 28)
+                        .background(Circle().fill(Color.white.opacity(0.06)))
+                }
+                .buttonStyle(.plain)
+
+                Spacer()
+
+                // Agent name + voice state (centered)
+                HStack(spacing: 6) {
+                    if isVoiceActive {
+                        Circle()
+                            .fill(agentVoiceStateColor)
+                            .frame(width: 6, height: 6)
+                    }
+                    Text(editConfig.name)
+                        .font(.system(size: 12, weight: .bold, design: .monospaced))
+                        .foregroundStyle(.white.opacity(0.6))
+                        .tracking(2)
+                    if isVoiceActive {
+                        Text("·")
+                            .foregroundStyle(.white.opacity(0.3))
+                        Text(voiceEngine.state.rawValue.uppercased())
+                            .font(.system(size: 9, weight: .medium, design: .monospaced))
+                            .foregroundStyle(.white.opacity(0.35))
+                    }
+                }
+
+                Spacer()
+
+                Button { voiceEngine.isMuted.toggle() } label: {
+                    Image(systemName: voiceEngine.isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill")
+                        .font(.system(size: 13))
+                        .foregroundStyle(voiceEngine.isMuted ? .red : .white.opacity(0.6))
+                        .frame(width: 28, height: 28)
+                        .background(Circle().fill(Color.white.opacity(0.06)))
+                }
+                .buttonStyle(.plain)
+
+                // Power button — activate/deactivate this agent
+                Button {
+                    if isVoiceActive {
+                        voiceEngine.deactivate()
+                    } else {
+                        voiceEngine.activate(agentID: editConfig.id)
+                        applyAgentVoiceSettings()
+                    }
+                } label: {
+                    Image(systemName: "power")
+                        .font(.system(size: 12, weight: .bold))
+                        .foregroundStyle(isVoiceActive ? .green : .red.opacity(0.6))
+                        .frame(width: 28, height: 28)
+                        .background(Circle().fill(isVoiceActive ? Color.green.opacity(0.15) : Color.red.opacity(0.08)))
+                }
+                .buttonStyle(.plain)
+                .help(isVoiceActive ? "Deactivate agent" : "Activate agent")
+            }
+            .padding(.horizontal, 20)
+            .padding(.vertical, 8)
+            .background(Color.white.opacity(0.03))
+
+            // Orb graphic
             ZStack {
                 OrbRenderer(
-                    audioLevels: isVoiceActive
-                        ? voiceEngine.currentAudioLevels
-                        : Array(repeating: Float(0.15), count: 40),
+                    audioLevels: voiceEngine.currentAudioLevels,
                     color: AccessLevel(rawValue: editConfig.accessLevel)?.color ?? .gray,
                     isActive: isVoiceActive || editConfig.accessLevel > 0,
                     orbRadius: orbSize * 0.38
@@ -2067,7 +2372,7 @@ struct AgentsView: View {
                     }
                 }
 
-                // Level overlay on orb (hidden when voice is active — orb is alive)
+                // Level overlay on orb (hidden when voice is active)
                 if !isVoiceActive {
                     VStack(spacing: 2) {
                         Text("\(editConfig.accessLevel)")
@@ -2086,7 +2391,7 @@ struct AgentsView: View {
                     .fill(
                         RadialGradient(
                             colors: [
-                                Color(hue: agentOrbHue ?? 0.85, saturation: agentOrbSaturation * 0.5, brightness: 0.8).opacity(0.15),
+                                (AccessLevel(rawValue: editConfig.accessLevel)?.color ?? .gray).opacity(0.15),
                                 Color.clear
                             ],
                             center: .center,
@@ -2099,16 +2404,7 @@ struct AgentsView: View {
             )
             .frame(maxWidth: .infinity)
 
-            // Agent name below orb
-            Text(editConfig.name)
-                .font(.system(size: 14, weight: .bold, design: .monospaced))
-                .foregroundStyle(.white.opacity(0.6))
-                .tracking(2)
-                .frame(maxWidth: .infinity)
-                .padding(.top, 4)
-                .padding(.bottom, 8)
-
-            // Tap-based level picker (replaces drag slider)
+            // Tap-based level picker
             HStack(spacing: 0) {
                 ForEach(0..<6, id: \.self) { i in
                     if let level = AccessLevel(rawValue: i) {

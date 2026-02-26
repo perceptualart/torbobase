@@ -9,6 +9,9 @@ import CoreImage.CIFilterBuiltins
 struct DashboardView: View {
     @EnvironmentObject private var state: AppState
     @ObservedObject private var pairing = PairingManager.shared
+    @State private var showUpdateConfirm = false
+    @State private var isUpdating = false
+    @State private var updateResult: String?
 
     var body: some View {
 
@@ -74,6 +77,32 @@ struct DashboardView: View {
                             .font(.system(size: 9))
                             .foregroundStyle(.white.opacity(0.3))
                     }
+                    // Update button
+                    Button {
+                        showUpdateConfirm = true
+                    } label: {
+                        HStack(spacing: 5) {
+                            if isUpdating {
+                                ProgressView()
+                                    .controlSize(.mini)
+                                    .scaleEffect(0.7)
+                            } else {
+                                Image(systemName: "arrow.triangle.2.circlepath")
+                                    .font(.system(size: 9))
+                            }
+                            Text(isUpdating ? "Updating…" : "Update")
+                                .font(.system(size: 9, weight: .medium))
+                        }
+                        .foregroundStyle(.white.opacity(0.35))
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 4)
+                        .background(Color.white.opacity(0.04))
+                        .clipShape(RoundedRectangle(cornerRadius: 4))
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(isUpdating)
+                    .help("Pull latest and rebuild TORBO BASE")
+
                     Text(TorboVersion.display)
                         .font(.system(size: 9, weight: .medium, design: .monospaced))
                         .foregroundStyle(.white.opacity(0.15))
@@ -83,6 +112,20 @@ struct DashboardView: View {
             }
             .frame(minWidth: 160, maxWidth: 300)
             .background(Color(nsColor: NSColor(red: 0.06, green: 0.06, blue: 0.08, alpha: 1)))
+            .alert("Update TORBO BASE", isPresented: $showUpdateConfirm) {
+                Button("Yes") { performUpdate() }
+                Button("Cancel", role: .cancel) { }
+            } message: {
+                Text("Pull the latest version and rebuild?")
+            }
+            .alert("Update Result", isPresented: .init(
+                get: { updateResult != nil },
+                set: { if !$0 { updateResult = nil } }
+            )) {
+                Button("OK") { updateResult = nil }
+            } message: {
+                Text(updateResult ?? "")
+            }
         } detail: {
             // Content area
             Group {
@@ -105,6 +148,12 @@ struct DashboardView: View {
                     ModelsView()
                 case .security:
                     SecurityView()
+                case .iam:
+                    AgentIAMDashboardView()
+                case .governance:
+                    GovernanceDashboardView()
+                case .scheduler:
+                    CronSchedulerView()
                 case .settings:
                     SettingsView()
                 }
@@ -122,6 +171,64 @@ struct DashboardView: View {
             }
         }
     }
+
+    /// Resolve the project root directory from the running executable.
+    /// In a `swift build` layout, the binary lives in `.build/release/TorboBase` or `.build/debug/TorboBase`.
+    private nonisolated static var projectDir: String {
+        if let exe = Bundle.main.executableURL {
+            // Walk up from .build/{config}/TorboBase → project root
+            let buildDir = exe.deletingLastPathComponent() // .build/release
+            let dotBuild = buildDir.deletingLastPathComponent() // .build
+            let root = dotBuild.deletingLastPathComponent() // project root
+            if FileManager.default.fileExists(atPath: root.appendingPathComponent("Package.swift").path) {
+                return root.path
+            }
+        }
+        // Fallback: well-known path
+        return NSString("~/Documents/ORB MASTER/Torbo Base").expandingTildeInPath
+    }
+
+    private func performUpdate() {
+        isUpdating = true
+        Task.detached {
+            let dir = Self.projectDir
+            let pullResult = Self.runShell("git -C '\(dir)' pull origin main")
+            guard pullResult.status == 0 else {
+                await MainActor.run {
+                    isUpdating = false
+                    updateResult = "Git pull failed:\n\(pullResult.output)"
+                }
+                return
+            }
+            let buildResult = Self.runShell("cd '\(dir)' && swift build -c release")
+            await MainActor.run {
+                isUpdating = false
+                if buildResult.status == 0 {
+                    updateResult = "Update complete. Restart TORBO BASE to apply."
+                } else {
+                    updateResult = "Build failed:\n\(String(buildResult.output.suffix(300)))"
+                }
+            }
+        }
+    }
+
+    private nonisolated static func runShell(_ command: String) -> (output: String, status: Int32) {
+        let process = Process()
+        let pipe = Pipe()
+        process.executableURL = URL(fileURLWithPath: "/bin/zsh")
+        process.arguments = ["-c", command]
+        process.standardOutput = pipe
+        process.standardError = pipe
+        do {
+            try process.run()
+            process.waitUntilExit()
+        } catch {
+            return (output: "Failed to launch: \(error.localizedDescription)", status: -1)
+        }
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        let output = String(data: data, encoding: .utf8) ?? ""
+        return (output: output, status: process.terminationStatus)
+    }
 }
 
 // MARK: - Home View (The Orb + Overview)
@@ -130,6 +237,7 @@ struct HomeView: View {
     @EnvironmentObject private var state: AppState
     @ObservedObject private var pairing = PairingManager.shared
     @State private var auditExpanded = false
+    @State private var hasPlayedGreeting = UserDefaults.standard.bool(forKey: "torboFirstGreetingDone")
 
     var body: some View {
 
@@ -321,6 +429,16 @@ struct HomeView: View {
                 Spacer(minLength: 16)
             }
             .padding(.vertical, 12)
+        }
+        .task {
+            guard !hasPlayedGreeting else { return }
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
+            guard !Task.isCancelled else { return }
+            hasPlayedGreeting = true
+            UserDefaults.standard.set(true, forKey: "torboFirstGreetingDone")
+            VoiceEngine.shared.activate(agentID: "sid")
+            // Placeholder greeting — replace with final script
+            TTSManager.shared.speak("Hello! I'm SiD, your AI assistant. Welcome to Torbo Base.")
         }
     }
 
@@ -2354,6 +2472,44 @@ enum LaunchAtLogin {
             }
         }
         #endif
+    }
+}
+
+// MARK: - Agent Power Button (persists on all windows)
+
+/// Pause/resume the active voice agent — visible on every tab.
+struct AgentPowerButton: View {
+    @ObservedObject private var voiceEngine = VoiceEngine.shared
+
+    private var isActive: Bool { voiceEngine.isActive }
+
+    var body: some View {
+        Button {
+            if isActive {
+                voiceEngine.deactivate()
+            } else {
+                voiceEngine.activate(agentID: voiceEngine.activeAgentID)
+            }
+        } label: {
+            HStack(spacing: 5) {
+                Image(systemName: isActive ? "pause.fill" : "play.fill")
+                    .font(.system(size: 10, weight: .bold))
+                if isActive {
+                    Text(voiceEngine.activeAgentID.uppercased())
+                        .font(.system(size: 9, weight: .bold, design: .monospaced))
+                }
+            }
+            .foregroundStyle(isActive ? .green : .white.opacity(0.35))
+            .padding(.horizontal, isActive ? 10 : 8)
+            .padding(.vertical, 6)
+            .background(
+                Capsule()
+                    .fill(Color.black.opacity(0.4))
+                    .overlay(Capsule().stroke(isActive ? Color.green.opacity(0.3) : Color.white.opacity(0.1), lineWidth: 0.5))
+            )
+        }
+        .buttonStyle(.plain)
+        .help(isActive ? "Pause \(voiceEngine.activeAgentID)" : "Resume agent")
     }
 }
 #endif

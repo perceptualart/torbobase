@@ -37,17 +37,37 @@ final class VoiceEngine: ObservableObject {
 
     // MARK: - Audio Levels (routed to orb)
 
-    /// Current audio levels for the orb — routes from appropriate source based on state
-    var currentAudioLevels: [Float] {
-        switch state {
-        case .speaking:
-            return tts.audioLevels
-        case .listening:
-            return speech.audioLevels
-        case .thinking:
-            return simulatedThinkingLevels()
-        case .idle:
-            return simulatedIdleLevels()
+    /// Published audio levels — updated at ~15Hz by internal timer so SwiftUI orb
+    /// always receives smooth, regular updates regardless of voice state.
+    @Published var currentAudioLevels: [Float] = Array(repeating: Float(0.15), count: 40)
+
+    private var levelTimer: Task<Void, Never>?
+
+    /// Start the ~15Hz level pump — call once at init
+    private func startLevelPump() {
+        levelTimer = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 65_000_000)  // ~15Hz
+                guard let self else { return }
+                let levels: [Float]
+                switch self.state {
+                case .speaking:
+                    levels = self.tts.audioLevels
+                case .listening:
+                    levels = self.speech.audioLevels
+                case .thinking:
+                    levels = self.simulatedThinkingLevels()
+                case .idle:
+                    if self.isActive {
+                        levels = self.simulatedIdleLevels()
+                    } else {
+                        // Not active — use ambient mic level (like iOS)
+                        let mic = self.audio.audioLevel
+                        levels = Array(repeating: max(0.08, mic), count: 40)
+                    }
+                }
+                self.currentAudioLevels = levels
+            }
         }
     }
 
@@ -68,6 +88,19 @@ final class VoiceEngine: ObservableObject {
         speech.onTranscriptFinalized = { [weak self] text in
             Task { @MainActor in
                 self?.handleTranscriptFinalized(text)
+            }
+        }
+        // Start the ~15Hz level pump for smooth orb updates
+        startLevelPump()
+
+        // Start ambient mic monitoring for home orb reactivity (if permission already granted)
+        Task {
+            let micOK = await audio.requestMicPermission()
+            if micOK {
+                audio.prepareIfNeeded()
+                audio.installInputTap()
+                try? audio.startEngine()
+                TorboLog.info("Voice: ambient mic monitoring started for orb", subsystem: "Voice")
             }
         }
     }

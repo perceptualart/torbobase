@@ -10,8 +10,6 @@ struct OrbRenderer: View {
     let audioLevels: [Float]
     let color: Color
     let isActive: Bool
-    var baseHue: Double? = nil
-    var baseSaturation: Double = 0.85
     /// When set, uses this fixed radius instead of deriving from Canvas size.
     /// Allows a large Canvas frame for petal/blur overflow while keeping a controlled orb size.
     var orbRadius: CGFloat? = nil
@@ -20,6 +18,9 @@ struct OrbRenderer: View {
     @State private var targetLevel: Float = 0.15
     @State private var appearScale: CGFloat = 0.001
     @State private var breathePhase: Double = 0
+    @State private var lastLevelUpdate: Date = .distantPast
+    /// Random per-instance seed — every orb starts at a unique hue offset so no two look alike
+    @State private var instanceSeed: Double = Double.random(in: 0...1000)
 
     /// Canvas frame size — when orbRadius is set, we make the canvas big enough for petals + blur.
     private var canvasFrame: CGFloat? {
@@ -29,24 +30,19 @@ struct OrbRenderer: View {
 
     private func wrapHue(_ h: Double) -> Double { h - floor(h) }
 
-    private var palette: [(hue: Double, sat: Double, bri: Double)] {
-        if let bh = baseHue {
-            let s = baseSaturation
-            return [
-                (wrapHue(bh - 0.10), s * 0.9,  0.9),
-                (wrapHue(bh - 0.05), s,         1.0),
-                (wrapHue(bh + 0.03), s,         1.0),
-                (wrapHue(bh + 0.08), s,         1.0),
-                (wrapHue(bh - 0.12), s * 0.95,  1.0),
-                (wrapHue(bh + 0.15), s * 0.9,   1.0),
-                (wrapHue(bh),        s * 0.8,   1.0),
-            ]
-        } else {
-            return [
-                (0.85, 0.8,  0.9), (0.0, 0.85, 1.0), (0.08, 0.9, 1.0),
-                (0.12, 0.9,  1.0), (0.9, 0.85, 1.0), (0.75, 0.8, 1.0),
-                (0.92, 0.7,  1.0),
-            ]
+    /// All 7 layers share one rotation speed with golden-ratio offsets (~0.618 apart),
+    /// guaranteeing permanent maximum separation — no two petals can ever match.
+    /// A subtle per-layer sine wobble adds organic breathing without convergence.
+    /// `instanceSeed` offsets the base rotation so every orb instance has unique colors.
+    private func palette(at t: Double) -> [(hue: Double, sat: Double, bri: Double)] {
+        let phi = 0.6180339887498949 // golden ratio conjugate
+        let baseRotation = t * 0.025 + instanceSeed // seed makes each orb unique
+        // Tiny per-layer wobble rates (different primes keep them out of sync)
+        let wobbleSpeeds: [Double] = [0.11, 0.13, 0.17, 0.19, 0.23, 0.29, 0.31]
+        return (0..<7).map { i in
+            let offset = Double(i) * phi
+            let wobble = sin(t * wobbleSpeeds[i]) * 0.03 // ±3% hue — never enough to overlap
+            return (wrapHue(baseRotation + offset + wobble), 1.0, 1.0)
         }
     }
 
@@ -59,10 +55,14 @@ struct OrbRenderer: View {
         }
         .scaleEffect(appearScale)
         .onChange(of: audioLevels) { newLevels in
+            // Throttle to ~15Hz — matches iOS, prevents frame-sync glitches
+            let now = Date()
+            guard now.timeIntervalSince(lastLevelUpdate) >= 0.065 else { return }
+            lastLevelUpdate = now
             targetLevel = calculateSmoothedLevel(from: newLevels)
         }
         .onChange(of: targetLevel) { newTarget in
-            withAnimation(.interpolatingSpring(stiffness: 80, damping: 12)) {
+            withAnimation(.interpolatingSpring(stiffness: 25, damping: 8)) {
                 smoothLevel = newTarget
             }
         }
@@ -90,7 +90,7 @@ struct OrbRenderer: View {
             let audioScale: CGFloat = restingScale + audioBoost + breathe
             let radius = baseRadius * min(audioScale, 1.15)
             let intensity = Double(max(0, level - 0.08)) * 2.0
-            let p = palette
+            let p = palette(at: t)
 
             // Layer 1: Deep outer glow — slow drift
             drawAuroraRibbon(context: context, center: center, radius: radius * 1.18,
@@ -125,21 +125,21 @@ struct OrbRenderer: View {
                             color: Color(hue: p[4].hue, saturation: p[4].sat, brightness: p[4].bri),
                             phase: t * 0.2 + 2, wavePhase: t * 0.5 + 3,
                             scaleX: 0.72, scaleY: 0.78, rotation: t * 0.045 + .pi * 1.1,
-                            intensity: intensity, blur: 7, opacity: 0.25)
+                            intensity: intensity, blur: 7, opacity: 0.20)
 
             // Layer 6: Vivid accent
             drawAuroraRibbon(context: context, center: center, radius: radius * 0.72,
                             color: Color(hue: p[5].hue, saturation: p[5].sat, brightness: p[5].bri),
                             phase: t * 0.28 + 4, wavePhase: t * 0.65 + 2,
                             scaleX: 0.62, scaleY: 0.72, rotation: t * 0.05 + .pi * 0.5,
-                            intensity: intensity, blur: 5, opacity: 0.28)
+                            intensity: intensity, blur: 5, opacity: 0.20)
 
             // Layer 7: Inner core glow
             drawAuroraRibbon(context: context, center: center, radius: radius * 0.58,
                             color: Color(hue: p[6].hue, saturation: p[6].sat, brightness: p[6].bri),
                             phase: t * 0.2 + 1, wavePhase: t * 0.52 + 4,
                             scaleX: 0.55, scaleY: 0.62, rotation: t * 0.055 + .pi * 1.4,
-                            intensity: intensity, blur: 3, opacity: 0.32)
+                            intensity: intensity, blur: 3, opacity: 0.22)
         }
 
         if let cs = canvasFrame {
@@ -149,21 +149,20 @@ struct OrbRenderer: View {
         }
     }
 
+    /// Matches iOS: last 6 samples, powers-of-2 weighting, clamped [0.1, 1.0]
     private func calculateSmoothedLevel(from levels: [Float]) -> Float {
         guard !levels.isEmpty else { return 0.15 }
-        let count = min(10, levels.count)
+        let count = min(6, levels.count)
         let recent = Array(levels.suffix(count))
         var weighted: Float = 0
         var weightSum: Float = 0
         for (i, level) in recent.enumerated() {
-            let weight = Float(pow(1.6, Double(i)))
+            let weight = Float(pow(2.0, Double(i)))  // 1, 2, 4, 8, 16, 32
             weighted += level * weight
             weightSum += weight
         }
-        let raw = weighted / weightSum
-        // Smooth exponential curve for more organic feel
-        let curved = powf(raw, 0.7) * 1.2
-        return max(0.1, min(1.0, curved))
+        let avg = weighted / weightSum
+        return max(0.1, min(1.0, avg))
     }
 
     private func drawAuroraRibbon(context: GraphicsContext, center: CGPoint, radius: CGFloat,
@@ -207,31 +206,8 @@ struct OrbRenderer: View {
         var coreCtx = context
         coreCtx.blendMode = .plusLighter
         coreCtx.addFilter(.blur(radius: blur * 0.35))
-        coreCtx.fill(path, with: .color(color.opacity(opacity * 0.55)))
+        coreCtx.fill(path, with: .color(color.opacity(opacity * 0.4)))
     }
 
-    // MARK: - Shared Agent Hue/Saturation (reusable across views)
-
-    /// Maps an agent ID to its orb hue. Used by AgentView and OrbAccessView.
-    static func agentHue(for agentID: String) -> Double {
-        switch agentID.lowercased() {
-        case "sid":   return 0.55   // blue-cyan
-        case "ada":   return 0.3    // green-gold
-        case "mira":  return 0.45   // teal
-        case "orion": return 0.75   // purple
-        case "x":     return 0.0    // white (low saturation)
-        default:
-            let hash = agentID.utf8.reduce(0) { ($0 &+ Int($1)) &* 31 }
-            return Double(abs(hash) % 1000) / 1000.0
-        }
-    }
-
-    /// Maps an agent ID + access level to its orb saturation.
-    static func agentSaturation(for agentID: String, accessLevel: Int = 5) -> Double {
-        if agentID.lowercased() == "x" { return 0.08 }
-        if accessLevel == 0 { return 0.08 }
-        let level = min(max(accessLevel, 1), 5)
-        return 0.45 + Double(level) * 0.10
-    }
 }
 #endif

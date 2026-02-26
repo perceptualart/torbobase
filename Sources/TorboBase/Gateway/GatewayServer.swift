@@ -758,6 +758,18 @@ actor GatewayServer {
                               body: Data(DashboardHTML.page.utf8))
         }
 
+        // Governance web dashboard UI — serves the built-in governance & observability dashboard
+        if req.method == "GET" && req.path == "/governance" {
+            return HTTPResponse(statusCode: 200,
+                              headers: [
+                                "Content-Type": "text/html; charset=utf-8",
+                                "Content-Security-Policy": "default-src 'self'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; img-src 'self' data:; font-src 'none'; frame-src 'none'; object-src 'none'",
+                                "X-Frame-Options": "DENY",
+                                "X-Content-Type-Options": "nosniff"
+                              ],
+                              body: Data(GovernanceDashboardHTML.page.utf8))
+        }
+
         // Legal documents — serve static HTML (no auth required)
         if req.method == "GET" && req.path.hasPrefix("/legal/") {
             return serveLegalPage(path: req.path)
@@ -952,6 +964,25 @@ actor GatewayServer {
             }
         }
 
+        // MARK: - Agent IAM
+        if req.path.hasPrefix("/v1/iam/") {
+            if req.method == "GET" {
+                let minLevel: AccessLevel = (req.path.contains("access-log") || req.path.contains("anomalies")) ? .readFiles : .chatOnly
+                return await guardedRoute(level: minLevel, current: currentLevel, clientIP: clientIP, req: req) {
+                    await AgentIAMRoutes.handleRequest(req, clientIP: clientIP)
+                        ?? HTTPResponse(statusCode: 404, headers: ["Content-Type": "application/json"],
+                                       body: Data("{\"error\":\"Unknown IAM route\"}".utf8))
+                }
+            }
+            if req.method == "POST" || req.method == "DELETE" {
+                return await guardedRoute(level: .fullAccess, current: currentLevel, clientIP: clientIP, req: req) {
+                    await AgentIAMRoutes.handleRequest(req, clientIP: clientIP)
+                        ?? HTTPResponse(statusCode: 404, headers: ["Content-Type": "application/json"],
+                                       body: Data("{\"error\":\"Unknown IAM route\"}".utf8))
+                }
+            }
+        }
+
         // MARK: - Dashboard API
         if req.path.hasPrefix("/v1/dashboard") || req.path.hasPrefix("/v1/config") || req.path.hasPrefix("/v1/audit") {
             return await handleDashboardRoute(req, clientIP: clientIP)
@@ -1021,6 +1052,29 @@ actor GatewayServer {
         // MARK: - LoA (Library of Alexandria) Shortcuts
         if req.path.hasPrefix("/v1/loa") {
             return await handleLoARoute(req, clientIP: clientIP)
+        }
+
+        // MARK: - Governance & Observability
+        if req.path.hasPrefix("/v1/governance") {
+            if let (status, body) = await GovernanceRoutes.handle(
+                method: req.method, path: req.path,
+                body: req.jsonBody, queryParams: req.queryParams
+            ) {
+                // Handle raw data exports (CSV/JSON file downloads)
+                if let dict = body as? [String: Any], dict["__raw_data"] as? Bool == true {
+                    let contentType = dict["__content_type"] as? String ?? "application/json"
+                    let disposition = dict["__disposition"] as? String ?? ""
+                    let bytes = dict["__bytes"] as? [UInt8] ?? []
+                    var headers = ["Content-Type": contentType]
+                    if !disposition.isEmpty { headers["Content-Disposition"] = disposition }
+                    return HTTPResponse(statusCode: status, headers: headers, body: Data(bytes))
+                }
+                if let data = try? JSONSerialization.data(withJSONObject: body) {
+                    return HTTPResponse(statusCode: status, headers: ["Content-Type": "application/json"], body: data)
+                }
+            }
+            return HTTPResponse(statusCode: 404, headers: ["Content-Type": "application/json"],
+                              body: Data("{\"error\":\"Unknown governance route\"}".utf8))
         }
 
         // MARK: - HomeKit Ambient Intelligence
@@ -1289,6 +1343,44 @@ actor GatewayServer {
         case ("GET", "/v1/workflows"):
             return await guardedRoute(level: .chatOnly, current: currentLevel, clientIP: clientIP, req: req) {
                 await self.handleWorkflowList(req)
+            }
+
+        // --- Agent Teams Routes ---
+        case ("GET", "/v1/teams"):
+            return await guardedRoute(level: .chatOnly, current: currentLevel, clientIP: clientIP, req: req) {
+                await self.handleTeamsList(req)
+            }
+        case ("POST", "/v1/teams"):
+            return await guardedRoute(level: .execute, current: currentLevel, clientIP: clientIP, req: req) {
+                await self.handleTeamsCreate(req)
+            }
+        case _ where req.path.hasPrefix("/v1/teams/") && req.path.hasSuffix("/execute") && req.method == "POST":
+            return await guardedRoute(level: .execute, current: currentLevel, clientIP: clientIP, req: req) {
+                await self.handleTeamsExecute(req)
+            }
+        case _ where req.path.hasPrefix("/v1/teams/") && req.path.hasSuffix("/executions") && req.method == "GET":
+            return await guardedRoute(level: .chatOnly, current: currentLevel, clientIP: clientIP, req: req) {
+                await self.handleTeamsExecutionHistory(req)
+            }
+        case _ where req.path.hasPrefix("/v1/teams/") && req.path.hasSuffix("/context") && req.method == "GET":
+            return await guardedRoute(level: .chatOnly, current: currentLevel, clientIP: clientIP, req: req) {
+                await self.handleTeamsGetContext(req)
+            }
+        case _ where req.path.hasPrefix("/v1/teams/") && req.path.hasSuffix("/context") && req.method == "PUT":
+            return await guardedRoute(level: .execute, current: currentLevel, clientIP: clientIP, req: req) {
+                await self.handleTeamsUpdateContext(req)
+            }
+        case _ where req.path.hasPrefix("/v1/teams/") && req.method == "GET":
+            return await guardedRoute(level: .chatOnly, current: currentLevel, clientIP: clientIP, req: req) {
+                await self.handleTeamsGet(req)
+            }
+        case _ where req.path.hasPrefix("/v1/teams/") && req.method == "PUT":
+            return await guardedRoute(level: .execute, current: currentLevel, clientIP: clientIP, req: req) {
+                await self.handleTeamsUpdate(req)
+            }
+        case _ where req.path.hasPrefix("/v1/teams/") && req.method == "DELETE":
+            return await guardedRoute(level: .execute, current: currentLevel, clientIP: clientIP, req: req) {
+                await self.handleTeamsDelete(req)
             }
 
         // --- Code Sandbox Routes ---
@@ -1961,7 +2053,7 @@ actor GatewayServer {
             }
 
             // Cron Scheduler routes
-            if req.path.hasPrefix("/v1/cron/tasks") {
+            if req.path.hasPrefix("/v1/cron/") {
                 if let response = await handleCronSchedulerRoute(req, clientIP: clientIP) {
                     return response
                 }
@@ -2263,12 +2355,23 @@ actor GatewayServer {
             body.removeValue(forKey: "tool_choice")
             TorboLog.info("Client sent empty tools — skipping all tool injection (conversational)", subsystem: "Gateway")
         } else {
-            // Client provided tools (e.g. native iOS tools) — ensure tool_choice is set
+            // Client provided tools (e.g. native iOS tools) — MERGE with Base's Mac-side tools
+            var clientTools = body["tools"] as? [[String: Any]] ?? []
+            let clientToolNames = Set(extractToolNames(from: clientTools))
+            let serverTools = await ToolProcessor.toolDefinitionsWithMCP(for: accessLevel, agentID: agentID)
+            // Add server tools that aren't already provided by the client (avoid duplicates)
+            for tool in serverTools {
+                let name = ((tool["function"] as? [String: Any])?["name"] as? String) ?? ""
+                if !name.isEmpty && !clientToolNames.contains(name) {
+                    clientTools.append(tool)
+                }
+            }
+            body["tools"] = clientTools
             if body["tool_choice"] == nil {
                 body["tool_choice"] = "auto"
             }
-            let clientToolNames = extractToolNames(from: body["tools"] as? [[String: Any]] ?? [])
-            TorboLog.info("Client provided \(clientToolNames.count) tools: \(clientToolNames.joined(separator: ", "))", subsystem: "Gateway")
+            toolNames = extractToolNames(from: clientTools)
+            TorboLog.info("Merged tools: \(clientToolNames.count) client + \(serverTools.count) server = \(clientTools.count) total", subsystem: "Gateway")
         }
 
         // Enrich with agent identity + memory (identity skipped if client provided system prompt)
@@ -3016,12 +3119,22 @@ actor GatewayServer {
             body.removeValue(forKey: "tool_choice")
             TorboLog.info("Client sent empty tools — skipping all tool injection (non-streaming conversational)", subsystem: "Gateway")
         } else {
-            // Client provided tools (e.g. native iOS tools) — ensure tool_choice is set
+            // Client provided tools (e.g. native iOS tools) — MERGE with Base's Mac-side tools
+            var clientTools = body["tools"] as? [[String: Any]] ?? []
+            let clientToolNames = Set(extractToolNames(from: clientTools))
+            let serverTools = await ToolProcessor.toolDefinitionsWithMCP(for: accessLevel, agentID: agentID)
+            for tool in serverTools {
+                let name = ((tool["function"] as? [String: Any])?["name"] as? String) ?? ""
+                if !name.isEmpty && !clientToolNames.contains(name) {
+                    clientTools.append(tool)
+                }
+            }
+            body["tools"] = clientTools
             if body["tool_choice"] == nil {
                 body["tool_choice"] = "auto"
             }
-            let clientToolNames = extractToolNames(from: body["tools"] as? [[String: Any]] ?? [])
-            TorboLog.info("Client provided \(clientToolNames.count) tools (non-streaming): \(clientToolNames.joined(separator: ", "))", subsystem: "Gateway")
+            toolNames = extractToolNames(from: clientTools)
+            TorboLog.info("Merged tools (non-streaming): \(clientToolNames.count) client + \(serverTools.count) server = \(clientTools.count) total", subsystem: "Gateway")
         }
 
         // Enrich with agent identity + memory (identity skipped if client provided system prompt)
@@ -5557,12 +5670,39 @@ actor GatewayServer {
             return "[searching documents...]"
         case "execute_code":
             return "[executing code...]"
+        case "canvas_write":
+            return "[writing to canvas...]"
         default:
-            if toolName.hasPrefix("mcp_") {
-                let clean = String(toolName.dropFirst(4))
-                return "[using: \(clean)]"
+            // MCP filesystem tools and similar patterns → friendly labels
+            if toolName.contains("search_files") || toolName.contains("search_directory") {
+                let query = parsed?["query"] as? String ?? parsed?["pattern"] as? String
+                return query != nil ? "[searching files: \(query!)]" : "[searching files...]"
             }
-            return "[using: \(toolName)]"
+            if toolName.contains("read_text_file") || toolName.contains("read_file") {
+                let path = parsed?["path"] as? String
+                let name = path.map { ($0 as NSString).lastPathComponent }
+                return name != nil ? "[reading: \(name!)]" : "[reading file...]"
+            }
+            if toolName.contains("write_text_file") || toolName.contains("write_file") || toolName.contains("create_file") {
+                let path = parsed?["path"] as? String
+                let name = path.map { ($0 as NSString).lastPathComponent }
+                return name != nil ? "[writing: \(name!)]" : "[writing file...]"
+            }
+            if toolName.contains("list_directory") || toolName.contains("list_dir") {
+                return "[listing directory...]"
+            }
+            if toolName.contains("edit_file") || toolName.contains("replace") {
+                return "[editing file...]"
+            }
+            if toolName.hasPrefix("mcp_") {
+                // Generic MCP tool — strip prefix and humanize
+                let clean = String(toolName.dropFirst(4))
+                    .replacingOccurrences(of: "_", with: " ")
+                return "[using \(clean)...]"
+            }
+            // Generic fallback — humanize underscores
+            let humanized = toolName.replacingOccurrences(of: "_", with: " ")
+            return "[using \(humanized)...]"
         }
     }
 

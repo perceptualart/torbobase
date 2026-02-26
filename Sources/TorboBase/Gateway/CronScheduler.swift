@@ -14,7 +14,7 @@ import FoundationNetworking
 struct CronTask: Codable, Identifiable {
     let id: String
     var name: String
-    var cronExpression: String           // Standard 5-field: minute hour day month weekday
+    var cronExpression: String           // Standard 5-field: minute hour day month weekday (or @keyword)
     var agentID: String                  // Which agent executes this
     var prompt: String                   // What the agent should do
     var enabled: Bool
@@ -25,6 +25,25 @@ struct CronTask: Codable, Identifiable {
     var runCount: Int
     let createdAt: Date
     var updatedAt: Date
+    var timezone: String?                // nil = system timezone
+    var catchUp: Bool?                   // nil = true — run missed executions on startup
+    var executionHistory: [ScheduleExecution]?  // Last 50 executions
+
+    /// Resolved cron expression (keywords expanded to 5-field format).
+    var resolvedExpression: String {
+        CronParser.resolveKeyword(cronExpression)
+    }
+
+    /// Whether missed executions should be caught up (defaults to true).
+    var effectiveCatchUp: Bool { catchUp ?? true }
+
+    /// Execution log (never nil for callers).
+    var executionLog: [ScheduleExecution] { executionHistory ?? [] }
+
+    /// Human-readable schedule description.
+    var scheduleDescription: String {
+        CronParser.describe(cronExpression)
+    }
 
     enum CodingKeys: String, CodingKey {
         case id, name
@@ -38,7 +57,20 @@ struct CronTask: Codable, Identifiable {
         case runCount = "run_count"
         case createdAt = "created_at"
         case updatedAt = "updated_at"
+        case timezone
+        case catchUp = "catch_up"
+        case executionHistory = "execution_history"
     }
+}
+
+// MARK: - Schedule Execution Record
+
+struct ScheduleExecution: Codable {
+    let timestamp: Date
+    let success: Bool
+    let duration: TimeInterval
+    let result: String?
+    let error: String?
 }
 
 // MARK: - Cron Expression Parser
@@ -52,10 +84,11 @@ struct CronExpression {
     let months: Set<Int>        // 1-12
     let daysOfWeek: Set<Int>    // 0-6 (0=Sunday) or 1-7 (1=Sunday — both accepted)
 
-    /// Parse a 5-field cron expression string.
+    /// Parse a 5-field cron expression string (or @keyword shorthand).
     /// Returns nil if the expression is invalid.
     static func parse(_ expression: String) -> CronExpression? {
-        let fields = expression.trimmingCharacters(in: .whitespaces).split(separator: " ").map(String.init)
+        let resolved = CronParser.resolveKeyword(expression)
+        let fields = resolved.trimmingCharacters(in: .whitespaces).split(separator: " ").map(String.init)
         guard fields.count == 5 else { return nil }
 
         guard let minutes = parseField(fields[0], min: 0, max: 59),
@@ -266,9 +299,17 @@ actor CronScheduler {
 
     // MARK: - Initialization
 
-    func initialize() {
+    func initialize() async {
         loadTasks()
         recalculateAllNextRuns()
+
+        // Check for missed executions while server was down
+        let missedCount = checkAllMissedExecutions()
+        if missedCount > 0 {
+            TorboLog.info("\(missedCount) schedule(s) have missed executions — recovering", subsystem: "Cron")
+            await CronTaskIntegration.shared.recoverMissedExecutions()
+        }
+
         startSchedulerLoop()
         TorboLog.info("Initialized: \(tasks.count) cron task(s) (\(tasks.values.filter { $0.enabled }.count) enabled)", subsystem: "Cron")
     }
@@ -282,20 +323,22 @@ actor CronScheduler {
 
     // MARK: - CRUD
 
-    func createTask(name: String, cronExpression: String, agentID: String, prompt: String) -> CronTask? {
-        // Validate cron expression
-        guard CronExpression.parse(cronExpression) != nil else {
+    func createTask(name: String, cronExpression: String, agentID: String, prompt: String,
+                    timezone: String? = nil, catchUp: Bool? = nil) -> CronTask? {
+        // Resolve keywords and validate
+        let resolved = CronParser.resolveKeyword(cronExpression)
+        guard CronExpression.parse(resolved) != nil else {
             TorboLog.error("Invalid cron expression: '\(cronExpression)'", subsystem: "Cron")
             return nil
         }
 
         let now = Date()
-        let nextRun = CronExpression.parse(cronExpression)?.nextRunAfter(now)
+        let nextRun = CronExpression.parse(resolved)?.nextRunAfter(now)
 
         let task = CronTask(
             id: generateID(),
             name: name,
-            cronExpression: cronExpression,
+            cronExpression: cronExpression,  // Store original (may be keyword)
             agentID: agentID,
             prompt: prompt,
             enabled: true,
@@ -305,7 +348,10 @@ actor CronScheduler {
             lastError: nil,
             runCount: 0,
             createdAt: now,
-            updatedAt: now
+            updatedAt: now,
+            timezone: timezone,
+            catchUp: catchUp,
+            executionHistory: []
         )
 
         tasks[task.id] = task
@@ -314,11 +360,14 @@ actor CronScheduler {
         return task
     }
 
-    func updateTask(id: String, name: String?, cronExpression: String?, agentID: String?, prompt: String?, enabled: Bool?) -> CronTask? {
+    func updateTask(id: String, name: String? = nil, cronExpression: String? = nil,
+                    agentID: String? = nil, prompt: String? = nil, enabled: Bool? = nil,
+                    timezone: String?? = nil, catchUp: Bool?? = nil) -> CronTask? {
         guard var task = tasks[id] else { return nil }
 
         if let cron = cronExpression {
-            guard CronExpression.parse(cron) != nil else {
+            let resolved = CronParser.resolveKeyword(cron)
+            guard CronExpression.parse(resolved) != nil else {
                 TorboLog.error("Invalid cron expression on update: '\(cron)'", subsystem: "Cron")
                 return nil
             }
@@ -329,10 +378,13 @@ actor CronScheduler {
         if let agent = agentID { task.agentID = agent }
         if let prompt = prompt { task.prompt = prompt }
         if let enabled = enabled { task.enabled = enabled }
+        if let tz = timezone { task.timezone = tz }
+        if let cu = catchUp { task.catchUp = cu }
         task.updatedAt = Date()
 
         // Recalculate next run
-        if task.enabled, let parsed = CronExpression.parse(task.cronExpression) {
+        let resolved = task.resolvedExpression
+        if task.enabled, let parsed = CronExpression.parse(resolved) {
             task.nextRun = parsed.nextRunAfter(Date())
         } else if !task.enabled {
             task.nextRun = nil
@@ -416,69 +468,36 @@ actor CronScheduler {
         task.lastError = nil
         tasks[id] = task
 
-        // Create a TaskQueue task for the ProactiveAgent pipeline to execute
-        let queueTask = await TaskQueue.shared.createTask(
-            title: "Cron: \(task.name)",
-            description: """
-            Scheduled task '\(task.name)' triggered by cron expression: \(task.cronExpression)
+        // Execute through the integration layer (TaskQueue → ProactiveAgent)
+        let result = await CronTaskIntegration.shared.executeScheduledTask(task)
 
-            \(task.prompt)
-            """,
-            assignedTo: task.agentID,
-            assignedBy: "cron/\(id)",
-            priority: .normal
-        )
+        let duration = result.duration
 
-        // Wait for the task to complete (poll with timeout)
-        let timeoutSeconds = 600  // 10 minute max
-        let pollInterval: UInt64 = 5 * 1_000_000_000  // 5 seconds
-        let deadline = startTime.addingTimeInterval(TimeInterval(timeoutSeconds))
+        // Record execution in history
+        recordExecution(scheduleID: id, success: result.success, duration: duration,
+                        result: result.result, error: result.error)
 
-        var finalResult: String?
-        var finalError: String?
+        // Update task with latest results
+        if var updated = tasks[id] {
+            updated.lastResult = result.result
+            updated.lastError = result.error
+            updated.updatedAt = Date()
 
-        while Date() < deadline {
-            if let completed = await TaskQueue.shared.taskByID(queueTask.id) {
-                switch completed.status {
-                case .completed:
-                    finalResult = completed.result
-                    break
-                case .failed:
-                    finalError = completed.error ?? "Unknown error"
-                    break
-                case .cancelled:
-                    finalError = "Task was cancelled"
-                    break
-                case .pending, .inProgress:
-                    try? await Task.sleep(nanoseconds: pollInterval)
-                    continue
-                }
-                break
+            // Calculate next run
+            let resolved = updated.resolvedExpression
+            if let parsed = CronExpression.parse(resolved) {
+                updated.nextRun = parsed.nextRunAfter(Date())
             }
-            try? await Task.sleep(nanoseconds: pollInterval)
+
+            tasks[id] = updated
         }
 
-        if finalResult == nil && finalError == nil {
-            finalError = "Task timed out after \(timeoutSeconds)s"
-        }
-
-        // Update task with results
-        task.lastResult = finalResult
-        task.lastError = finalError
-        task.updatedAt = Date()
-
-        // Calculate next run
-        if let parsed = CronExpression.parse(task.cronExpression) {
-            task.nextRun = parsed.nextRunAfter(Date())
-        }
-
-        tasks[id] = task
         runningTasks.remove(id)
         saveTasks()
 
-        let elapsed = Int(Date().timeIntervalSince(startTime))
+        let elapsed = Int(duration)
 
-        if let error = finalError {
+        if let error = result.error {
             TorboLog.error("'\(task.name)' failed in \(elapsed)s: \(error)", subsystem: "Cron")
             Task {
                 await EventBus.shared.publish("system.cron.error",
@@ -495,7 +514,7 @@ actor CronScheduler {
         }
 
         // Store result as a conversation message for the iOS client to pick up
-        let resultContent = finalResult ?? finalError ?? "No result"
+        let resultContent = result.result ?? result.error ?? "No result"
         let message = ConversationMessage(
             role: "assistant",
             content: "[Cron: \(task.name)] \(resultContent)",
@@ -504,6 +523,88 @@ actor CronScheduler {
             agentID: task.agentID
         )
         await ConversationStore.shared.appendMessage(message)
+    }
+
+    // MARK: - Execution History
+
+    /// Record a completed execution in the schedule's history (keeps last 50).
+    func recordExecution(scheduleID: String, success: Bool, duration: TimeInterval,
+                         result: String?, error: String?) {
+        guard var task = tasks[scheduleID] else { return }
+
+        let execution = ScheduleExecution(
+            timestamp: Date(),
+            success: success,
+            duration: duration,
+            result: result.map { String($0.prefix(500)) },  // Truncate long results
+            error: error
+        )
+
+        var history = task.executionHistory ?? []
+        history.append(execution)
+
+        // Keep last 50
+        if history.count > 50 {
+            history = Array(history.suffix(50))
+        }
+
+        task.executionHistory = history
+        tasks[scheduleID] = task
+        saveTasks()
+    }
+
+    /// Get execution history for a schedule.
+    func getExecutionHistory(scheduleID: String, limit: Int = 50) -> [ScheduleExecution] {
+        guard let task = tasks[scheduleID] else { return [] }
+        let history = task.executionLog
+        if limit >= history.count { return history }
+        return Array(history.suffix(limit))
+    }
+
+    // MARK: - Missed Execution Detection
+
+    /// Check a single schedule for missed executions since its last run.
+    /// Returns dates that should have executed but didn't.
+    func getMissedExecutions(scheduleID: String) -> [Date] {
+        guard let task = tasks[scheduleID], task.enabled else { return [] }
+
+        let resolved = task.resolvedExpression
+        guard let parsed = CronExpression.parse(resolved) else { return [] }
+
+        // If never run, check from creation time
+        let since = task.lastRun ?? task.createdAt
+        let now = Date()
+
+        // Don't look back more than 24 hours to avoid flooding
+        let lookback = max(since, now.addingTimeInterval(-86400))
+
+        var missed: [Date] = []
+        var cursor = lookback
+        while let next = parsed.nextRunAfter(cursor), next < now {
+            missed.append(next)
+            cursor = next
+            if missed.count >= 100 { break }  // Safety cap
+        }
+
+        return missed
+    }
+
+    /// Check all schedules for missed executions. Returns count of schedules with misses.
+    private func checkAllMissedExecutions() -> Int {
+        var count = 0
+        for (_, task) in tasks where task.enabled {
+            let resolved = task.resolvedExpression
+            guard let parsed = CronExpression.parse(resolved) else { continue }
+
+            let since = task.lastRun ?? task.createdAt
+            let now = Date()
+            let lookback = max(since, now.addingTimeInterval(-86400))
+
+            if let next = parsed.nextRunAfter(lookback), next < now {
+                count += 1
+            }
+        }
+        return count
     }
 
     // MARK: - Persistence
@@ -555,11 +656,21 @@ actor CronScheduler {
             .filter { $0.enabled && $0.nextRun != nil }
             .min(by: { ($0.nextRun ?? .distantFuture) < ($1.nextRun ?? .distantFuture) })
 
+        // Aggregate execution history stats
+        let allHistory = tasks.values.flatMap(\.executionLog)
+        let successCount = allHistory.filter(\.success).count
+        let failCount = allHistory.count - successCount
+        let avgDuration = allHistory.isEmpty ? 0 : allHistory.map(\.duration).reduce(0, +) / Double(allHistory.count)
+
         var result: [String: Any] = [
             "total": tasks.count,
             "enabled": enabled,
             "running": running,
-            "total_runs": totalRuns
+            "total_runs": totalRuns,
+            "history_entries": allHistory.count,
+            "success_count": successCount,
+            "failure_count": failCount,
+            "avg_duration_seconds": Int(avgDuration)
         ]
 
         if let next = nextDue {
@@ -571,6 +682,19 @@ actor CronScheduler {
         }
 
         return result
+    }
+
+    // MARK: - Next Runs Preview
+
+    /// Preview the next N run times for a schedule.
+    func nextRuns(scheduleID: String, count: Int = 5) -> [Date] {
+        guard let task = tasks[scheduleID], task.enabled else { return [] }
+        return CronParser.nextRuns(task.cronExpression, count: count)
+    }
+
+    /// Preview the next N run times for an arbitrary expression.
+    func nextRunsForExpression(_ expression: String, count: Int = 5) -> [Date] {
+        CronParser.nextRuns(expression, count: count)
     }
 
     // MARK: - Helpers

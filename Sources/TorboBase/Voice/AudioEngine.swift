@@ -18,6 +18,8 @@ final class AudioEngine: ObservableObject {
     private let playerNode = AVAudioPlayerNode()
     @Published var micPermissionGranted = false
     @Published var isRunning = false
+    /// Ambient mic level (0–1) — always available when engine running, for orb reactivity
+    @Published var audioLevel: Float = 0
 
     /// Callback for mic audio buffers (used by SpeechRecognizer).
     /// Stored in module-level global — safe to call from realtime audio thread.
@@ -108,6 +110,21 @@ final class AudioEngine: ObservableObject {
         // Closure captures module-level global — no @MainActor access on audio thread
         inputNode.installTap(onBus: 0, bufferSize: 1024, format: format) { buffer, time in
             _audioInputCallback?(buffer, time)
+            // Also compute ambient mic level for orb reactivity
+            if let data = buffer.floatChannelData?[0] {
+                let count = Int(buffer.frameLength)
+                var sum: Float = 0
+                for i in 0..<count { sum += data[i] * data[i] }
+                let rms = sqrt(sum / max(Float(count), 1))
+                let db = 20 * log10(max(rms, 1e-7))
+                let normalized = max(0, min(1, (db + 50) / 50))
+                DispatchQueue.main.async { [weak self] in
+                    guard let self else { return }
+                    // EMA: fast attack, slow release
+                    let alpha: Float = normalized > self.audioLevel ? 0.3 : 0.1
+                    self.audioLevel += alpha * (normalized - self.audioLevel)
+                }
+            }
         }
         inputTapInstalled = true
         TorboLog.info("Input tap installed successfully", subsystem: "AudioEngine")

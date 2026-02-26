@@ -437,7 +437,7 @@ final class AppState: _TorboObservable {
     }
 
     /// Per-agent access levels — synced from AgentConfigManager
-    var agentAccessLevels: [String: AccessLevel] = ["sid": .fullAccess] {
+    var agentAccessLevels: [String: AccessLevel] = ["sid": .chatOnly] {
         willSet { willChangeUI() }
     }
 
@@ -756,6 +756,9 @@ enum DashboardTab: String, CaseIterable {
     case skills = "Skills"
     case models = "Models"
     case security = "Security"
+    case iam = "IAM"
+    case governance = "Governance"
+    case scheduler = "Scheduler"
     case settings = "Settings"
 
     var icon: String {
@@ -769,6 +772,9 @@ enum DashboardTab: String, CaseIterable {
         case .skills: return "puzzlepiece.fill"
         case .models: return "cube.fill"
         case .security: return "shield.checkered"
+        case .iam: return "person.badge.shield.checkmark.fill"
+        case .governance: return "shield.lefthalf.filled"
+        case .scheduler: return "clock.badge.checkmark"
         case .settings: return "gearshape.fill"
         }
     }
@@ -784,6 +790,9 @@ enum DashboardTab: String, CaseIterable {
         case .skills: return "skills"
         case .models: return "models"
         case .security: return "security"
+        case .iam: return "agent IAM"
+        case .governance: return "governance"
+        case .scheduler: return "cron scheduler"
         case .settings: return "settings"
         }
     }

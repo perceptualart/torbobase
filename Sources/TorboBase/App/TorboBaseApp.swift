@@ -184,6 +184,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             await OllamaManager.shared.ensureRunning()
             await OllamaManager.shared.checkAndUpdate()
             await GatewayServer.shared.start(appState: AppState.shared)
+
+            // Initialize Governance Engine
+            await GovernanceEngine.shared.initialize()
+            TorboLog.info("Governance engine initialized", subsystem: "App")
+
+            // Initialize Agent IAM — migrate existing agents on first boot
+            await AgentIAMMigration.migrateIfNeeded()
+            TorboLog.info("Agent IAM initialized", subsystem: "App")
+
             TorboLog.info("Gateway running on port \(AppState.shared.serverPort)", subsystem: "App")
             TorboLog.info("Access level: \(AppState.shared.accessLevel.rawValue) (\(AppState.shared.accessLevel.name))", subsystem: "App")
             TorboLog.info("Dashboard: http://127.0.0.1:\(AppState.shared.serverPort)/dashboard", subsystem: "App")
@@ -197,6 +206,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 await ProactiveAgent.shared.start()
             }
             // Default: OFF until toggled
+
+            // Install default agent teams on first launch
+            await DefaultTeams.installIfNeeded()
 
             // Start ambient intelligence subsystems
             TorboLog.info("Starting ambient monitor...", subsystem: "App")

@@ -15,54 +15,37 @@ struct OrbAccessView: View {
 
     @ObservedObject private var voiceEngine = VoiceEngine.shared
     @State private var confirmingFull = false
-    @State private var simulatedLevels: [Float] = Array(repeating: 0.15, count: 40)
     @State private var sliderDragging = false
 
     /// Whether the voice engine is actively running (agent speaking/listening)
     private var voiceActive: Bool { voiceEngine.isActive }
 
-    /// Effective audio levels — real when voice active, simulated otherwise
-    private var effectiveLevels: [Float] {
-        voiceActive ? voiceEngine.currentAudioLevels : simulatedLevels
-    }
+    /// Effective orb color — always access-level based
+    private var effectiveColor: Color { orbColor }
 
-    /// Effective orb color — agent hue when voice active, access-level color otherwise
-    private var effectiveColor: Color {
-        if voiceActive {
-            let hue = OrbRenderer.agentHue(for: voiceEngine.activeAgentID)
-            let sat = OrbRenderer.agentSaturation(for: voiceEngine.activeAgentID, accessLevel: level.rawValue)
-            return Color(hue: hue, saturation: sat, brightness: 1.0)
+    /// Color for the voice state dot
+    private var voiceStateColor: Color {
+        switch voiceEngine.state {
+        case .idle:      return .gray
+        case .listening: return .green
+        case .thinking:  return .orange
+        case .speaking:  return .cyan
         }
-        return orbColor
     }
 
     var body: some View {
         VStack(spacing: 16) {
             // The Torbo — massive, alive, the hero
             ZStack {
-                // Ambient glow behind orb
-                Circle()
-                    .fill(
-                        RadialGradient(
-                            colors: [effectiveColor.opacity(0.25), effectiveColor.opacity(0.05), .clear],
-                            center: .center,
-                            startRadius: 40,
-                            endRadius: 180
-                        )
-                    )
-                    .frame(width: 340, height: 340)
-                    .blur(radius: 30)
-
                 OrbRenderer(
-                    audioLevels: effectiveLevels,
+                    audioLevels: voiceEngine.currentAudioLevels,
                     color: effectiveColor,
                     isActive: voiceActive || (level != .off && serverRunning),
-                    baseHue: voiceActive ? OrbRenderer.agentHue(for: voiceEngine.activeAgentID) : nil,
-                    baseSaturation: voiceActive ? OrbRenderer.agentSaturation(for: voiceEngine.activeAgentID, accessLevel: level.rawValue) : 0.85
+                    orbRadius: 130
                 )
-                .frame(width: 280, height: 280)
+                .frame(width: 390, height: 390)
                 .opacity(level == .off && !voiceActive ? 0.3 : 1.0)
-                .contentShape(Circle())
+                .contentShape(Circle().scale(0.67))
                 .onTapGesture {
                     if voiceActive {
                         voiceEngine.handleOrbTap()
@@ -93,6 +76,57 @@ struct OrbAccessView: View {
                 }
                 .allowsHitTesting(false)
             }
+
+            // Mic — Agent name/status — Speaker below orb, equally spaced
+            HStack {
+                Button {
+                    voiceEngine.isMicMuted.toggle()
+                } label: {
+                    Image(systemName: voiceEngine.isMicMuted ? "mic.slash.fill" : "mic.fill")
+                        .font(.system(size: 14))
+                        .foregroundStyle(voiceEngine.isMicMuted ? .red : .white.opacity(0.7))
+                        .frame(width: 32, height: 32)
+                        .background(Circle().fill(Color.black.opacity(0.3)))
+                }
+                .buttonStyle(.plain)
+
+                Spacer()
+
+                // Agent name + voice state (centered)
+                if voiceActive {
+                    HStack(spacing: 6) {
+                        Circle()
+                            .fill(voiceStateColor)
+                            .frame(width: 6, height: 6)
+                        Text(voiceEngine.activeAgentID.uppercased())
+                            .font(.system(size: 12, weight: .bold, design: .monospaced))
+                            .foregroundStyle(.white.opacity(0.6))
+                        Text("·")
+                            .foregroundStyle(.white.opacity(0.3))
+                        Text(voiceEngine.state.rawValue.uppercased())
+                            .font(.system(size: 10, weight: .medium, design: .monospaced))
+                            .foregroundStyle(.white.opacity(0.35))
+                    }
+                } else {
+                    Text(level.name)
+                        .font(.system(size: 12, weight: .bold, design: .monospaced))
+                        .foregroundStyle(.white.opacity(0.5))
+                }
+
+                Spacer()
+
+                Button {
+                    voiceEngine.isMuted.toggle()
+                } label: {
+                    Image(systemName: voiceEngine.isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill")
+                        .font(.system(size: 14))
+                        .foregroundStyle(voiceEngine.isMuted ? .red : .white.opacity(0.7))
+                        .frame(width: 32, height: 32)
+                        .background(Circle().fill(Color.black.opacity(0.3)))
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(.horizontal, 24)
 
             // Description
             Text(level.description)
@@ -126,12 +160,6 @@ struct OrbAccessView: View {
             }
             .buttonStyle(.plain)
         }
-        .task {
-            while !Task.isCancelled {
-                updateSimulatedLevels()
-                try? await Task.sleep(nanoseconds: 50_000_000)
-            }
-        }
         .alert("Enable Full Access?", isPresented: $confirmingFull) {
             Button("Cancel", role: .cancel) {}
             Button("Enable Full Access", role: .destructive) {
@@ -153,15 +181,6 @@ struct OrbAccessView: View {
         }
     }
 
-    private func updateSimulatedLevels() {
-        let t = Date.timeIntervalSinceReferenceDate
-        let baseLevel: Float = level == .off ? 0.08 : (serverRunning ? 0.18 : 0.12)
-        let variation: Float = level == .off ? 0.02 : (serverRunning ? 0.08 : 0.04)
-        simulatedLevels = (0..<40).map { i in
-            let phase = Float(t * 0.5 + Double(i) * 0.15)
-            return baseLevel + sin(phase) * variation + sin(phase * 2.3) * variation * 0.5
-        }
-    }
 }
 
 // MARK: - Rainbow Access Slider

@@ -89,6 +89,8 @@ enum CapabilityRegistry {
         // Clipboard (macOS)
         CapabilityDefinition(toolName: "clipboard_read", category: .clipboard, minimumAccessLevel: .readFiles, description: "Read clipboard contents", macOnly: true),
         CapabilityDefinition(toolName: "clipboard_write", category: .clipboard, minimumAccessLevel: .writeFiles, description: "Write to clipboard", macOnly: true),
+        // Canvas (macOS)
+        CapabilityDefinition(toolName: "canvas_write", category: .clipboard, minimumAccessLevel: .chatOnly, description: "Write content to Canvas window", macOnly: true),
         // System
         CapabilityDefinition(toolName: "process_list", category: .system, minimumAccessLevel: .readFiles, description: "List running processes", macOnly: false),
         CapabilityDefinition(toolName: "process_kill", category: .system, minimumAccessLevel: .execute, description: "Kill a process", macOnly: false),
@@ -1079,6 +1081,24 @@ extension ToolProcessor {
         ] as [String: Any]
     ]
 
+    /// canvas_write tool — write content to the Canvas window for the user to view/edit
+    static let canvasWriteDefinition: [String: Any] = [
+        "type": "function",
+        "function": [
+            "name": "canvas_write",
+            "description": "Write content to the Canvas window. Use this to show the user code, documents, or long-form content in a dedicated editing workspace. The Canvas window will open automatically.",
+            "parameters": [
+                "type": "object",
+                "properties": [
+                    "title": ["type": "string", "description": "Title for the canvas document (e.g. filename or description)"],
+                    "content": ["type": "string", "description": "The text content to write to the canvas"],
+                    "append": ["type": "boolean", "description": "If true, append to existing content instead of replacing. Default false."]
+                ] as [String: Any],
+                "required": ["title", "content"]
+            ] as [String: Any]
+        ] as [String: Any]
+    ]
+
     /// create_workflow tool — lets agents decompose multi-step requests into workflows
     static let createWorkflowToolDefinition: [String: Any] = [
         "type": "function",
@@ -1409,6 +1429,7 @@ extension ToolProcessor {
         // New macOS tools (Phase 2)
         case "clipboard_read": return SystemToolsEngine.clipboardReadDefinition
         case "clipboard_write": return SystemToolsEngine.clipboardWriteDefinition
+        case "canvas_write": return ToolProcessor.canvasWriteDefinition
         case "process_list": return SystemToolsEngine.processListDefinition
         case "process_kill": return SystemToolsEngine.processKillDefinition
         case "system_monitor": return SystemToolsEngine.systemMonitorDefinition
@@ -1525,6 +1546,25 @@ extension ToolProcessor {
 
             let argsStr = function["arguments"] as? String ?? "{}"
             let args = (try? JSONSerialization.jsonObject(with: Data(argsStr.utf8)) as? [String: Any]) ?? [:]
+
+            // Log tool execution to Governance Engine
+            Task.detached {
+                let engine = GovernanceEngine.shared
+                await engine.initialize()
+                _ = await engine.logDecision(
+                    agent: agentID, action: name,
+                    reasoning: "Tool execution: \(name)",
+                    confidence: 1.0, cost: 0.0,
+                    riskLevel: .low, metadata: ["tool_call_id": id]
+                )
+            }
+
+            // IAM permission check — log access and deny if not permitted
+            let iamCheck = await CapabilitiesIAM.checkBeforeToolExecution(agentID: agentID, toolName: name)
+            if !iamCheck.permitted {
+                results.append(["role": "tool", "tool_call_id": id, "content": "IAM denied: \(iamCheck.reason ?? "insufficient permissions")"])
+                continue
+            }
 
             // Handle MCP tools (prefixed with mcp_)
             if name.hasPrefix("mcp_") {
@@ -2022,6 +2062,12 @@ extension ToolProcessor {
                         continue
                     }
                     content = await SystemToolsEngine.shared.clipboardWrite(text: text)
+                case "canvas_write":
+                    let canvasTitle = args["title"] as? String ?? "Untitled"
+                    let canvasContent = args["content"] as? String ?? ""
+                    let canvasAppend = args["append"] as? Bool ?? false
+                    await CanvasStore.shared.write(title: canvasTitle, content: canvasContent, append: canvasAppend)
+                    content = "Content written to Canvas window (\(canvasContent.count) chars). The Canvas window is now open for the user to view and edit."
                 case "process_list":
                     let limit = args["limit"] as? Int ?? 20
                     let filter = args["filter"] as? String

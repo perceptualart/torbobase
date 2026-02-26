@@ -19,7 +19,8 @@ final class TTSManager: NSObject, ObservableObject {
 
     // MARK: - Configuration
 
-    var engine: String = "system" // "system" or "elevenlabs"
+    var engine: String = "system" // "system", "elevenlabs", or "torbo"
+    var agentID: String = "sid" // Current agent for Piper voice selection
     var elevenLabsVoiceID: String = "21m00Tcm4TlvDq8ikWAM" // Default Rachel
     var systemVoiceIdentifier: String = ""
     var rate: Float = 0.52
@@ -35,6 +36,9 @@ final class TTSManager: NSObject, ObservableObject {
     private override init() {
         super.init()
         synthesizer.delegate = self
+        // Initialize Piper on-device TTS (loads voice models if available)
+        PiperTTSEngine.shared.loadModels()
+        PiperTTSEngine.shared.warmup()
     }
 
     // MARK: - Public API
@@ -46,7 +50,9 @@ final class TTSManager: NSObject, ObservableObject {
         isSpeaking = true
         TorboLog.info("TTS speak — engine: \(engine), text: \"\(text.prefix(60))...\"", subsystem: "TTS")
 
-        if engine == "elevenlabs" {
+        if engine == "torbo" {
+            speakTask = Task { await synthesizePiper(text) }
+        } else if engine == "elevenlabs" {
             speakTask = Task { await synthesizeElevenLabs(text) }
         } else {
             speakSystem(text)
@@ -80,6 +86,73 @@ final class TTSManager: NSObject, ObservableObject {
 
         // Use direct speak — delegate handles isSpeaking + audio levels
         synthesizer.speak(utterance)
+    }
+
+    // MARK: - Piper On-Device TTS (TORBO engine)
+
+    private func synthesizePiper(_ text: String) async {
+        let piperEngine = PiperTTSEngine.shared
+        guard piperEngine.isAvailable else {
+            TorboLog.info("Piper not available — falling back to system voice", subsystem: "TTS")
+            await MainActor.run { speakSystem(text) }
+            return
+        }
+
+        guard let wavData = await piperEngine.synthesize(text: text, agentID: agentID) else {
+            TorboLog.warn("Piper synthesis returned nil — falling back to system voice", subsystem: "TTS")
+            await MainActor.run { speakSystem(text) }
+            return
+        }
+
+        // Play WAV data through AudioEngine
+        await playWAVData(wavData)
+    }
+
+    private func playWAVData(_ data: Data) async {
+        guard !Task.isCancelled else {
+            await MainActor.run { isSpeaking = false }
+            return
+        }
+
+        let tempURL = FileManager.default.temporaryDirectory.appendingPathComponent("piper_\(UUID().uuidString).wav")
+        do {
+            try data.write(to: tempURL)
+            let audioFile = try AVAudioFile(forReading: tempURL)
+            guard let buffer = AVAudioPCMBuffer(
+                pcmFormat: audioFile.processingFormat,
+                frameCapacity: AVAudioFrameCount(audioFile.length)
+            ) else {
+                TorboLog.error("Piper: failed to create PCM buffer", subsystem: "TTS")
+                try? FileManager.default.removeItem(at: tempURL)
+                await MainActor.run { isSpeaking = false }
+                return
+            }
+            try audioFile.read(into: buffer)
+            try? FileManager.default.removeItem(at: tempURL)
+
+            guard !Task.isCancelled else {
+                await MainActor.run { isSpeaking = false }
+                return
+            }
+
+            await MainActor.run { startMetering() }
+
+            await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+                audioEngine.playBuffer(buffer) {
+                    continuation.resume()
+                }
+            }
+
+            await MainActor.run {
+                stopMetering()
+                isSpeaking = false
+                resetLevels()
+            }
+        } catch {
+            try? FileManager.default.removeItem(at: tempURL)
+            TorboLog.error("Piper: failed to play audio: \(error)", subsystem: "TTS")
+            await MainActor.run { isSpeaking = false }
+        }
     }
 
     // MARK: - ElevenLabs Streaming TTS

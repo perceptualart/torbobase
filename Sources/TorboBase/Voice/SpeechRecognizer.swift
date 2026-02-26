@@ -297,6 +297,9 @@ final class SpeechRecognizer: ObservableObject {
 
     // MARK: - Audio Level Processing
 
+    /// EMA-smoothed level — prevents raw mic spikes from jolting the orb
+    private var emaLevel: Float = 0
+
     private func processAudioBuffer(_ buffer: AVAudioPCMBuffer) {
         guard let data = buffer.floatChannelData?[0] else { return }
         let count = Int(buffer.frameLength)
@@ -308,8 +311,12 @@ final class SpeechRecognizer: ObservableObject {
         let db = 20 * log10(max(rms, 1e-7))
         let normalized = max(0, min(1, (db + 50) / 50))
 
-        audioLevel = normalized
-        levelHistory.append(normalized)
+        // EMA smoothing — fast attack (0.3), slow release (0.08) for organic feel
+        let alpha: Float = normalized > emaLevel ? 0.3 : 0.08
+        emaLevel += alpha * (normalized - emaLevel)
+
+        audioLevel = emaLevel
+        levelHistory.append(emaLevel)
         if levelHistory.count > 40 { levelHistory.removeFirst() }
         audioLevels = levelHistory
         while audioLevels.count < 40 { audioLevels.insert(0, at: 0) }
