@@ -20,23 +20,48 @@ let extraTargets: [Target] = [
         providers: [.apt(["libsqlite3-dev"])]
     ),
 ]
+let piperTargets: [Target] = []
+let piperDeps: [Target.Dependency] = []
+let piperSwiftSettings: [SwiftSetting] = []
+let piperLinkerSettings: [LinkerSetting] = []
 #else
 let dependencies: [Package.Dependency] = []
 let targetDependencies: [Target.Dependency] = []
 let extraTargets: [Target] = []
+
+// sherpa-onnx Piper TTS — on-device voice synthesis (macOS only)
+let sherpaLibDir = "Frameworks/macOS"
+let piperTargets: [Target] = [
+    .target(
+        name: "CSherpaOnnx",
+        path: "Sources/CSherpaOnnx",
+        publicHeadersPath: "include",
+        linkerSettings: [
+            .unsafeFlags(["-L\(sherpaLibDir)"]),
+            .linkedLibrary("sherpa-onnx-c-api"),
+            .linkedLibrary("onnxruntime"),
+        ]
+    ),
+]
+let piperDeps: [Target.Dependency] = ["CSherpaOnnx"]
+let piperSwiftSettings: [SwiftSetting] = [.define("PIPER_TTS")]
+let piperLinkerSettings: [LinkerSetting] = [
+    .unsafeFlags(["-L\(sherpaLibDir)", "-Xlinker", "-rpath", "-Xlinker", "@executable_path/../Frameworks/macOS"]),
+]
 #endif
 
 let package = Package(
     name: "TorboBase",
     platforms: [.macOS(.v13)],
     dependencies: dependencies,
-    targets: extraTargets + [
+    targets: extraTargets + piperTargets + [
         .executableTarget(
             name: "TorboBase",
-            dependencies: targetDependencies,
+            dependencies: targetDependencies + piperDeps,
+            swiftSettings: piperSwiftSettings,
             linkerSettings: [
-                .linkedLibrary("sqlite3")
-            ]
+                .linkedLibrary("sqlite3"),
+            ] + piperLinkerSettings
         )
     ]
 )

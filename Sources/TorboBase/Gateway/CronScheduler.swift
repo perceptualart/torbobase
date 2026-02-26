@@ -28,6 +28,12 @@ struct CronTask: Codable, Identifiable {
     var timezone: String?                // nil = system timezone
     var catchUp: Bool?                   // nil = true — run missed executions on startup
     var executionHistory: [ScheduleExecution]?  // Last 50 executions
+    var category: String?                // Schedule category for grouping
+    var tags: [String]?                  // Freeform tags
+    var maxRetries: Int?                 // Max retries on failure (nil = 0)
+    var retryCount: Int?                 // Current consecutive failure count
+    var pausedUntil: Date?              // If set, schedule is paused until this time
+    var isDefault: Bool?                 // true = installed from template, not user-created
 
     /// Resolved cron expression (keywords expanded to 5-field format).
     var resolvedExpression: String {
@@ -45,6 +51,22 @@ struct CronTask: Codable, Identifiable {
         CronParser.describe(cronExpression)
     }
 
+    /// Whether the schedule is currently paused.
+    var isPaused: Bool {
+        if let until = pausedUntil { return until > Date() }
+        return false
+    }
+
+    /// Effective max retries (default 0).
+    var effectiveMaxRetries: Int { maxRetries ?? 0 }
+
+    /// Success rate as a percentage (0-100). Returns nil if no history.
+    var successRate: Int? {
+        let log = executionLog
+        guard !log.isEmpty else { return nil }
+        return Int(Double(log.filter(\.success).count) / Double(log.count) * 100)
+    }
+
     enum CodingKeys: String, CodingKey {
         case id, name
         case cronExpression = "cron_expression"
@@ -60,6 +82,11 @@ struct CronTask: Codable, Identifiable {
         case timezone
         case catchUp = "catch_up"
         case executionHistory = "execution_history"
+        case category, tags
+        case maxRetries = "max_retries"
+        case retryCount = "retry_count"
+        case pausedUntil = "paused_until"
+        case isDefault = "is_default"
     }
 }
 
@@ -301,6 +328,7 @@ actor CronScheduler {
 
     func initialize() async {
         loadTasks()
+        installDefaultSchedules()
         recalculateAllNextRuns()
 
         // Check for missed executions while server was down
@@ -324,7 +352,8 @@ actor CronScheduler {
     // MARK: - CRUD
 
     func createTask(name: String, cronExpression: String, agentID: String, prompt: String,
-                    timezone: String? = nil, catchUp: Bool? = nil) -> CronTask? {
+                    timezone: String? = nil, catchUp: Bool? = nil, category: String? = nil,
+                    tags: [String]? = nil, maxRetries: Int? = nil, isDefault: Bool? = nil) -> CronTask? {
         // Resolve keywords and validate
         let resolved = CronParser.resolveKeyword(cronExpression)
         guard CronExpression.parse(resolved) != nil else {
@@ -338,7 +367,7 @@ actor CronScheduler {
         let task = CronTask(
             id: generateID(),
             name: name,
-            cronExpression: cronExpression,  // Store original (may be keyword)
+            cronExpression: cronExpression,
             agentID: agentID,
             prompt: prompt,
             enabled: true,
@@ -351,7 +380,11 @@ actor CronScheduler {
             updatedAt: now,
             timezone: timezone,
             catchUp: catchUp,
-            executionHistory: []
+            executionHistory: [],
+            category: category,
+            tags: tags,
+            maxRetries: maxRetries,
+            isDefault: isDefault
         )
 
         tasks[task.id] = task
@@ -443,11 +476,23 @@ actor CronScheduler {
     private func checkAndRunDueTasks() async {
         let now = Date()
 
-        for (id, task) in tasks {
+        for (id, var task) in tasks {
             guard task.enabled,
                   let nextRun = task.nextRun,
                   nextRun <= now,
                   !runningTasks.contains(id) else { continue }
+
+            // Check if paused
+            if task.isPaused {
+                continue
+            }
+
+            // Auto-resume if pause expired
+            if task.pausedUntil != nil && !task.isPaused {
+                task.pausedUntil = nil
+                tasks[id] = task
+                saveTasks()
+            }
 
             TorboLog.info("Due: '\(task.name)' — executing", subsystem: "Cron")
             await executeTask(id)
@@ -483,10 +528,30 @@ actor CronScheduler {
             updated.lastError = result.error
             updated.updatedAt = Date()
 
-            // Calculate next run
-            let resolved = updated.resolvedExpression
-            if let parsed = CronExpression.parse(resolved) {
-                updated.nextRun = parsed.nextRunAfter(Date())
+            // Handle retry logic on failure
+            if !result.success && updated.effectiveMaxRetries > 0 {
+                let currentRetries = updated.retryCount ?? 0
+                if currentRetries < updated.effectiveMaxRetries {
+                    updated.retryCount = currentRetries + 1
+                    // Schedule retry in 5 minutes instead of normal next-run
+                    updated.nextRun = Date().addingTimeInterval(300)
+                    TorboLog.info("'\(updated.name)' retry \(currentRetries + 1)/\(updated.effectiveMaxRetries) in 5m", subsystem: "Cron")
+                } else {
+                    // Max retries exhausted — reset and use normal schedule
+                    updated.retryCount = 0
+                    let resolved = updated.resolvedExpression
+                    if let parsed = CronExpression.parse(resolved) {
+                        updated.nextRun = parsed.nextRunAfter(Date())
+                    }
+                    TorboLog.warn("'\(updated.name)' exhausted \(updated.effectiveMaxRetries) retries", subsystem: "Cron")
+                }
+            } else {
+                // Success or no retries configured — reset retry count
+                updated.retryCount = 0
+                let resolved = updated.resolvedExpression
+                if let parsed = CronExpression.parse(resolved) {
+                    updated.nextRun = parsed.nextRunAfter(Date())
+                }
             }
 
             tasks[id] = updated
@@ -644,6 +709,249 @@ actor CronScheduler {
                 tasks[id] = task
             }
         }
+    }
+
+    // MARK: - Default Schedule Installation
+
+    /// Install default schedules from templates on first run.
+    /// Only installs if no schedules exist yet. All defaults are created disabled
+    /// so the user can review and enable the ones they want.
+    func installDefaultSchedules() {
+        guard tasks.isEmpty else {
+            TorboLog.info("Schedules already exist — skipping default installation", subsystem: "Cron")
+            return
+        }
+
+        let defaults: [(template: CronTemplate, category: String)] = [
+            (CronTemplates.morningBriefing, "daily"),
+            (CronTemplates.eveningWindDown, "daily"),
+            (CronTemplates.hourlyPriceCheck, "monitoring"),
+            (CronTemplates.weeklyReport, "reporting"),
+            (CronTemplates.backupReminder, "maintenance"),
+        ]
+
+        for (tpl, cat) in defaults {
+            let resolved = CronParser.resolveKeyword(tpl.cronExpression)
+            let now = Date()
+            let nextRun = CronExpression.parse(resolved)?.nextRunAfter(now)
+
+            let task = CronTask(
+                id: generateID(),
+                name: tpl.name,
+                cronExpression: tpl.cronExpression,
+                agentID: tpl.agentID,
+                prompt: tpl.prompt,
+                enabled: false,  // Disabled by default — user opts in
+                lastRun: nil,
+                nextRun: nextRun,
+                lastResult: nil,
+                lastError: nil,
+                runCount: 0,
+                createdAt: now,
+                updatedAt: now,
+                category: cat,
+                isDefault: true
+            )
+            tasks[task.id] = task
+        }
+
+        saveTasks()
+        TorboLog.info("Installed \(defaults.count) default schedule(s) (all disabled — enable in dashboard)", subsystem: "Cron")
+    }
+
+    // MARK: - Clone
+
+    /// Clone an existing schedule with a new name.
+    func cloneSchedule(id: String, newName: String? = nil) -> CronTask? {
+        guard let original = tasks[id] else { return nil }
+        let now = Date()
+        let nextRun = CronExpression.parse(original.resolvedExpression)?.nextRunAfter(now)
+
+        let clone = CronTask(
+            id: generateID(),
+            name: newName ?? "\(original.name) (Copy)",
+            cronExpression: original.cronExpression,
+            agentID: original.agentID,
+            prompt: original.prompt,
+            enabled: false,  // Clones start disabled
+            lastRun: nil,
+            nextRun: nextRun,
+            lastResult: nil,
+            lastError: nil,
+            runCount: 0,
+            createdAt: now,
+            updatedAt: now,
+            timezone: original.timezone,
+            catchUp: original.catchUp,
+            executionHistory: nil,
+            category: original.category,
+            tags: original.tags,
+            maxRetries: original.maxRetries
+        )
+
+        tasks[clone.id] = clone
+        saveTasks()
+        TorboLog.info("Cloned '\(original.name)' → '\(clone.name)'", subsystem: "Cron")
+        return clone
+    }
+
+    // MARK: - Pause / Resume
+
+    /// Pause a schedule until a specific time (or indefinitely if nil).
+    func pauseSchedule(id: String, until: Date? = nil) -> CronTask? {
+        guard var task = tasks[id] else { return nil }
+        task.pausedUntil = until ?? Date.distantFuture
+        task.updatedAt = Date()
+        tasks[id] = task
+        saveTasks()
+        if let until = until {
+            TorboLog.info("Paused '\(task.name)' until \(until)", subsystem: "Cron")
+        } else {
+            TorboLog.info("Paused '\(task.name)' indefinitely", subsystem: "Cron")
+        }
+        return task
+    }
+
+    /// Resume a paused schedule.
+    func resumeSchedule(id: String) -> CronTask? {
+        guard var task = tasks[id] else { return nil }
+        task.pausedUntil = nil
+        task.updatedAt = Date()
+
+        // Recalculate next run
+        if task.enabled, let parsed = CronExpression.parse(task.resolvedExpression) {
+            task.nextRun = parsed.nextRunAfter(Date())
+        }
+
+        tasks[id] = task
+        saveTasks()
+        TorboLog.info("Resumed '\(task.name)'", subsystem: "Cron")
+        return task
+    }
+
+    // MARK: - History Management
+
+    /// Clear execution history for a schedule.
+    func clearHistory(scheduleID: String) -> Bool {
+        guard var task = tasks[scheduleID] else { return false }
+        task.executionHistory = []
+        tasks[scheduleID] = task
+        saveTasks()
+        TorboLog.info("Cleared history for '\(task.name)'", subsystem: "Cron")
+        return true
+    }
+
+    // MARK: - Export / Import
+
+    /// Export all schedules as JSON data.
+    func exportSchedules() -> Data? {
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        return try? encoder.encode(Array(tasks.values))
+    }
+
+    /// Import schedules from JSON data. Returns count of imported schedules.
+    func importSchedules(data: Data, replaceExisting: Bool = false) -> Int {
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        guard let imported = try? decoder.decode([CronTask].self, from: data) else {
+            TorboLog.error("Failed to decode import data", subsystem: "Cron")
+            return 0
+        }
+
+        if replaceExisting {
+            tasks.removeAll()
+        }
+
+        var count = 0
+        let now = Date()
+        for var task in imported {
+            // Assign new IDs to avoid collisions
+            let newID = generateID()
+            task = CronTask(
+                id: newID,
+                name: task.name,
+                cronExpression: task.cronExpression,
+                agentID: task.agentID,
+                prompt: task.prompt,
+                enabled: task.enabled,
+                lastRun: nil,
+                nextRun: CronExpression.parse(task.resolvedExpression)?.nextRunAfter(now),
+                lastResult: nil,
+                lastError: nil,
+                runCount: 0,
+                createdAt: now,
+                updatedAt: now,
+                timezone: task.timezone,
+                catchUp: task.catchUp,
+                executionHistory: nil,
+                category: task.category,
+                tags: task.tags,
+                maxRetries: task.maxRetries
+            )
+            tasks[newID] = task
+            count += 1
+        }
+
+        saveTasks()
+        TorboLog.info("Imported \(count) schedule(s)", subsystem: "Cron")
+        return count
+    }
+
+    // MARK: - Category Queries
+
+    /// Get all unique categories.
+    func categories() -> [String] {
+        Array(Set(tasks.values.compactMap(\.category))).sorted()
+    }
+
+    /// Get schedules grouped by category.
+    func schedulesGroupedByCategory() -> [(category: String, schedules: [CronTask])] {
+        var groups: [String: [CronTask]] = [:]
+        for task in tasks.values {
+            let cat = task.category ?? "uncategorized"
+            groups[cat, default: []].append(task)
+        }
+        return groups.map { (category: $0.key, schedules: $0.value.sorted { $0.name < $1.name }) }
+            .sorted { $0.category < $1.category }
+    }
+
+    // MARK: - Bulk Operations
+
+    /// Enable all schedules.
+    func enableAll() {
+        for (id, var task) in tasks {
+            task.enabled = true
+            if let parsed = CronExpression.parse(task.resolvedExpression) {
+                task.nextRun = parsed.nextRunAfter(Date())
+            }
+            task.updatedAt = Date()
+            tasks[id] = task
+        }
+        saveTasks()
+        TorboLog.info("Enabled all \(tasks.count) schedule(s)", subsystem: "Cron")
+    }
+
+    /// Disable all schedules.
+    func disableAll() {
+        for (id, var task) in tasks {
+            task.enabled = false
+            task.nextRun = nil
+            task.updatedAt = Date()
+            tasks[id] = task
+        }
+        saveTasks()
+        TorboLog.info("Disabled all \(tasks.count) schedule(s)", subsystem: "Cron")
+    }
+
+    /// Delete all schedules.
+    func deleteAll() -> Int {
+        let count = tasks.count
+        tasks.removeAll()
+        saveTasks()
+        TorboLog.info("Deleted all \(count) schedule(s)", subsystem: "Cron")
+        return count
     }
 
     // MARK: - Stats
