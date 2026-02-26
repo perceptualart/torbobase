@@ -30,6 +30,11 @@ let targetDependencies: [Target.Dependency] = []
 let extraTargets: [Target] = []
 
 // sherpa-onnx Piper TTS — on-device voice synthesis (macOS only)
+// POSTPONED: Piper TTS compiles cleanly but sherpa-onnx initialization blocks
+// the SwiftUI main thread at launch, causing the app to exit immediately.
+// Will be re-enabled in Phase 6.1 with async initialization.
+// To re-enable: uncomment the block below and ensure Frameworks/macOS/ has the dylibs.
+/*
 let sherpaLibDir = "Frameworks/macOS"
 let piperTargets: [Target] = [
     .target(
@@ -48,6 +53,11 @@ let piperSwiftSettings: [SwiftSetting] = [.define("PIPER_TTS")]
 let piperLinkerSettings: [LinkerSetting] = [
     .unsafeFlags(["-L\(sherpaLibDir)", "-Xlinker", "-rpath", "-Xlinker", "@executable_path/../Frameworks/macOS"]),
 ]
+*/
+let piperTargets: [Target] = []
+let piperDeps: [Target.Dependency] = []
+let piperSwiftSettings: [SwiftSetting] = []
+let piperLinkerSettings: [LinkerSetting] = []
 #endif
 
 let package = Package(
