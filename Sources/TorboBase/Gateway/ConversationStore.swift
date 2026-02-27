@@ -361,6 +361,15 @@ actor ConversationStore {
         saveSessions(sessions)
     }
 
+    /// Update the title of a session
+    func updateSessionTitle(agentID: String, sessionID: UUID, title: String) {
+        var sessions = loadSessions()
+        if let idx = sessions.firstIndex(where: { $0.id == sessionID }) {
+            sessions[idx].title = title
+            saveSessions(sessions)
+        }
+    }
+
     /// Load sessions filtered by agent ID
     func loadSessions(forAgent agentID: String) -> [ConversationSession] {
         let all = loadSessions()

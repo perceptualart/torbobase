@@ -1557,44 +1557,6 @@ struct AgentsView: View {
             .padding(.vertical, 8)
             .background(Color.white.opacity(0.02))
 
-            // Gain + Noise Gate sliders (compact inline)
-            if isVoiceActive {
-                HStack(spacing: 12) {
-                    HStack(spacing: 4) {
-                        Text("GAIN")
-                            .font(.system(size: 8, weight: .bold, design: .monospaced))
-                            .foregroundStyle(.white.opacity(0.3))
-                            .frame(width: 30, alignment: .trailing)
-                        Slider(value: Binding(
-                            get: { Double(speechRecognizer.inputGain) },
-                            set: { speechRecognizer.inputGain = Float($0) }
-                        ), in: 0.5...4.0)
-                        .controlSize(.mini)
-                        Text(String(format: "%.1fx", speechRecognizer.inputGain))
-                            .font(.system(size: 9, weight: .medium, design: .monospaced))
-                            .foregroundStyle(.white.opacity(0.3))
-                            .frame(width: 28, alignment: .leading)
-                    }
-                    HStack(spacing: 4) {
-                        Text("GATE")
-                            .font(.system(size: 8, weight: .bold, design: .monospaced))
-                            .foregroundStyle(.white.opacity(0.3))
-                            .frame(width: 30, alignment: .trailing)
-                        Slider(value: Binding(
-                            get: { Double(speechRecognizer.noiseGateLevel) },
-                            set: { speechRecognizer.noiseGateLevel = Float($0) }
-                        ), in: 0.0...0.3)
-                        .controlSize(.mini)
-                        Text(String(format: "%.0f%%", speechRecognizer.noiseGateLevel * 100))
-                            .font(.system(size: 9, weight: .medium, design: .monospaced))
-                            .foregroundStyle(.white.opacity(0.3))
-                            .frame(width: 28, alignment: .leading)
-                    }
-                }
-                .padding(.horizontal, 16)
-                .padding(.vertical, 4)
-            }
-
             // Error display
             if let err = speechRecognizer.error {
                 HStack(spacing: 6) {
@@ -1682,7 +1644,48 @@ struct AgentsView: View {
             Divider().background(Color.white.opacity(0.06))
 
             // Chat (embedded without header)
-            AgentChatView(agentID: editConfig.id, agentName: editConfig.name, showHeader: false, sessionID: activeSessionID)
+            AgentChatView(
+                agentID: editConfig.id,
+                agentName: editConfig.name,
+                showHeader: false,
+                sessionID: activeSessionID,
+                aboveInput: isVoiceActive ? AnyView(
+                    HStack(spacing: 12) {
+                        HStack(spacing: 4) {
+                            Text("GAIN")
+                                .font(.system(size: 8, weight: .bold, design: .monospaced))
+                                .foregroundStyle(.white.opacity(0.3))
+                                .frame(width: 30, alignment: .trailing)
+                            Slider(value: Binding(
+                                get: { Double(speechRecognizer.inputGain) },
+                                set: { speechRecognizer.inputGain = Float($0) }
+                            ), in: 0.5...4.0)
+                            .controlSize(.mini)
+                            Text(String(format: "%.1fx", speechRecognizer.inputGain))
+                                .font(.system(size: 9, weight: .medium, design: .monospaced))
+                                .foregroundStyle(.white.opacity(0.3))
+                                .frame(width: 28, alignment: .leading)
+                        }
+                        HStack(spacing: 4) {
+                            Text("GATE")
+                                .font(.system(size: 8, weight: .bold, design: .monospaced))
+                                .foregroundStyle(.white.opacity(0.3))
+                                .frame(width: 30, alignment: .trailing)
+                            Slider(value: Binding(
+                                get: { Double(speechRecognizer.noiseGateLevel) },
+                                set: { speechRecognizer.noiseGateLevel = Float($0) }
+                            ), in: 0.0...0.3)
+                            .controlSize(.mini)
+                            Text(String(format: "%.0f%%", speechRecognizer.noiseGateLevel * 100))
+                                .font(.system(size: 9, weight: .medium, design: .monospaced))
+                                .foregroundStyle(.white.opacity(0.3))
+                                .frame(width: 28, alignment: .leading)
+                        }
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 4)
+                ) : nil
+            )
                 .environmentObject(state)
         }
     }

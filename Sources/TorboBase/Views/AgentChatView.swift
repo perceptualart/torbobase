@@ -32,6 +32,7 @@ struct AgentChatView: View {
     var showHeader: Bool = true
     var sessionID: UUID? = nil
     var onSwitchToVoice: (() -> Void)?
+    var aboveInput: AnyView? = nil
     @EnvironmentObject private var state: AppState
 
     @State private var messages: [ChatMessage] = []
@@ -77,6 +78,20 @@ struct AgentChatView: View {
             }
 
             Divider().background(Color.white.opacity(0.06))
+
+            // Live audio level meter — visible when voice is active for this agent
+            if voiceEngine.isActive && voiceEngine.activeAgentID == agentID {
+                TimelineView(.animation(minimumInterval: 1.0 / 20.0, paused: false)) { _ in
+                    chatAudioMeter
+                }
+                .frame(maxWidth: .infinity)
+                .frame(height: 20)
+                .padding(.horizontal, 16)
+                .padding(.top, 6)
+            }
+
+            // Injected content above input (e.g. GAIN/GATE sliders)
+            if let aboveInput { aboveInput }
 
             // Input area
             inputArea
@@ -357,6 +372,27 @@ struct AgentChatView: View {
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
+    }
+
+    // MARK: - Audio Level Meter
+
+    private var chatAudioMeter: some View {
+        GeometryReader { geo in
+            let levels: [Float] = voiceEngine.currentAudioLevels
+            let barCount = min(40, Int(geo.size.width / 3))
+            let stride = max(1, levels.count / max(barCount, 1))
+
+            HStack(spacing: 1) {
+                ForEach(0..<barCount, id: \.self) { i in
+                    let idx = min(i * stride, levels.count - 1)
+                    let level = CGFloat(levels[idx])
+                    RoundedRectangle(cornerRadius: 1)
+                        .fill(level > 0.3 ? Color.green : (level > 0.15 ? Color.cyan.opacity(0.6) : Color.white.opacity(0.15)))
+                        .frame(width: 2, height: max(2, level * geo.size.height * 0.9))
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+        }
     }
 
     // MARK: - Input Area

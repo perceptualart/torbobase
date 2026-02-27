@@ -67,6 +67,7 @@ enum CapabilityRegistry {
         // Web
         CapabilityDefinition(toolName: "web_search", category: .web, minimumAccessLevel: .chatOnly, description: "Search the web", macOnly: false),
         CapabilityDefinition(toolName: "web_fetch", category: .web, minimumAccessLevel: .chatOnly, description: "Fetch web page content", macOnly: false),
+        CapabilityDefinition(toolName: "github_release_stats", category: .web, minimumAccessLevel: .readFiles, description: "Get GitHub release download statistics", macOnly: true),
         // Files
         CapabilityDefinition(toolName: "read_file", category: .files, minimumAccessLevel: .readFiles, description: "Read file contents", macOnly: false),
         CapabilityDefinition(toolName: "list_directory", category: .files, minimumAccessLevel: .readFiles, description: "List directory contents", macOnly: false),
@@ -570,6 +571,9 @@ actor ToolProcessor {
                 // Browser Agent
                 case "browser_agent":
                     content = await BrowserAgent.shared.execute(startURL: args["url"] as? String ?? "", goal: args["goal"] as? String ?? "", maxStepsOverride: args["max_steps"] as? Int)
+                // GitHub Release Stats
+                case "github_release_stats":
+                    content = await GitHubReleaseStats.shared.stats(owner: args["owner"] as? String ?? "", repo: args["repo"] as? String ?? "")
                 default:
                     content = "Unknown tool: \(name)"
                 }
@@ -817,6 +821,96 @@ actor ImageGenerator {
         } catch {
             return "Image generation error: \(error.localizedDescription)"
         }
+    }
+}
+
+// MARK: - GitHub Release Stats
+
+actor GitHubReleaseStats {
+    static let shared = GitHubReleaseStats()
+
+    static let toolDefinition: [String: Any] = [
+        "type": "function",
+        "function": [
+            "name": "github_release_stats",
+            "description": "Get download statistics for GitHub release assets. Returns download counts per release and asset.",
+            "parameters": [
+                "type": "object",
+                "properties": [
+                    "owner": ["type": "string", "description": "GitHub repo owner (e.g. 'perceptualart')"],
+                    "repo": ["type": "string", "description": "GitHub repo name (e.g. 'torbobase')"]
+                ] as [String: Any],
+                "required": ["owner", "repo"]
+            ] as [String: Any]
+        ] as [String: Any]
+    ]
+
+    func stats(owner: String, repo: String) async -> String {
+        guard !owner.isEmpty, !repo.isEmpty else {
+            return "Error: owner and repo are required."
+        }
+        // Validate owner/repo contain only safe characters
+        let safePattern = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-_."))
+        guard owner.unicodeScalars.allSatisfy({ safePattern.contains($0) }),
+              repo.unicodeScalars.allSatisfy({ safePattern.contains($0) }) else {
+            return "Error: owner and repo must contain only alphanumeric characters, hyphens, underscores, or dots."
+        }
+
+        let process = Process()
+        let pipe = Pipe()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+        process.arguments = ["gh", "api", "repos/\(owner)/\(repo)/releases", "--paginate"]
+        process.standardOutput = pipe
+        process.standardError = FileHandle.nullDevice
+
+        do {
+            try process.run()
+        } catch {
+            return "Error: Failed to run gh CLI — is GitHub CLI installed? (\(error.localizedDescription))"
+        }
+
+        process.waitUntilExit()
+
+        guard process.terminationStatus == 0 else {
+            return "Error: gh api returned exit code \(process.terminationStatus). Check that the repo exists and gh is authenticated."
+        }
+
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        guard let releases = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else {
+            return "Error: Failed to parse GitHub API response."
+        }
+
+        if releases.isEmpty {
+            return "No releases found for \(owner)/\(repo)."
+        }
+
+        var totalDownloads = 0
+        var lines: [String] = []
+
+        for release in releases {
+            let tag = release["tag_name"] as? String ?? "unknown"
+            let prerelease = release["prerelease"] as? Bool ?? false
+            let assets = release["assets"] as? [[String: Any]] ?? []
+
+            var releaseTotal = 0
+            var assetLines: [String] = []
+            for asset in assets {
+                let name = asset["name"] as? String ?? "?"
+                let count = asset["download_count"] as? Int ?? 0
+                releaseTotal += count
+                assetLines.append("    \(name): \(count) downloads")
+            }
+            totalDownloads += releaseTotal
+
+            let tag_label = prerelease ? "\(tag) (pre-release)" : tag
+            lines.append("  \(tag_label) — \(releaseTotal) downloads")
+            lines.append(contentsOf: assetLines)
+        }
+
+        var summary = "GitHub Release Stats for \(owner)/\(repo)\n"
+        summary += "Total downloads across all releases: \(totalDownloads)\n\n"
+        summary += lines.joined(separator: "\n")
+        return summary
     }
 }
 
@@ -1408,6 +1502,7 @@ extension ToolProcessor {
         // Web
         case "web_search": return WebSearchEngine.toolDefinition
         case "web_fetch": return WebSearchEngine.webFetchToolDefinition
+        case "github_release_stats": return GitHubReleaseStats.toolDefinition
         // Files
         case "read_file": return SystemAccessEngine.readFileToolDefinition
         case "write_file": return SystemAccessEngine.writeFileToolDefinition
@@ -1803,6 +1898,11 @@ extension ToolProcessor {
                     let goal = args["goal"] as? String ?? ""
                     let maxSteps = args["max_steps"] as? Int
                     content = await BrowserAgent.shared.execute(startURL: url, goal: goal, maxStepsOverride: maxSteps)
+                // GitHub Release Stats
+                case "github_release_stats":
+                    let owner = args["owner"] as? String ?? ""
+                    let repo = args["repo"] as? String ?? ""
+                    content = await GitHubReleaseStats.shared.stats(owner: owner, repo: repo)
                 // LoA (Library of Alexandria) — Memory Tools
                 case "loa_recall":
                     let q = args["query"] as? String ?? ""

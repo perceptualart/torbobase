@@ -723,6 +723,31 @@ final class AppState: _TorboObservable {
                 "role": msg.role
             ], source: "base")
         }
+        // Persist to per-agent chat storage (makes conversations visible in ConversationsView)
+        let agentForChat = msg.agentID ?? "sid"
+        Task {
+            let store = ConversationStore.shared
+            let sessionID: UUID
+            if let recentID = await store.mostRecentSessionID(forAgent: agentForChat) {
+                let existing = await store.loadAgentChat(agentID: agentForChat, sessionID: recentID)
+                if let last = existing.last, Date().timeIntervalSince(last.timestamp) < 1800 {
+                    sessionID = recentID
+                } else {
+                    sessionID = UUID()
+                }
+            } else {
+                sessionID = UUID()
+            }
+            var msgs = await store.loadAgentChat(agentID: agentForChat, sessionID: sessionID)
+            msgs.append(AgentChatMessage(role: msg.role, content: msg.content, timestamp: msg.timestamp))
+            await store.saveAgentChat(agentID: agentForChat, sessionID: sessionID, messages: msgs)
+            await store.ensureSessionExists(agentID: agentForChat, sessionID: sessionID, messageCount: msgs.count)
+            // Title the session from the first user message
+            if msg.role == "user", msgs.count <= 2 {
+                let title = String(msg.content.prefix(60))
+                await store.updateSessionTitle(agentID: agentForChat, sessionID: sessionID, title: title)
+            }
+        }
     }
 
     /// Load persisted conversations on launch

@@ -636,8 +636,8 @@ actor GatewayServer {
     /// Detect this machine's Tailscale Magic DNS hostname via `tailscale status --json`.
     /// Returns the hostname (e.g. "mymac.tail1234.ts.net") or nil if Tailscale not running.
     nonisolated static func detectTailscaleHostname() -> String? {
-        // Check common Tailscale CLI locations
-        let paths = ["/opt/homebrew/bin/tailscale", "/usr/local/bin/tailscale"]
+        // Check common Tailscale CLI locations (Homebrew, direct install, Mac App Store)
+        let paths = ["/opt/homebrew/bin/tailscale", "/usr/local/bin/tailscale", "/Applications/Tailscale.app/Contents/MacOS/Tailscale"]
         guard let execPath = paths.first(where: { FileManager.default.fileExists(atPath: $0) }) else { return nil }
 
         let proc = Process()

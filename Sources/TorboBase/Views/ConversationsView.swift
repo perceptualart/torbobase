@@ -1,7 +1,7 @@
 // Copyright 2026 Perceptual Art LLC. All rights reserved.
 // Licensed under Apache 2.0 — see LICENSE file.
 // Torbo Base — Global Conversations View
-// Shows all conversations grouped by agent, with search and navigation.
+// Shows all conversations grouped by agent, with search and inline chat.
 #if canImport(SwiftUI)
 import SwiftUI
 
@@ -11,8 +11,46 @@ struct ConversationsView: View {
     @State private var agentNames: [String: String] = [:] // agentID → display name
     @State private var searchText: String = ""
     @State private var isLoading = true
+    @State private var selectedAgentID: String? = nil
+    @State private var selectedSessionID: UUID? = nil
 
     var body: some View {
+        HStack(spacing: 0) {
+            // Left panel — conversation list
+            conversationListPanel
+                .frame(width: 320)
+
+            Divider().background(Color.white.opacity(0.06))
+
+            // Right panel — inline chat or empty state
+            if let agentID = selectedAgentID, let sessionID = selectedSessionID {
+                AgentChatView(agentID: agentID, agentName: agentNames[agentID] ?? agentID, showHeader: true, sessionID: sessionID)
+                    .id("\(agentID)_\(sessionID)")
+                    .environmentObject(state)
+            } else {
+                VStack(spacing: 12) {
+                    Image(systemName: "bubble.left.and.text.bubble.right")
+                        .font(.system(size: 36))
+                        .foregroundStyle(.white.opacity(0.1))
+                    Text("Select a conversation")
+                        .font(.system(size: 14, weight: .medium))
+                        .foregroundStyle(.white.opacity(0.3))
+                    Text("Choose a conversation from the list to view it here")
+                        .font(.system(size: 12))
+                        .foregroundStyle(.white.opacity(0.15))
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        }
+        .task {
+            await loadData()
+            isLoading = false
+        }
+    }
+
+    // MARK: - Conversation List Panel
+
+    private var conversationListPanel: some View {
         VStack(spacing: 0) {
             // Header
             HStack {
@@ -90,10 +128,6 @@ struct ConversationsView: View {
                     .padding(.vertical, 8)
                 }
             }
-        }
-        .task {
-            await loadData()
-            isLoading = false
         }
     }
 
@@ -181,21 +215,20 @@ struct ConversationsView: View {
     // MARK: - Conversation Row
 
     private func conversationRow(_ session: ConversationSession, agentID: String) -> some View {
-        Button {
-            // Navigate to Agents tab and open this specific conversation
-            state.navigateToAgentID = agentID
-            state.navigateToSessionID = session.id
-            state.currentTab = .agents
+        let isSelected = selectedAgentID == agentID && selectedSessionID == session.id
+        return Button {
+            selectedAgentID = agentID
+            selectedSessionID = session.id
         } label: {
             HStack(spacing: 12) {
                 Image(systemName: "bubble.left.fill")
                     .font(.system(size: 9))
-                    .foregroundStyle(.white.opacity(0.2))
+                    .foregroundStyle(isSelected ? .cyan.opacity(0.6) : .white.opacity(0.2))
 
                 VStack(alignment: .leading, spacing: 3) {
                     Text(session.title)
                         .font(.system(size: 12, weight: .medium))
-                        .foregroundStyle(.white.opacity(0.7))
+                        .foregroundStyle(isSelected ? .white.opacity(0.9) : .white.opacity(0.7))
                         .lineLimit(1)
 
                     HStack(spacing: 8) {
@@ -215,7 +248,7 @@ struct ConversationsView: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .background(Color.white.opacity(0.01))
+        .background(isSelected ? Color.cyan.opacity(0.08) : Color.white.opacity(0.01))
     }
 
     // MARK: - Helpers
