@@ -23,6 +23,7 @@ class PiperTTSEngine {
     static let agentModels: [String: String] = [
         "sid": "sid_piper",
         "orion": "orion_piper",
+        "mira": "mira_piper",
     ]
 
     /// Display names for log messages
