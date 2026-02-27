@@ -883,7 +883,8 @@ actor GatewayServer {
         }
 
         // Per-token rate limiting: 100 requests/hour per bearer token
-        if let token = Self.extractBearerToken(from: req) {
+        // Exempt sync endpoints — they poll frequently by design
+        if let token = Self.extractBearerToken(from: req), !req.path.hasPrefix("/v1/sync") {
             let (limited, retryAfter) = isTokenRateLimited(token: token)
             if limited {
                 let masked = Self.maskToken(token)
