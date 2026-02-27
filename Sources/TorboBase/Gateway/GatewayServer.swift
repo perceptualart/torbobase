@@ -819,7 +819,7 @@ actor GatewayServer {
         }
 
         // Rate limit unauthenticated pairing endpoints (prevents brute-force)
-        if req.method == "POST" && (req.path == "/pair" || req.path == "/pair/verify" || req.path == "/pair/auto") {
+        if req.method == "POST" && (req.path == "/pair" || req.path == "/pair/verify" || req.path == "/pair/auto" || req.path == "/pair/auth") {
             if isRateLimited(clientIP: clientIP) {
                 return HTTPResponse(statusCode: 429, headers: ["Content-Type": "application/json"],
                                   body: Data("{\"error\":\"Too many requests\"}".utf8))
@@ -837,6 +837,16 @@ actor GatewayServer {
         // Auto-pair for trusted networks (LAN + Tailscale)
         if req.method == "POST" && req.path == "/pair/auto" {
             return await handleAutoPair(req, clientIP: clientIP)
+        }
+
+        // Authenticated pairing (no auth — validates token with backend)
+        if req.method == "POST" && req.path == "/pair/auth" {
+            return await handleAuthPair(req, clientIP: clientIP)
+        }
+
+        // Pairing status (no auth required)
+        if req.method == "GET" && req.path == "/pair/status" {
+            return await handlePairStatus()
         }
 
         // ── Cloud Auth Routes (no auth required) ──
@@ -920,6 +930,11 @@ actor GatewayServer {
                        required: .chatOnly, granted: false, detail: "Gateway OFF")
             return HTTPResponse(statusCode: 403, headers: ["Content-Type": "application/json"],
                               body: Data("{\"error\":\"Gateway is OFF\"}".utf8))
+        }
+
+        // Unpair user account (requires auth)
+        if req.method == "POST" && req.path == "/unpair" {
+            return await handleUnpair(req, clientIP: clientIP)
         }
 
         // ── Cloud Auth Routes (require cloud JWT) ──
@@ -2281,6 +2296,109 @@ actor GatewayServer {
         if let tsIP = Self.detectTailscaleIP() { newResponse["tailscaleIP"] = tsIP }
         if let tsHostname = Self.detectTailscaleHostname() { newResponse["tailscaleHostname"] = tsHostname }
         return HTTPResponse.json(newResponse)
+    }
+
+    // MARK: - Authenticated Pairing
+
+    private func handleAuthPair(_ req: HTTPRequest, clientIP: String) async -> HTTPResponse {
+        guard let body = req.jsonBody,
+              let authToken = body["auth_token"] as? String, !authToken.isEmpty,
+              let rawDeviceName = body["device_name"] as? String, !rawDeviceName.isEmpty else {
+            return HTTPResponse.badRequest("Missing 'auth_token' or 'device_name'")
+        }
+        // Sanitize device name — strip control chars and limit length
+        let deviceName = String(rawDeviceName.unicodeScalars.filter { !$0.properties.isDefaultIgnorableCodePoint && $0.value >= 0x20 }.prefix(64))
+
+        do {
+            let (token, deviceId, userID, email) = try await PairingManager.shared.authPair(authToken: authToken, deviceName: deviceName)
+
+            await audit(clientIP: clientIP, method: "POST", path: "/pair/auth",
+                       required: .chatOnly, granted: true, detail: "Auth-paired: \(deviceName) (\(email))")
+            Task { await EventBus.shared.publish("sync.user.paired", payload: ["user_id": userID, "email": email], source: "Gateway") }
+            Task { await TelegramBridge.shared.notify("Device auth-paired: \(deviceName) (\(email))") }
+
+            let response: [String: Any] = [
+                "token": token,
+                "device_id": deviceId,
+                "user_id": userID,
+                "email": email,
+                "status": "paired"
+            ]
+            return HTTPResponse.json(response)
+        } catch let error as AuthClient.AuthError {
+            switch error {
+            case .invalidToken:
+                await audit(clientIP: clientIP, method: "POST", path: "/pair/auth",
+                           required: .chatOnly, granted: false, detail: "Invalid auth token")
+                return HTTPResponse(statusCode: 401, headers: ["Content-Type": "application/json"],
+                                  body: Data("{\"error\":\"Invalid auth token\"}".utf8))
+            case .expiredToken:
+                await audit(clientIP: clientIP, method: "POST", path: "/pair/auth",
+                           required: .chatOnly, granted: false, detail: "Expired auth token")
+                return HTTPResponse(statusCode: 403, headers: ["Content-Type": "application/json"],
+                                  body: Data("{\"error\":\"Auth token expired\"}".utf8))
+            case .backendUnreachable:
+                return HTTPResponse(statusCode: 502, headers: ["Content-Type": "application/json"],
+                                  body: Data("{\"error\":\"Backend unreachable\"}".utf8))
+            case .invalidResponse:
+                return HTTPResponse(statusCode: 502, headers: ["Content-Type": "application/json"],
+                                  body: Data("{\"error\":\"Invalid backend response\"}".utf8))
+            }
+        } catch {
+            TorboLog.error("Auth-pair unexpected error: \(error)", subsystem: "Pairing")
+            return HTTPResponse(statusCode: 500, headers: ["Content-Type": "application/json"],
+                              body: Data("{\"error\":\"Internal error\"}".utf8))
+        }
+    }
+
+    private func handlePairStatus() async -> HTTPResponse {
+        let (account, devices) = await MainActor.run {
+            (PairingManager.shared.userAccount, PairingManager.shared.pairedDevices)
+        }
+
+        let deviceList: [[String: Any]] = devices.map { d in
+            var entry: [String: Any] = [
+                "id": d.id,
+                "name": d.name,
+                "paired_at": ISO8601DateFormatter().string(from: d.pairedAt),
+                "is_recent": d.isRecent
+            ]
+            if let lastSeen = d.lastSeen {
+                entry["last_seen"] = ISO8601DateFormatter().string(from: lastSeen)
+            }
+            return entry
+        }
+
+        var response: [String: Any] = [
+            "paired": account != nil,
+            "devices": deviceList,
+            "device_count": devices.count
+        ]
+
+        if let account {
+            response["user_id"] = account.userID
+            response["email"] = account.email
+            response["paired_at"] = ISO8601DateFormatter().string(from: account.pairedAt)
+        } else {
+            response["user_id"] = NSNull()
+            response["email"] = NSNull()
+        }
+
+        return HTTPResponse.json(response)
+    }
+
+    private func handleUnpair(_ req: HTTPRequest, clientIP: String) async -> HTTPResponse {
+        let wipeData = (req.jsonBody?["wipe_data"] as? Bool) ?? false
+
+        await MainActor.run {
+            PairingManager.shared.unpairUser(wipeData: wipeData)
+        }
+
+        await audit(clientIP: clientIP, method: "POST", path: "/unpair",
+                   required: .chatOnly, granted: true, detail: "User unpaired (wipe: \(wipeData))")
+        Task { await EventBus.shared.publish("sync.user.unpaired", payload: ["wipe_data": String(wipeData)], source: "Gateway") }
+
+        return HTTPResponse.json(["status": "unpaired", "data_wiped": wipeData])
     }
 
     // MARK: - Network Helpers

@@ -38,6 +38,15 @@ enum PairedDeviceStore {
     }
 }
 
+// MARK: - User Account
+
+struct UserAccount: Codable {
+    let userID: String          // From backend (e.g. "usr_abc123")
+    let email: String           // From backend
+    let pairedAt: Date          // When this Base was associated
+    var lastValidated: Date     // Last time token was validated with backend
+}
+
 // MARK: - Paired Device
 
 struct PairedDevice: Codable, Identifiable {
@@ -46,6 +55,7 @@ struct PairedDevice: Codable, Identifiable {
     let token: String       // Bearer token issued to this device
     let pairedAt: Date
     var lastSeen: Date?
+    var userID: String?     // Set when paired via /pair/auth (nil for code/auto-pair)
 
     var isRecent: Bool {
         guard let lastSeen else { return false }
@@ -71,11 +81,13 @@ final class PairingManager: _PairingManagerBase {
     @Published var pairingActive: Bool = false
     @Published var pairedDevices: [PairedDevice] = []
     @Published var qrString: String = ""
+    @Published var userAccount: UserAccount?
     #else
     var pairingCode: String = ""
     var pairingActive: Bool = false
     var pairedDevices: [PairedDevice] = []
     var qrString: String = ""
+    var userAccount: UserAccount?
     #endif
 
     // Bonjour (macOS only — NetService not available on Linux)
@@ -94,6 +106,7 @@ final class PairingManager: _PairingManagerBase {
         migrateFromORBIfNeeded()
         migrateFromUserDefaults()
         loadDevices()
+        loadUserAccount()
     }
 
     /// One-time migration: copy paired devices from old "orb_paired_devices" key.
@@ -260,6 +273,70 @@ final class PairingManager: _PairingManagerBase {
         pairedDevices.removeAll(where: { $0.id == deviceId })
         saveDevices()
         TorboLog.info("Removed device \(deviceId)", subsystem: "Pairing")
+    }
+
+    // MARK: - Authenticated Pairing
+
+    /// Pair a device using a backend auth token. Validates with the backend,
+    /// creates a paired device with the user's ID, and stores the user account.
+    /// The auth token is validated once and never stored.
+    func authPair(authToken: String, deviceName: String) async throws -> (token: String, deviceId: String, userID: String, email: String) {
+        let result = try await AuthClient.shared.validate(token: authToken)
+
+        let token = generateToken()
+        let deviceId = UUID().uuidString
+
+        let device = PairedDevice(
+            id: deviceId,
+            name: deviceName,
+            token: token,
+            pairedAt: Date(),
+            lastSeen: Date(),
+            userID: result.userID
+        )
+
+        pairedDevices.append(device)
+        saveDevices()
+
+        let account = UserAccount(
+            userID: result.userID,
+            email: result.email,
+            pairedAt: Date(),
+            lastValidated: Date()
+        )
+        userAccount = account
+        saveUserAccount()
+
+        TorboLog.info("Auth-paired '\(deviceName)' for user \(result.email) → \(deviceId)", subsystem: "Pairing")
+        return (token, deviceId, result.userID, result.email)
+    }
+
+    /// Remove the user account association from this Base installation.
+    /// Optionally removes all paired devices as well.
+    func unpairUser(wipeData: Bool) {
+        userAccount = nil
+        KeychainManager.clearUserAccount()
+        TorboLog.info("User account unlinked from this Base", subsystem: "Pairing")
+
+        if wipeData {
+            pairedDevices.removeAll()
+            saveDevices()
+            TorboLog.info("All paired devices removed (wipe_data)", subsystem: "Pairing")
+        }
+    }
+
+    // MARK: - User Account Persistence
+
+    private func loadUserAccount() {
+        userAccount = KeychainManager.loadUserAccount()
+        if let account = userAccount {
+            TorboLog.info("Loaded user account: \(account.email)", subsystem: "Pairing")
+        }
+    }
+
+    private func saveUserAccount() {
+        guard let account = userAccount else { return }
+        KeychainManager.saveUserAccount(account)
     }
 
     // MARK: - Token Generation

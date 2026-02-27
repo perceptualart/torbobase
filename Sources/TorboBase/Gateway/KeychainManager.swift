@@ -368,6 +368,36 @@ enum KeychainManager {
         set { set(newValue, for: telegramTokenKey) }
     }
 
+    // MARK: - Convenience: User Account
+
+    private static let userAccountKey = "user.account"
+
+    /// Store the authenticated user account securely (encrypted at rest)
+    static func saveUserAccount(_ account: UserAccount) {
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        if let data = try? encoder.encode(account) {
+            set(data.base64EncodedString(), for: userAccountKey)
+        }
+    }
+
+    /// Load the authenticated user account from encrypted store
+    static func loadUserAccount() -> UserAccount? {
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        guard let b64 = get(userAccountKey),
+              let data = Data(base64Encoded: b64),
+              let account = try? decoder.decode(UserAccount.self, from: data) else {
+            return nil
+        }
+        return account
+    }
+
+    /// Clear the user account association
+    static func clearUserAccount() {
+        delete(userAccountKey)
+    }
+
     // MARK: - Convenience: Paired Devices
 
     private static let pairedDevicesKey = "paired.devices"

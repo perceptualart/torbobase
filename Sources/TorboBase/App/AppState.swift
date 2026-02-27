@@ -395,6 +395,11 @@ enum AppConfig {
         set { defaults.set(newValue, forKey: "torboSystemPromptEnabled") }
     }
 
+    static var authBackendURL: String {
+        get { defaults.string(forKey: "torboAuthBackendURL") ?? "https://api.torbo.ai" }
+        set { defaults.set(newValue, forKey: "torboAuthBackendURL") }
+    }
+
     static var memoryEnabled: Bool {
         get {
             if defaults.object(forKey: "torboMemoryEnabled") == nil { return true }
