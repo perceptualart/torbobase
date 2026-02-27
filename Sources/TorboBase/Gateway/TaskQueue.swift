@@ -109,12 +109,49 @@ actor TaskQueue {
     // MARK: - Task Management
 
     func createTask(title: String, description: String, assignedTo: String, assignedBy: String, priority: TaskPriority = .normal) -> AgentTask {
+        // Dedup — skip if an identical pending task already exists for this agent
+        let normalizedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let isDuplicate = tasks.values.contains { existing in
+            existing.assignedTo == assignedTo
+            && existing.status == .pending
+            && existing.title.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == normalizedTitle
+        }
+        if isDuplicate {
+            TorboLog.info("Skipped duplicate task: '\(title)' for \(assignedTo)", subsystem: "Tasks")
+            // Return the existing one
+            if let existing = tasks.values.first(where: {
+                $0.assignedTo == assignedTo && $0.status == .pending
+                && $0.title.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == normalizedTitle
+            }) {
+                return existing
+            }
+        }
+
         let task = AgentTask(title: title, description: description, assignedTo: assignedTo, assignedBy: assignedBy, priority: priority)
         tasks[task.id] = task
         insertOrdered(task.id)
         saveTasks()
         TorboLog.info("Created: '\(title)' -> \(assignedTo) (priority: \(priority))", subsystem: "Tasks")
         return task
+    }
+
+    /// Remove all tasks matching a given status. Returns the count removed.
+    @discardableResult
+    func purgeTasks(status: TaskStatus? = nil) -> Int {
+        let toRemove: [String]
+        if let status {
+            toRemove = tasks.keys.filter { tasks[$0]?.status == status }
+        } else {
+            // Remove all non-running tasks
+            toRemove = tasks.keys.filter { tasks[$0]?.status != .inProgress }
+        }
+        for id in toRemove {
+            tasks.removeValue(forKey: id)
+            taskOrder.removeAll { $0 == id }
+        }
+        if !toRemove.isEmpty { saveTasks() }
+        TorboLog.info("Purged \(toRemove.count) tasks (filter: \(status?.rawValue ?? "all non-running"))", subsystem: "Tasks")
+        return toRemove.count
     }
 
     func claimTask(agentID: String) -> AgentTask? {

@@ -17,6 +17,9 @@ struct ChamberView: View {
     @State private var inputText = ""
     @State private var agents: [AgentConfig] = []
     @State private var sendTask: Task<Void, Never>?
+    @State private var lastVoiceTrigger: Int = 0
+    @State private var showAddAgentPopover = false
+    @State private var isInterrupted = false
 
     enum ChamberViewMode: String, CaseIterable {
         case voice = "Voice"
@@ -24,11 +27,15 @@ struct ChamberView: View {
         case settings = "Settings"
     }
 
+    private var isChamberVoiceActive: Bool {
+        voiceEngine.isActive && voiceEngine.chamberMode
+    }
+
     var body: some View {
         HStack(spacing: 0) {
             // Left panel — Chamber list
             chamberListPanel
-                .frame(width: 240)
+                .frame(minWidth: 180, idealWidth: 220, maxWidth: 260)
 
             Divider().background(Color.white.opacity(0.06))
 
@@ -49,6 +56,58 @@ struct ChamberView: View {
             }
         }
         .sheet(isPresented: $showCreateSheet) { createChamberSheet }
+        // Voice-to-chamber: intercept voice transcripts and route through chamber pipeline
+        .onChange(of: voiceEngine.voiceChatTrigger) { newTrigger in
+            guard newTrigger != lastVoiceTrigger else { return }
+            guard voiceEngine.chamberMode else { return }
+            lastVoiceTrigger = newTrigger
+            let userText = voiceEngine.lastUserTranscript
+            guard !userText.isEmpty else { return }
+
+            if let chamberID = selectedChamberID,
+               let chamber = manager.chambers.first(where: { $0.id == chamberID }) {
+                sendTask?.cancel()
+                isInterrupted = false
+
+                sendTask = Task {
+                    // Stop mic so agents don't hear each other through speakers
+                    voiceEngine.autoListen = false
+                    voiceEngine.speech.stopListening()
+
+                    await manager.sendChamberMessage(userText, chamberID: chamber.id) { agentID, agentName, response in
+                        guard !isInterrupted && !Task.isCancelled else { return }
+                        guard !response.isEmpty else { return }
+
+                        applyAgentVoice(agentID)
+
+                        if !voiceEngine.isMuted {
+                            tts.speak(response)
+                            // Wait for this agent to finish before next agent starts
+                            await waitForTTSWithBargeIn()
+                        }
+                    }
+
+                    // All agents done — restore mic and resume listening
+                    voiceEngine.autoListen = true
+                    manager.respondingAgentID = nil
+
+                    if isChamberVoiceActive && !voiceEngine.isMicMuted && !isInterrupted {
+                        try? await Task.sleep(nanoseconds: 500_000_000)
+                        if voiceEngine.isActive && voiceEngine.state != .listening {
+                            voiceEngine.listen()
+                        }
+                    }
+                }
+            }
+        }
+        .onDisappear {
+            pauseChamberSession()
+        }
+        .onChange(of: state.currentTab) { newTab in
+            if newTab != .chambers {
+                pauseChamberSession()
+            }
+        }
     }
 
     // MARK: - Chamber List Panel
@@ -181,32 +240,176 @@ struct ChamberView: View {
 
     private func voiceModeView(_ chamber: Chamber) -> some View {
         VStack(spacing: 0) {
-            // Black background with orbs
-            ZStack {
-                Color.black
+            // Black background with orbs — tap anywhere to interrupt speaking
+            TimelineView(.animation(minimumInterval: 1.0 / 20.0, paused: manager.respondingAgentID == nil)) { _ in
+                ZStack {
+                    Color.black
 
-                // Arrange orbs based on count
-                orbArrangement(chamber)
-
-                // Status text
-                VStack {
-                    Spacer()
-                    if let respondingID = manager.respondingAgentID {
-                        let name = agents.first(where: { $0.id == respondingID })?.name ?? respondingID
-                        Text("\(name) is speaking...")
-                            .font(.system(size: 12, weight: .medium))
-                            .foregroundStyle(.white.opacity(0.5))
-                            .padding(.bottom, 8)
-                    }
+                    // Arrange orbs based on count
+                    orbArrangement(chamber)
                 }
-                .padding(.bottom, 80)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .contentShape(Rectangle())
+            .onTapGesture {
+                if tts.isSpeaking || manager.respondingAgentID != nil {
+                    interruptSpeaking()
+                }
+            }
+
+            // Voice control bar
+            chamberVoiceBar(chamber)
 
             // Input bar
             chamberInputBar(chamber)
         }
     }
+
+    // MARK: - Voice Control Bar (like AgentView)
+
+    private func chamberVoiceBar(_ chamber: Chamber) -> some View {
+        HStack(spacing: 10) {
+            // State dot + label
+            Circle()
+                .fill(chamberVoiceStateColor)
+                .frame(width: 8, height: 8)
+
+            Text(chamberVoiceStateText)
+                .font(.system(size: 11, weight: .medium, design: .monospaced))
+                .foregroundStyle(.white.opacity(0.4))
+                .frame(width: 120, alignment: .leading)
+
+            // Live audio level meter
+            TimelineView(.animation(minimumInterval: 1.0 / 20.0, paused: !isChamberVoiceActive)) { _ in
+                chamberAudioLevelMeter
+            }
+            .frame(maxWidth: .infinity)
+
+            // Power button — toggle voice for chamber
+            Button {
+                if isChamberVoiceActive {
+                    voiceEngine.chamberMode = false
+                    voiceEngine.deactivate()
+                } else {
+                    voiceEngine.chamberMode = true
+                    let firstAgent = chamber.agentIDs.first ?? "sid"
+                    if voiceEngine.isActive {
+                        // Already active from AgentView — switch to chamber mode and start listening
+                        voiceEngine.activeAgentID = firstAgent
+                        voiceEngine.listen()
+                    } else {
+                        voiceEngine.activate(agentID: firstAgent)
+                        // activate() auto-listens after 300ms, but ensure it happens
+                        Task {
+                            try? await Task.sleep(nanoseconds: 500_000_000)
+                            if voiceEngine.state == .idle && voiceEngine.isActive {
+                                voiceEngine.listen()
+                            }
+                        }
+                    }
+                }
+            } label: {
+                Image(systemName: isChamberVoiceActive ? "power.circle.fill" : "power.circle")
+                    .font(.system(size: 16))
+                    .foregroundStyle(isChamberVoiceActive ? .green : .red.opacity(0.6))
+            }
+            .buttonStyle(.plain)
+            .help("Toggle chamber voice")
+
+            // Mic button
+            Button {
+                if isChamberVoiceActive {
+                    voiceEngine.isMicMuted.toggle()
+                    if !voiceEngine.isMicMuted && voiceEngine.state != .listening {
+                        voiceEngine.listen()
+                    }
+                } else {
+                    voiceEngine.chamberMode = true
+                    let firstAgent = chamber.agentIDs.first ?? "sid"
+                    if voiceEngine.isActive {
+                        voiceEngine.activeAgentID = firstAgent
+                        voiceEngine.listen()
+                    } else {
+                        voiceEngine.activate(agentID: firstAgent)
+                        Task {
+                            try? await Task.sleep(nanoseconds: 500_000_000)
+                            if voiceEngine.state == .idle && voiceEngine.isActive {
+                                voiceEngine.listen()
+                            }
+                        }
+                    }
+                }
+            } label: {
+                Image(systemName: voiceEngine.isMicMuted ? "mic.slash.fill" : (voiceEngine.state == .listening ? "mic.fill" : "mic"))
+                    .font(.system(size: 16))
+                    .foregroundStyle(
+                        !isChamberVoiceActive ? .white.opacity(0.3) :
+                        voiceEngine.isMicMuted ? .red : .green
+                    )
+            }
+            .buttonStyle(.plain)
+            .help("Toggle mic")
+
+            // Speaker mute
+            Button { voiceEngine.isMuted.toggle() } label: {
+                Image(systemName: voiceEngine.isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill")
+                    .font(.system(size: 14))
+                    .foregroundStyle(voiceEngine.isMuted ? .red : .white.opacity(0.5))
+            }
+            .buttonStyle(.plain)
+            .help("Toggle speaker")
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 8)
+        .background(Color.white.opacity(0.03))
+    }
+
+    private var chamberVoiceStateColor: Color {
+        guard isChamberVoiceActive else { return .white.opacity(0.3) }
+        if manager.respondingAgentID != nil { return .orange }
+        switch voiceEngine.state {
+        case .idle: return .white.opacity(0.3)
+        case .listening: return .green
+        case .thinking: return .cyan
+        case .speaking: return .orange
+        }
+    }
+
+    private var chamberVoiceStateText: String {
+        guard isChamberVoiceActive else { return "Voice Off" }
+        if let respondingID = manager.respondingAgentID {
+            let name = agents.first(where: { $0.id == respondingID })?.name ?? respondingID
+            return "\(name) speaking..."
+        }
+        switch voiceEngine.state {
+        case .idle: return "Ready"
+        case .listening: return "Listening..."
+        case .thinking: return "Thinking..."
+        case .speaking: return "Speaking..."
+        }
+    }
+
+    private var chamberAudioLevelMeter: some View {
+        GeometryReader { geo in
+            let levels: [Float] = isChamberVoiceActive ? voiceEngine.currentAudioLevels : Array(repeating: Float(0), count: 40)
+            let barCount = min(40, Int(geo.size.width / 3))
+            let stride = max(1, levels.count / max(barCount, 1))
+
+            HStack(spacing: 1) {
+                ForEach(0..<barCount, id: \.self) { i in
+                    let idx = min(i * stride, levels.count - 1)
+                    let level = CGFloat(levels[idx])
+                    RoundedRectangle(cornerRadius: 1)
+                        .fill(level > 0.3 ? Color.green : (level > 0.15 ? Color.cyan.opacity(0.6) : Color.white.opacity(0.15)))
+                        .frame(width: 2, height: max(2, level * geo.size.height * 0.9))
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+        }
+        .frame(height: 20)
+    }
+
+    // MARK: - Orb Layout
 
     private func orbPosition(index: Int, count: Int, center: CGPoint, radius: CGFloat) -> CGPoint {
         let r = Double(radius)
@@ -241,80 +444,39 @@ struct ChamberView: View {
         let name = agent?.name ?? agentID
         let isSpeaking = manager.respondingAgentID == agentID
         let accessLevel = agent?.accessLevel ?? 1
-        let orbSize: CGFloat = count <= 4 ? 480 : 360
+        let orbSize: CGFloat = count <= 4 ? 240 : 180
         let pos = orbPosition(index: index, count: count, center: center, radius: radius)
         let levels: [Float] = isSpeaking ? tts.audioLevels : Array(repeating: Float(0.08), count: 40)
         let orbColor = AccessLevel(rawValue: accessLevel)?.color ?? Color.cyan
         let displaySize = isSpeaking ? orbSize * 1.1 : orbSize
+        let modelName = agent?.preferredModel.isEmpty == false ? agent!.preferredModel : "Default"
 
-        ZStack {
-            VStack(spacing: 12) {
-                ZStack {
-                    OrbRenderer(
-                        audioLevels: levels,
-                        color: orbColor,
-                        isActive: true
-                    )
-                    .frame(width: displaySize, height: displaySize)
-                    .animation(.easeInOut(duration: 0.3), value: isSpeaking)
-                }
+        VStack(spacing: 6) {
+            OrbRenderer(
+                audioLevels: levels,
+                color: orbColor,
+                isActive: true
+            )
+            .frame(width: displaySize, height: displaySize)
+            .animation(.easeInOut(duration: 0.3), value: isSpeaking)
 
-                Text(name)
-                    .font(.system(size: 40, weight: isSpeaking ? .bold : .medium, design: .monospaced))
-                    .foregroundStyle(isSpeaking ? .white : .white.opacity(0.5))
-            }
+            Text(name)
+                .font(.system(size: 28, weight: isSpeaking ? .bold : .medium, design: .monospaced))
+                .foregroundStyle(isSpeaking ? .white : .white.opacity(0.5))
 
-            // Thought bubble when speaking
-            if isSpeaking, let lastMsg = manager.messages.last(where: { $0.agentID == agentID && $0.role == "assistant" }) {
-                thoughtBubble(text: lastMsg.content, orbSize: displaySize)
-                    .offset(x: displaySize * 0.45, y: -displaySize * 0.35)
-                    .transition(.opacity.combined(with: .scale(scale: 0.8)))
-                    .animation(.easeOut(duration: 0.25), value: isSpeaking)
-            }
+            Text(modelName)
+                .font(.system(size: 10, weight: .medium, design: .monospaced))
+                .foregroundStyle(.white.opacity(0.25))
+                .lineLimit(1)
         }
         .position(pos)
-        .onTapGesture {
-            inputText = "@\(name) " + inputText
-        }
-    }
-
-    private func thoughtBubble(text: String, orbSize: CGFloat) -> some View {
-        VStack(alignment: .leading, spacing: 0) {
-            Text(text)
-                .font(.system(size: 13))
-                .foregroundStyle(.white.opacity(0.85))
-                .lineLimit(4)
-                .padding(.horizontal, 14)
-                .padding(.vertical, 10)
-                .background(Color.black.opacity(0.6))
-                .clipShape(RoundedRectangle(cornerRadius: 14))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 14)
-                        .stroke(Color.white.opacity(0.25), lineWidth: 1.5)
-                )
-            // Tail dots
-            HStack(spacing: 4) {
-                Spacer()
-                Circle()
-                    .stroke(Color.white.opacity(0.25), lineWidth: 1.5)
-                    .background(Circle().fill(Color.black.opacity(0.6)))
-                    .frame(width: 10, height: 10)
-                Circle()
-                    .stroke(Color.white.opacity(0.25), lineWidth: 1.5)
-                    .background(Circle().fill(Color.black.opacity(0.6)))
-                    .frame(width: 6, height: 6)
-                Spacer().frame(width: 20)
-            }
-            .offset(y: -2)
-        }
-        .frame(maxWidth: 240)
     }
 
     private func orbArrangement(_ chamber: Chamber) -> some View {
         let count = chamber.agentIDs.count
         return GeometryReader { geo in
-            let center = CGPoint(x: geo.size.width / 2, y: geo.size.height / 2 - 40)
-            let radius = min(geo.size.width, geo.size.height) * 0.35
+            let center = CGPoint(x: geo.size.width / 2, y: geo.size.height / 2 - 20)
+            let radius = min(geo.size.width, geo.size.height) * 0.3
 
             ForEach(Array(chamber.agentIDs.enumerated()), id: \.element) { index, agentID in
                 singleOrb(agentID: agentID, index: index, count: count, center: center, radius: radius)
@@ -393,13 +555,28 @@ struct ChamberView: View {
                         }
                     }
                     .pickerStyle(.segmented)
+
+                    Text(chamber.discussionStyle.info)
+                        .font(.system(size: 11))
+                        .foregroundStyle(.white.opacity(0.4))
+                        .padding(.top, 2)
                 }
 
-                // Agent roster
+                // Members
                 VStack(alignment: .leading, spacing: 8) {
-                    Text("AGENTS IN CHAMBER")
-                        .font(.system(size: 11, weight: .bold, design: .monospaced))
-                        .foregroundStyle(.white.opacity(0.4))
+                    HStack {
+                        Text("MEMBERS")
+                            .font(.system(size: 11, weight: .bold, design: .monospaced))
+                            .foregroundStyle(.white.opacity(0.4))
+                        Spacer()
+                        Text("\(chamber.agentIDs.count)")
+                            .font(.system(size: 10, weight: .medium, design: .monospaced))
+                            .foregroundStyle(.white.opacity(0.2))
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(Color.white.opacity(0.04))
+                            .clipShape(RoundedRectangle(cornerRadius: 4))
+                    }
 
                     ForEach(chamber.agentIDs, id: \.self) { agentID in
                         let agent = agents.first(where: { $0.id == agentID })
@@ -414,11 +591,48 @@ struct ChamberView: View {
                                 .font(.system(size: 10))
                                 .foregroundStyle(.white.opacity(0.3))
                             Spacer()
+                            Button {
+                                manager.removeAgent(chamberID: chamber.id, agentID: agentID)
+                            } label: {
+                                Image(systemName: "minus.circle.fill")
+                                    .font(.system(size: 14))
+                                    .foregroundStyle(.red.opacity(0.5))
+                            }
+                            .buttonStyle(.plain)
+                            .help("Remove from chamber")
                         }
                         .padding(8)
                         .background(Color.white.opacity(0.02))
                         .cornerRadius(6)
                     }
+
+                    HStack(spacing: 12) {
+                        Button {
+                            showAddAgentPopover = true
+                        } label: {
+                            HStack(spacing: 4) {
+                                Image(systemName: "plus.circle.fill").font(.system(size: 12))
+                                Text("Add Agent").font(.system(size: 11, weight: .medium))
+                            }
+                            .foregroundStyle(.cyan.opacity(0.6))
+                        }
+                        .buttonStyle(.plain)
+                        .popover(isPresented: $showAddAgentPopover, arrowEdge: .bottom) {
+                            addAgentPopover(chamber)
+                        }
+
+                        Button {} label: {
+                            HStack(spacing: 4) {
+                                Image(systemName: "person.badge.plus").font(.system(size: 12))
+                                Text("Invite Human").font(.system(size: 11, weight: .medium))
+                            }
+                            .foregroundStyle(.white.opacity(0.2))
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(true)
+                        .help("Coming soon")
+                    }
+                    .padding(.top, 4)
                 }
 
                 Spacer()
@@ -431,23 +645,6 @@ struct ChamberView: View {
 
     private func chamberInputBar(_ chamber: Chamber) -> some View {
         HStack(alignment: .bottom, spacing: 10) {
-            // Mic button
-            Button {
-                if voiceEngine.isActive && voiceEngine.state == .listening {
-                    voiceEngine.stopSpeaking()
-                    voiceEngine.deactivate()
-                } else {
-                    voiceEngine.activate(agentID: chamber.agentIDs.first ?? "sid")
-                    voiceEngine.listen()
-                }
-            } label: {
-                Image(systemName: voiceEngine.state == .listening ? "mic.fill" : "mic")
-                    .font(.system(size: 16))
-                    .foregroundStyle(voiceEngine.state == .listening ? .green : .white.opacity(0.3))
-                    .padding(8)
-            }
-            .buttonStyle(.plain)
-
             ZStack(alignment: .topLeading) {
                 if inputText.isEmpty {
                     Text("Message chamber...")
@@ -488,15 +685,93 @@ struct ChamberView: View {
         let text = inputText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
         inputText = ""
+        isInterrupted = false
 
         sendTask?.cancel()
         sendTask = Task {
+            // Stop mic during speaking so agents don't hear each other
+            if isChamberVoiceActive {
+                voiceEngine.autoListen = false
+                voiceEngine.speech.stopListening()
+            }
+
             await manager.sendChamberMessage(text, chamberID: chamber.id) { agentID, agentName, response in
-                // TTS for each agent response
-                if state.voiceEnabled && !response.isEmpty {
+                guard !isInterrupted && !Task.isCancelled else { return }
+                guard !response.isEmpty else { return }
+
+                applyAgentVoice(agentID)
+
+                if !voiceEngine.isMuted {
                     tts.speak(response)
+                    await waitForTTSWithBargeIn()
                 }
             }
+
+            // Restore auto-listen after all agents done
+            if isChamberVoiceActive {
+                voiceEngine.autoListen = true
+                if !voiceEngine.isMicMuted && !isInterrupted {
+                    try? await Task.sleep(nanoseconds: 500_000_000)
+                    if voiceEngine.isActive && voiceEngine.state != .listening {
+                        voiceEngine.listen()
+                    }
+                }
+            }
+        }
+    }
+
+    /// Apply a specific agent's voice settings to TTSManager before speaking
+    private func applyAgentVoice(_ agentID: String) {
+        let agent = agents.first(where: { $0.id == agentID })
+        let engine = agent?.voiceEngine ?? "torbo"
+        tts.engine = engine
+        tts.agentID = agentID
+        // Always keep a valid ElevenLabs voice ID for torbo→ElevenLabs fallback
+        let voiceID = agent?.elevenLabsVoiceID ?? ""
+        tts.elevenLabsVoiceID = voiceID.isEmpty ? TTSManager.defaultElevenLabsVoice : voiceID
+        tts.systemVoiceIdentifier = agent?.systemVoiceIdentifier ?? ""
+    }
+
+    /// Pause the chamber session — stop TTS, cancel tasks, deactivate voice
+    private func pauseChamberSession() {
+        isInterrupted = true
+        sendTask?.cancel()
+        sendTask = nil
+        tts.stop()
+        voiceEngine.autoListen = true
+        manager.respondingAgentID = nil
+        if voiceEngine.chamberMode {
+            voiceEngine.chamberMode = false
+            voiceEngine.deactivate()
+        }
+    }
+
+    /// Interrupt the speaking cycle — stop TTS, cancel pending, resume listening
+    private func interruptSpeaking() {
+        isInterrupted = true
+        tts.stop()
+        sendTask?.cancel()
+        sendTask = nil
+        manager.respondingAgentID = nil
+        voiceEngine.autoListen = true
+
+        // Resume listening to the user after a brief settle
+        if isChamberVoiceActive && !voiceEngine.isMicMuted {
+            Task {
+                try? await Task.sleep(nanoseconds: 200_000_000)
+                if voiceEngine.isActive && voiceEngine.state != .listening {
+                    voiceEngine.listen()
+                }
+            }
+        }
+    }
+
+    /// Wait for TTS to finish speaking (tap the screen to interrupt)
+    private func waitForTTSWithBargeIn() async {
+        var waitCount = 0
+        while tts.isSpeaking && !Task.isCancelled && !isInterrupted && waitCount < 600 {
+            try? await Task.sleep(nanoseconds: 100_000_000)  // 100ms poll
+            waitCount += 1
         }
     }
 
@@ -600,6 +875,59 @@ struct ChamberView: View {
                 .controlSize(.small)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    // MARK: - Add Agent Popover
+
+    private func addAgentPopover(_ chamber: Chamber) -> some View {
+        let available = agents.filter { agent in !chamber.agentIDs.contains(agent.id) }
+        return VStack(alignment: .leading, spacing: 4) {
+            if available.isEmpty {
+                Text("All agents are already in this chamber")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.white.opacity(0.4))
+                    .padding(12)
+            } else {
+                Text("ADD AGENT")
+                    .font(.system(size: 10, weight: .bold, design: .monospaced))
+                    .foregroundStyle(.white.opacity(0.3))
+                    .padding(.horizontal, 12)
+                    .padding(.top, 10)
+                    .padding(.bottom, 4)
+
+                ForEach(available) { agent in
+                    Button {
+                        manager.addAgent(chamberID: chamber.id, agentID: agent.id)
+                        showAddAgentPopover = false
+                    } label: {
+                        HStack(spacing: 8) {
+                            Circle()
+                                .fill(Color(hue: agentOrbHue(agent.id) ?? 0.5, saturation: 0.7, brightness: 0.9))
+                                .frame(width: 8, height: 8)
+                            VStack(alignment: .leading, spacing: 1) {
+                                Text(agent.name)
+                                    .font(.system(size: 12, weight: .medium))
+                                    .foregroundStyle(.white.opacity(0.8))
+                                if !agent.role.isEmpty {
+                                    Text(agent.role)
+                                        .font(.system(size: 10))
+                                        .foregroundStyle(.white.opacity(0.3))
+                                        .lineLimit(1)
+                                }
+                            }
+                            Spacer()
+                        }
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 6)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                }
+                .padding(.bottom, 6)
+            }
+        }
+        .frame(minWidth: 200)
+        .background(Color(white: 0.12))
     }
 
     // MARK: - Helpers

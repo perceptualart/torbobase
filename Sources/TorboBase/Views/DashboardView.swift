@@ -15,10 +15,10 @@ struct DashboardView: View {
 
     var body: some View {
 
-        NavigationSplitView {
-            // Sidebar
+        HStack(spacing: 0) {
+            // MARK: - Sidebar
             VStack(spacing: 0) {
-                // Logo header
+                // Brand — the orb IS the brand
                 VStack(spacing: 8) {
                     OrbRenderer(
                         audioLevels: Array(repeating: Float(0.15), count: 40),
@@ -29,89 +29,73 @@ struct DashboardView: View {
                     .allowsHitTesting(false)
 
                     Text("TORBO BASE")
-                        .font(.system(size: 11, weight: .bold, design: .monospaced))
-                        .foregroundStyle(.white.opacity(0.7))
-                        .tracking(3)
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(.white.opacity(0.45))
+                        .tracking(2.0)
                 }
-                .padding(.vertical, 16)
+                .frame(maxWidth: .infinity)
+                .padding(.top, 20)
+                .padding(.bottom, 12)
+                .zIndex(1)
 
-                Divider().overlay(Color.white.opacity(0.06))
+                Divider()
+                    .background(Color.white.opacity(0.06))
+                    .padding(.horizontal, 12)
 
-                // Nav items
-                VStack(spacing: 2) {
-                    ForEach(DashboardTab.allCases, id: \.self) { tab in
-                        SidebarButton(
-                            title: tab.rawValue,
-                            icon: tab.icon,
-                            isSelected: state.currentTab == tab,
-                            hint: tab.hint
-                        ) {
-                            withAnimation(.easeInOut(duration: 0.2)) {
-                                state.currentTab = tab
-                            }
-                        }
+                // Navigation
+                ScrollView(.vertical, showsIndicators: false) {
+                    VStack(spacing: 20) {
+                        sidebarSection(nil, tabs: [.home, .agents, .chambers, .conversations])
+                        sidebarSection("Automation", tabs: [.jobs, .workflows, .scheduler, .skills])
+                        sidebarSection("System", tabs: [.models, .security, .iam, .governance, .teams, .calendar])
                     }
+                    .padding(.horizontal, 12)
+                    .padding(.top, 8)
                 }
-                .padding(.horizontal, 8)
-                .padding(.top, 12)
+                .clipped()
 
-                Spacer()
+                Spacer(minLength: 0)
 
-                // Status footer
-                VStack(spacing: 6) {
-                    Divider().overlay(Color.white.opacity(0.06))
+                // Bottom — Settings + Status
+                VStack(spacing: 8) {
+                    Divider()
+                        .background(Color.white.opacity(0.06))
+                        .padding(.horizontal, 12)
+
+                    SidebarButton(title: "Settings", icon: DashboardTab.settings.icon, isSelected: state.currentTab == .settings, info: DashboardTab.settings.info) {
+                        withAnimation(.easeInOut(duration: 0.2)) { state.currentTab = .settings }
+                    }
+                    .padding(.horizontal, 12)
+
+                    // Status bar
                     HStack(spacing: 6) {
                         Circle()
-                            .fill(state.serverRunning ? state.accessLevel.color : .red)
+                            .fill(state.serverRunning ? .green : .red)
                             .frame(width: 6, height: 6)
-                        Text(state.statusSummary)
-                            .font(.system(size: 10, weight: .medium))
-                            .foregroundStyle(.white.opacity(0.4))
-                            .lineLimit(1)
-                    }
-                    HStack(spacing: 4) {
-                        Circle()
-                            .fill(state.ollamaRunning ? .green : .red.opacity(0.5))
-                            .frame(width: 5, height: 5)
-                        Text(state.ollamaRunning ? "Ollama" : "Ollama offline")
-                            .font(.system(size: 9))
-                            .foregroundStyle(.white.opacity(0.3))
-                    }
-                    // Update button
-                    Button {
-                        showUpdateConfirm = true
-                    } label: {
-                        HStack(spacing: 5) {
-                            if isUpdating {
-                                ProgressView()
-                                    .controlSize(.mini)
-                                    .scaleEffect(0.7)
-                            } else {
-                                Image(systemName: "arrow.triangle.2.circlepath")
-                                    .font(.system(size: 9))
-                            }
-                            Text(isUpdating ? "Updating…" : "Update")
-                                .font(.system(size: 9, weight: .medium))
+                        Text(state.serverRunning ? "Online" : "Offline")
+                            .font(.system(size: 11))
+                            .foregroundStyle(.white.opacity(0.35))
+                        Spacer()
+                        Text(TorboVersion.display)
+                            .font(.system(size: 10))
+                            .foregroundStyle(.white.opacity(0.2))
+                        Button {
+                            showUpdateConfirm = true
+                        } label: {
+                            Image(systemName: "arrow.triangle.2.circlepath")
+                                .font(.system(size: 10))
+                                .foregroundStyle(.white.opacity(0.25))
                         }
-                        .foregroundStyle(.white.opacity(0.35))
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 4)
-                        .background(Color.white.opacity(0.04))
-                        .clipShape(RoundedRectangle(cornerRadius: 4))
+                        .buttonStyle(.plain)
+                        .disabled(isUpdating)
+                        .help("Update TORBO BASE")
                     }
-                    .buttonStyle(.plain)
-                    .disabled(isUpdating)
-                    .help("Pull latest and rebuild TORBO BASE")
-
-                    Text(TorboVersion.display)
-                        .font(.system(size: 9, weight: .medium, design: .monospaced))
-                        .foregroundStyle(.white.opacity(0.15))
+                    .padding(.horizontal, 16)
                 }
-                .padding(.horizontal, 12)
-                .padding(.bottom, 12)
+                .padding(.bottom, 14)
             }
-            .frame(minWidth: 160, maxWidth: 300)
-            .background(Color(nsColor: NSColor(red: 0.06, green: 0.06, blue: 0.08, alpha: 1)))
+            .frame(width: 220)
+            .background(Color(nsColor: NSColor(red: 0.055, green: 0.055, blue: 0.07, alpha: 1)))
             .alert("Update TORBO BASE", isPresented: $showUpdateConfirm) {
                 Button("Yes") { performUpdate() }
                 Button("Cancel", role: .cancel) { }
@@ -126,8 +110,8 @@ struct DashboardView: View {
             } message: {
                 Text(updateResult ?? "")
             }
-        } detail: {
-            // Content area
+
+            // MARK: - Content area
             Group {
                 switch state.currentTab {
                 case .home:
@@ -165,13 +149,32 @@ struct DashboardView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(Color(nsColor: NSColor(red: 0.08, green: 0.08, blue: 0.10, alpha: 1)))
         }
-        .navigationSplitViewStyle(.balanced)
         .preferredColorScheme(.dark)
         .task {
             // Update system stats periodically
             while !Task.isCancelled {
                 state.updateSystemStats()
                 try? await Task.sleep(nanoseconds: 5_000_000_000)
+            }
+        }
+    }
+
+    /// Sidebar section with optional header
+    @ViewBuilder
+    private func sidebarSection(_ header: String?, tabs: [DashboardTab]) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            if let header {
+                Text(header.uppercased())
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.3))
+                    .tracking(1.0)
+                    .padding(.leading, 12)
+                    .padding(.bottom, 4)
+            }
+            ForEach(tabs, id: \.self) { tab in
+                SidebarButton(title: tab.rawValue, icon: tab.icon, isSelected: state.currentTab == tab, info: tab.info) {
+                    withAnimation(.easeInOut(duration: 0.2)) { state.currentTab = tab }
+                }
             }
         }
     }
@@ -242,6 +245,7 @@ struct HomeView: View {
     @ObservedObject private var pairing = PairingManager.shared
     @State private var auditExpanded = false
     @State private var hasPlayedGreeting = UserDefaults.standard.bool(forKey: "torboFirstGreetingDone")
+    @State private var showWelcome = !UserDefaults.standard.bool(forKey: "torboWelcomeDismissed")
 
     var body: some View {
 
@@ -255,6 +259,47 @@ struct HomeView: View {
                 )
                 .padding(.top, 8)
                 .padding(.horizontal, 20)
+
+                // Welcome card for new users
+                if showWelcome {
+                    VStack(alignment: .leading, spacing: 12) {
+                        HStack {
+                            Text("Welcome to TORBO BASE")
+                                .font(.system(size: 14, weight: .semibold))
+                                .foregroundStyle(.white)
+                            Spacer()
+                            Button {
+                                withAnimation(.easeOut(duration: 0.2)) { showWelcome = false }
+                                UserDefaults.standard.set(true, forKey: "torboWelcomeDismissed")
+                            } label: {
+                                Image(systemName: "xmark")
+                                    .font(.system(size: 10, weight: .medium))
+                                    .foregroundStyle(.white.opacity(0.4))
+                            }
+                            .buttonStyle(.plain)
+                        }
+
+                        VStack(alignment: .leading, spacing: 8) {
+                            welcomeStep(icon: "circle.hexagongrid.fill", text: "Click the orb or drag the slider to set your access level")
+                            welcomeStep(icon: "person.2.fill", text: "Go to Agents to create and customize AI agents")
+                            welcomeStep(icon: "mic.fill", text: "Tap the orb to start a voice conversation")
+                            welcomeStep(icon: "person.3.sequence.fill", text: "Use Chambers to put multiple agents in a room together")
+                            welcomeStep(icon: "info.circle", text: "Look for the \(Image(systemName: "info.circle")) icon next to any sidebar item for details on what it does")
+                        }
+
+                        Text("You can dismiss this card — it won't come back.")
+                            .font(.system(size: 10))
+                            .foregroundStyle(.white.opacity(0.25))
+                    }
+                    .padding(16)
+                    .background(Color.white.opacity(0.04))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 10, style: .continuous)
+                            .stroke(Color.white.opacity(0.08), lineWidth: 1)
+                    )
+                    .cornerRadius(10)
+                    .padding(.horizontal, 24)
+                }
 
                 // Stats row
                 HStack(spacing: 12) {
@@ -523,6 +568,19 @@ struct HomeView: View {
     private func maskToken(_ token: String) -> String {
         if token.count < 8 { return "••••••••" }
         return String(token.prefix(4)) + "••••" + String(token.suffix(4))
+    }
+
+    private func welcomeStep(icon: String, text: String) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: icon)
+                .font(.system(size: 11))
+                .foregroundStyle(.white.opacity(0.4))
+                .frame(width: 16)
+            Text(text)
+                .font(.system(size: 12))
+                .foregroundStyle(.white.opacity(0.6))
+                .lineSpacing(2)
+        }
     }
 }
 
@@ -2378,32 +2436,58 @@ struct SidebarButton: View {
     let title: String
     let icon: String
     let isSelected: Bool
-    var hint: String = ""
+    var info: String? = nil
     let action: () -> Void
+
+    @State private var showInfo = false
 
     var body: some View {
         Button(action: action) {
-            HStack(spacing: 8) {
+            HStack(spacing: 10) {
                 Image(systemName: icon)
-                    .font(.system(size: 12))
-                    .frame(width: 18)
-                    .foregroundStyle(isSelected ? .white : .white.opacity(0.4))
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(title)
-                        .font(.system(size: 12, weight: isSelected ? .semibold : .regular))
-                        .foregroundStyle(isSelected ? .white : .white.opacity(0.5))
-                    if !hint.isEmpty {
-                        Text(hint)
-                            .font(.system(size: 8, design: .monospaced))
-                            .foregroundStyle(.white.opacity(0.15))
-                    }
-                }
+                    .font(.system(size: 13, weight: .regular))
+                    .frame(width: 20)
+                    .foregroundStyle(isSelected ? .white : .white.opacity(0.45))
+                Text(title)
+                    .font(.system(size: 13, weight: isSelected ? .medium : .regular))
+                    .foregroundStyle(isSelected ? .white : .white.opacity(0.55))
+                    .lineLimit(1)
                 Spacer()
+                if info != nil {
+                    Image(systemName: "info.circle")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.white.opacity(isSelected ? 0.3 : 0.15))
+                        .onTapGesture {
+                            showInfo.toggle()
+                        }
+                        .popover(isPresented: $showInfo, arrowEdge: .trailing) {
+                            VStack(alignment: .leading, spacing: 8) {
+                                HStack(spacing: 6) {
+                                    Image(systemName: icon)
+                                        .font(.system(size: 13, weight: .medium))
+                                        .foregroundStyle(.white.opacity(0.7))
+                                    Text(title)
+                                        .font(.system(size: 13, weight: .semibold))
+                                        .foregroundStyle(.white)
+                                }
+                                Text(info ?? "")
+                                    .font(.system(size: 12))
+                                    .foregroundStyle(.white.opacity(0.7))
+                                    .lineSpacing(3)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                            .padding(14)
+                            .frame(width: 260)
+                            .background(Color(nsColor: NSColor(red: 0.1, green: 0.1, blue: 0.12, alpha: 1)))
+                        }
+                }
             }
             .padding(.horizontal, 10)
-            .padding(.vertical, 7)
-            .background(isSelected ? Color.white.opacity(0.08) : .clear)
-            .cornerRadius(6)
+            .padding(.vertical, 8)
+            .background(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(isSelected ? Color.white.opacity(0.1) : .clear)
+            )
         }
         .buttonStyle(.plain)
     }

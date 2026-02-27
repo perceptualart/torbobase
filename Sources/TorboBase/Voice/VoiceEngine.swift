@@ -35,6 +35,10 @@ final class VoiceEngine: ObservableObject {
     // Voice-to-chat bridge: triggers AgentChatView to inject messages
     @Published var voiceChatTrigger: Int = 0  // incremented when user transcript is ready
 
+    /// When true, handleTranscriptFinalized skips routeToGateway —
+    /// the caller (e.g. ChamberView) handles routing via voiceChatTrigger.
+    var chamberMode = false
+
     // MARK: - Audio Levels (routed to orb)
 
     /// Published audio levels — updated at ~15Hz by internal timer so SwiftUI orb
@@ -143,9 +147,11 @@ final class VoiceEngine: ObservableObject {
         Task {
             if let config = await AgentConfigManager.shared.agent(agentID) {
                 tts.engine = config.voiceEngine
-                tts.elevenLabsVoiceID = config.elevenLabsVoiceID
+                tts.agentID = agentID
+                // Always keep a valid ElevenLabs voice ID for fallback
+                tts.elevenLabsVoiceID = config.elevenLabsVoiceID.isEmpty ? TTSManager.defaultElevenLabsVoice : config.elevenLabsVoiceID
                 tts.systemVoiceIdentifier = config.systemVoiceIdentifier
-                TorboLog.info("Voice: applied \(agentID) config — engine=\(config.voiceEngine), voice=\(config.elevenLabsVoiceID.prefix(8))", subsystem: "Voice")
+                TorboLog.info("Voice: applied \(agentID) config — engine=\(config.voiceEngine)", subsystem: "Voice")
             }
         }
     }
@@ -229,8 +235,14 @@ final class VoiceEngine: ObservableObject {
 
         lastUserTranscript = text
         voiceChatTrigger += 1  // notify AgentChatView to add user message
-        transition(to: .thinking, reason: "transcript finalized")
-        processInput(text)
+
+        if chamberMode {
+            // Chamber handles routing via voiceChatTrigger — skip single-agent gateway
+            transition(to: .idle, reason: "chamber mode — external handler")
+        } else {
+            transition(to: .thinking, reason: "transcript finalized")
+            processInput(text)
+        }
     }
 
     // MARK: - Process Input → HTTP → Speak

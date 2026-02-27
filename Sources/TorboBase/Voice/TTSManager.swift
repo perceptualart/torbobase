@@ -21,7 +21,8 @@ final class TTSManager: NSObject, ObservableObject {
 
     var engine: String = "system" // "system", "elevenlabs", or "torbo"
     var agentID: String = "sid" // Current agent for Piper voice selection
-    var elevenLabsVoiceID: String = "21m00Tcm4TlvDq8ikWAM" // Default Rachel
+    static let defaultElevenLabsVoice = "21m00Tcm4TlvDq8ikWAM" // Rachel
+    var elevenLabsVoiceID: String = TTSManager.defaultElevenLabsVoice
     var systemVoiceIdentifier: String = ""
     var rate: Float = 0.52
 
@@ -93,14 +94,27 @@ final class TTSManager: NSObject, ObservableObject {
     private func synthesizePiper(_ text: String) async {
         let piperEngine = PiperTTSEngine.shared
         guard piperEngine.isAvailable else {
-            TorboLog.info("Piper not available — falling back to system voice", subsystem: "TTS")
-            await MainActor.run { speakSystem(text) }
+            // Piper not compiled/available — fall back to ElevenLabs (never system voice)
+            let hasEL = !(AppState.shared.cloudAPIKeys["ELEVENLABS_API_KEY"] ?? "").isEmpty
+            if hasEL {
+                TorboLog.info("Piper not available — falling back to ElevenLabs", subsystem: "TTS")
+                await synthesizeElevenLabs(text)
+            } else {
+                TorboLog.info("Piper not available, no ElevenLabs key — falling back to system voice", subsystem: "TTS")
+                await MainActor.run { speakSystem(text) }
+            }
             return
         }
 
         guard let wavData = await piperEngine.synthesize(text: text, agentID: agentID) else {
-            TorboLog.warn("Piper synthesis returned nil — falling back to system voice", subsystem: "TTS")
-            await MainActor.run { speakSystem(text) }
+            let hasEL = !(AppState.shared.cloudAPIKeys["ELEVENLABS_API_KEY"] ?? "").isEmpty
+            if hasEL {
+                TorboLog.warn("Piper synthesis failed — falling back to ElevenLabs", subsystem: "TTS")
+                await synthesizeElevenLabs(text)
+            } else {
+                TorboLog.warn("Piper synthesis failed — falling back to system voice", subsystem: "TTS")
+                await MainActor.run { speakSystem(text) }
+            }
             return
         }
 
@@ -165,14 +179,17 @@ final class TTSManager: NSObject, ObservableObject {
             return
         }
 
+        // Use default voice if none configured
+        let voiceID = elevenLabsVoiceID.isEmpty ? TTSManager.defaultElevenLabsVoice : elevenLabsVoiceID
+
         // Check disk cache first
-        let cacheKey = djb2Hash(text + elevenLabsVoiceID)
+        let cacheKey = djb2Hash(text + voiceID)
         if let cached = loadFromCache(key: cacheKey) {
             await playAudioData(cached)
             return
         }
 
-        guard let url = URL(string: "https://api.elevenlabs.io/v1/text-to-speech/\(elevenLabsVoiceID)/stream") else {
+        guard let url = URL(string: "https://api.elevenlabs.io/v1/text-to-speech/\(voiceID)/stream") else {
             await MainActor.run { isSpeaking = false }
             return
         }

@@ -13,6 +13,15 @@ enum DiscussionStyle: String, Codable, CaseIterable {
     case roundRobin     // Rotating start position
     case random         // Random order each round
     case collaborative  // All agents see all prior responses
+
+    var info: String {
+        switch self {
+        case .sequential:    return "Agents respond one by one in roster order. Predictable and structured."
+        case .roundRobin:    return "Like sequential, but the starting agent rotates each round so no one always goes first."
+        case .random:        return "Agents respond in a shuffled order each round. Keeps conversations dynamic."
+        case .collaborative: return "Every agent sees all prior responses before replying. Best for brainstorming and deep analysis."
+        }
+    }
 }
 
 // MARK: - Chamber Model
@@ -91,6 +100,21 @@ final class ChamberManager: ObservableObject {
         saveChambers()
     }
 
+    func addAgent(chamberID: String, agentID: String) {
+        guard let idx = chambers.firstIndex(where: { $0.id == chamberID }) else { return }
+        guard !chambers[idx].agentIDs.contains(agentID) else { return }
+        chambers[idx].agentIDs.append(agentID)
+        chambers[idx].updatedAt = Date()
+        saveChambers()
+    }
+
+    func removeAgent(chamberID: String, agentID: String) {
+        guard let idx = chambers.firstIndex(where: { $0.id == chamberID }) else { return }
+        chambers[idx].agentIDs.removeAll { $0 == agentID }
+        chambers[idx].updatedAt = Date()
+        saveChambers()
+    }
+
     // MARK: - Send Message
 
     /// Send a message to the chamber — dispatches to each agent per discussion style.
@@ -98,7 +122,7 @@ final class ChamberManager: ObservableObject {
     func sendChamberMessage(
         _ text: String,
         chamberID: String,
-        onAgentDone: @escaping (String, String, String) -> Void  // (agentID, agentName, response)
+        onAgentDone: @escaping (String, String, String) async -> Void  // (agentID, agentName, response)
     ) async {
         guard let chamber = chambers.first(where: { $0.id == chamberID }) else { return }
 
@@ -151,8 +175,8 @@ final class ChamberManager: ObservableObject {
             // Add to context for collaborative mode
             conversationContext.append(["role": "assistant", "content": "[\(agentName)]: \(cleaned)"])
 
-            // Fire callback for TTS
-            onAgentDone(agentID, agentName, cleaned)
+            // Fire callback — caller awaits TTS finish before next agent starts
+            await onAgentDone(agentID, agentName, cleaned)
 
             // Brief pause between agents
             try? await Task.sleep(nanoseconds: 150_000_000)

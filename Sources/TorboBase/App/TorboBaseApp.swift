@@ -58,7 +58,7 @@ struct TorboBaseApp: App {
                         .environmentObject(appState)
                 }
             }
-            .frame(minWidth: 720, minHeight: 560)
+            .frame(minWidth: 900, minHeight: 560)
             .preferredColorScheme(.dark)
             .onAppear {
                 // Belt-and-suspenders: style the window once SwiftUI renders content

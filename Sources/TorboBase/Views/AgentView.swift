@@ -1677,11 +1677,10 @@ struct AgentsView: View {
 
     private func applyAgentVoiceSettings() {
         ttsManager.engine = editConfig.voiceEngine
-        if editConfig.voiceEngine == "elevenlabs" {
-            ttsManager.elevenLabsVoiceID = editConfig.elevenLabsVoiceID.isEmpty ? "21m00Tcm4TlvDq8ikWAM" : editConfig.elevenLabsVoiceID
-        } else {
-            ttsManager.systemVoiceIdentifier = editConfig.systemVoiceIdentifier
-        }
+        ttsManager.agentID = editConfig.id
+        // Always keep a valid ElevenLabs voice ID for torbo→ElevenLabs fallback
+        ttsManager.elevenLabsVoiceID = editConfig.elevenLabsVoiceID.isEmpty ? TTSManager.defaultElevenLabsVoice : editConfig.elevenLabsVoiceID
+        ttsManager.systemVoiceIdentifier = editConfig.systemVoiceIdentifier
     }
 
     // MARK: - Tasks Panel
@@ -2330,23 +2329,29 @@ struct AgentsView: View {
                 }
                 .buttonStyle(.plain)
 
-                // Power button — activate/deactivate this agent
+                // Power button — power up/down this agent
                 Button {
-                    if isVoiceActive {
-                        voiceEngine.deactivate()
+                    if editConfig.accessLevel > 0 {
+                        // Power down — save current level, set to OFF
+                        previousAgentLevel = editConfig.accessLevel
+                        editConfig.accessLevel = 0
+                        if isVoiceActive { voiceEngine.deactivate() }
+                        debouncedSave()
                     } else {
-                        voiceEngine.activate(agentID: editConfig.id)
-                        applyAgentVoiceSettings()
+                        // Power up — restore previous level
+                        editConfig.accessLevel = previousAgentLevel > 0 ? previousAgentLevel : 2
+                        debouncedSave()
                     }
                 } label: {
                     Image(systemName: "power")
                         .font(.system(size: 12, weight: .bold))
-                        .foregroundStyle(isVoiceActive ? .green : .red.opacity(0.6))
+                        .foregroundStyle(editConfig.accessLevel > 0 ? .green : .red.opacity(0.6))
                         .frame(width: 28, height: 28)
-                        .background(Circle().fill(isVoiceActive ? Color.green.opacity(0.15) : Color.red.opacity(0.08)))
+                        .background(Circle().fill(editConfig.accessLevel > 0 ? Color.green.opacity(0.15) : Color.red.opacity(0.08)))
+                        .contentShape(Circle())
                 }
                 .buttonStyle(.plain)
-                .help(isVoiceActive ? "Deactivate agent" : "Activate agent")
+                .help(editConfig.accessLevel > 0 ? "Power down agent" : "Power up agent")
             }
             .padding(.horizontal, 20)
             .padding(.vertical, 8)

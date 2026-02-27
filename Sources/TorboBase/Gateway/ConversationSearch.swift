@@ -117,6 +117,30 @@ actor ConversationSearch {
         sqlite3_step(stmt)
     }
 
+    /// Batch-check which message UUIDs already exist in the index (for sync dedup)
+    func existingMessageIDs(from ids: [String]) -> Set<String> {
+        guard db != nil, !ids.isEmpty else { return [] }
+
+        var existing = Set<String>()
+        // Build parameterized IN clause
+        let placeholders = ids.map { _ in "?" }.joined(separator: ",")
+        let sql = "SELECT message_id FROM messages WHERE message_id IN (\(placeholders))"
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return [] }
+        defer { sqlite3_finalize(stmt) }
+
+        for (i, id) in ids.enumerated() {
+            sqlite3_bind_text(stmt, Int32(i + 1), (id as NSString).utf8String, -1, nil)
+        }
+
+        while sqlite3_step(stmt) == SQLITE_ROW {
+            if let cStr = sqlite3_column_text(stmt, 0) {
+                existing.insert(String(cString: cStr))
+            }
+        }
+        return existing
+    }
+
     // MARK: - Backfill
 
     /// Backfill index from existing ConversationStore data

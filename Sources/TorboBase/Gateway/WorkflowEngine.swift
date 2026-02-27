@@ -62,6 +62,16 @@ actor WorkflowEngine {
     /// Uses a lightweight LLM call to decompose the intent into steps
     /// If agentID is provided, all steps are assigned to that agent; otherwise defaults to SiD
     func createWorkflow(description: String, createdBy: String = "user", priority: TaskQueue.TaskPriority = .normal, agentID: String? = nil) async -> Workflow {
+        // Dedup — skip if a workflow with the same description is already running/pending
+        let normalizedDesc = description.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if let existing = workflows.values.first(where: {
+            ($0.status == .running || $0.status == .pending)
+            && $0.description.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == normalizedDesc
+        }) {
+            TorboLog.info("Skipped duplicate workflow: '\(existing.name)'", subsystem: "Workflow")
+            return existing
+        }
+
         let assignee = agentID ?? defaultAgentID
         let steps = await decomposeIntoSteps(description, agentID: assignee)
 

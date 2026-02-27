@@ -505,26 +505,30 @@ actor GatewayServer {
     }
 
     private nonisolated static func isRequestComplete(_ data: Data) -> Bool {
-        guard let string = String(data: data, encoding: .utf8) else { return true }
-        // Find the header/body separator
-        guard let separatorRange = string.range(of: "\r\n\r\n") else { return false }
-        let headerPart = String(string[..<separatorRange.lowerBound])
-        let bodyStart = string[separatorRange.upperBound...]
+        // Search for \r\n\r\n separator in raw bytes — avoids String(data:encoding:)
+        // which returns nil if a TCP chunk splits a multi-byte UTF-8 character,
+        // causing premature "complete" and a 400 on first large POST.
+        let separator = Data([0x0D, 0x0A, 0x0D, 0x0A])
+        guard let separatorRange = data.range(of: separator) else { return false }
+
+        let headerData = data[data.startIndex..<separatorRange.lowerBound]
+        guard let headerString = String(data: headerData, encoding: .ascii) else { return false }
 
         // For GET/OPTIONS/DELETE without body, we're done once we have headers
-        let firstLine = headerPart.components(separatedBy: "\r\n").first ?? ""
+        let firstLine = headerString.components(separatedBy: "\r\n").first ?? ""
         let method = firstLine.components(separatedBy: " ").first ?? ""
         if method == "GET" || method == "OPTIONS" || method == "DELETE" || method == "HEAD" {
             return true
         }
 
-        // For POST/PUT, check Content-Length
-        let headerLines = headerPart.lowercased().components(separatedBy: "\r\n")
+        // For POST/PUT, count body bytes directly from Data (not String)
+        let bodyByteCount = data.count - separatorRange.upperBound
+        let headerLines = headerString.lowercased().components(separatedBy: "\r\n")
         for line in headerLines {
             if line.hasPrefix("content-length:") {
                 let valStr = line.dropFirst("content-length:".count).trimmingCharacters(in: .whitespaces)
                 if let expected = Int(valStr) {
-                    return bodyStart.utf8.count >= expected
+                    return bodyByteCount >= expected
                 }
             }
         }
@@ -814,8 +818,8 @@ actor GatewayServer {
             return HTTPResponse.json(["active": level > 0])
         }
 
-        // Rate limit unauthenticated endpoints (prevents brute-force pairing)
-        if req.method == "POST" && (req.path == "/pair" || req.path == "/pair/verify") {
+        // Rate limit unauthenticated pairing endpoints (prevents brute-force)
+        if req.method == "POST" && (req.path == "/pair" || req.path == "/pair/verify" || req.path == "/pair/auto") {
             if isRateLimited(clientIP: clientIP) {
                 return HTTPResponse(statusCode: 429, headers: ["Content-Type": "application/json"],
                                   body: Data("{\"error\":\"Too many requests\"}".utf8))
@@ -830,7 +834,7 @@ actor GatewayServer {
             return await handlePairVerify(req)
         }
 
-        // Auto-pair for trusted networks (Tailscale 100.x.x.x only)
+        // Auto-pair for trusted networks (LAN + Tailscale)
         if req.method == "POST" && req.path == "/pair/auto" {
             return await handleAutoPair(req, clientIP: clientIP)
         }
@@ -1102,6 +1106,13 @@ actor GatewayServer {
         // MARK: - Debate API (multi-agent decision analysis)
         if req.path.hasPrefix("/v1/debate") {
             return await handleDebateRoute(req, clientIP: clientIP, currentLevel: currentLevel, agentID: agentID)
+        }
+
+        // MARK: - Conversation Sync API (Base ↔ iOS)
+        if req.path.hasPrefix("/v1/sync") {
+            if let response = await handleSyncRoute(req, clientIP: clientIP) {
+                return response
+            }
         }
 
         // MARK: - Memory Management API
@@ -2212,15 +2223,16 @@ actor GatewayServer {
         return HTTPResponse.json(response)
     }
 
-    /// Auto-pair: trusted Tailscale clients (100.x.x.x) can pair without a code.
+    /// Auto-pair: trusted LAN or Tailscale clients can pair without a code.
     /// The device sends its name; Base issues a token automatically.
-    /// This is safe because Tailscale IPs are already authenticated via WireGuard keys.
+    /// This is safe because private IPs can't be spoofed from the internet (NAT),
+    /// and Tailscale IPs are authenticated via WireGuard keys.
     private func handleAutoPair(_ req: HTTPRequest, clientIP: String) async -> HTTPResponse {
-        // Only allow auto-pair from Tailscale IPs (100.x.x.x/8)
-        guard clientIP.hasPrefix("100.") else {
-            TorboLog.warn("Auto-pair rejected from non-Tailscale IP: \(clientIP)", subsystem: "Pairing")
+        // Only allow auto-pair from private/LAN or Tailscale IPs
+        guard Self.isPrivateOrTailscaleIP(clientIP) else {
+            TorboLog.warn("Auto-pair rejected from non-local IP: \(clientIP)", subsystem: "Pairing")
             return HTTPResponse(statusCode: 403, headers: ["Content-Type": "application/json"],
-                              body: Data("{\"error\":\"Auto-pair only available on Tailscale network\"}".utf8))
+                              body: Data("{\"error\":\"Auto-pair only available on local or Tailscale network\"}".utf8))
         }
 
         guard let body = req.jsonBody,
@@ -2245,7 +2257,9 @@ actor GatewayServer {
             return HTTPResponse.json(existingResponse)
         }
 
-        // Create a new paired device directly (no code needed — Tailscale is the trust anchor)
+        let networkType = clientIP.hasPrefix("100.") ? "Tailscale" : "LAN"
+
+        // Create a new paired device directly (no code needed — trusted network is the anchor)
         let result: (token: String, deviceId: String) = await MainActor.run {
             PairingManager.shared.autoPair(deviceName: deviceName)
         }
@@ -2259,14 +2273,32 @@ actor GatewayServer {
                               body: Data("{\"error\":\"Auto-pair failed\"}".utf8))
         }
 
-        TorboLog.info("Auto-paired \(deviceName) from Tailscale IP \(clientIP)", subsystem: "Pairing")
+        TorboLog.info("Auto-paired \(deviceName) from \(networkType) IP \(clientIP)", subsystem: "Pairing")
         await audit(clientIP: clientIP, method: "POST", path: "/pair/auto",
-                   required: .chatOnly, granted: true, detail: "Auto-paired: \(deviceName)")
-        Task { await TelegramBridge.shared.notify("Device auto-paired: \(deviceName) (Tailscale)") }
+                   required: .chatOnly, granted: true, detail: "Auto-paired: \(deviceName) (\(networkType))")
+        Task { await TelegramBridge.shared.notify("Device auto-paired: \(deviceName) (\(networkType))") }
         var newResponse: [String: Any] = ["token": token, "deviceId": deviceId, "status": "new"]
         if let tsIP = Self.detectTailscaleIP() { newResponse["tailscaleIP"] = tsIP }
         if let tsHostname = Self.detectTailscaleHostname() { newResponse["tailscaleHostname"] = tsHostname }
         return HTTPResponse.json(newResponse)
+    }
+
+    // MARK: - Network Helpers
+
+    /// Returns true if the IP is private (RFC 1918), Tailscale CGNAT, link-local, or localhost.
+    /// Safe for auto-pair because NAT prevents these from being spoofed from the internet.
+    static func isPrivateOrTailscaleIP(_ ip: String) -> Bool {
+        if ip == "127.0.0.1" || ip == "::1" { return true }
+        if ip.hasPrefix("10.") { return true }          // 10.0.0.0/8
+        if ip.hasPrefix("192.168.") { return true }     // 192.168.0.0/16
+        if ip.hasPrefix("169.254.") { return true }     // 169.254.0.0/16 link-local
+        // 172.16.0.0/12 (second octet 16–31) and 100.64.0.0/10 (second octet 64–127)
+        let parts = ip.split(separator: ".")
+        if parts.count == 4, let second = Int(parts[1]) {
+            if ip.hasPrefix("172.") && (16...31).contains(second) { return true }
+            if ip.hasPrefix("100.") && (64...127).contains(second) { return true }
+        }
+        return false
     }
 
     // MARK: - Rate Limiting

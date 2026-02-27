@@ -147,6 +147,26 @@ struct JobsView: View {
                 .buttonStyle(.plain)
                 .foregroundStyle(.white.opacity(0.3))
             }
+
+            Button {
+                Task {
+                    await TaskQueue.shared.purgeTasks(status: nil)
+                    await refreshNodes()
+                }
+            } label: {
+                HStack(spacing: 4) {
+                    Image(systemName: "trash")
+                        .font(.system(size: 11))
+                    Text("Clear")
+                        .font(.system(size: 11, weight: .medium))
+                }
+                .foregroundStyle(.white.opacity(0.4))
+                .padding(.horizontal, 10)
+                .padding(.vertical, 5)
+                .background(Color.white.opacity(0.06))
+                .cornerRadius(6)
+            }
+            .buttonStyle(.plain)
         }
         .padding(.horizontal, 24)
         .padding(.vertical, 16)

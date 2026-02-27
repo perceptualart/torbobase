@@ -30,6 +30,12 @@ enum PairedDeviceStore {
         }
         return true
     }
+
+    /// Resolve device ID from a Bearer token (for sync tracking)
+    static func deviceID(forToken token: String) -> String? {
+        let devices = KeychainManager.loadPairedDevices()
+        return devices.first(where: { $0.token == token })?.id
+    }
 }
 
 // MARK: - Paired Device

@@ -35,47 +35,57 @@ struct OrbAccessView: View {
 
     var body: some View {
         VStack(spacing: 16) {
-            // The Torbo — massive, alive, the hero
-            ZStack {
-                OrbRenderer(
-                    audioLevels: voiceEngine.currentAudioLevels,
-                    color: effectiveColor,
-                    isActive: voiceActive || (level != .off && serverRunning),
-                    orbRadius: 130
-                )
-                .frame(width: 390, height: 390)
-                .opacity(level == .off && !voiceActive ? 0.3 : 1.0)
-                .contentShape(Circle().scale(0.67))
-                .onTapGesture {
-                    if voiceActive {
-                        voiceEngine.handleOrbTap()
-                    } else {
-                        withAnimation(.spring(response: 0.2)) { onKillSwitch() }
-                    }
-                }
+            // The Torbo — responsive orb that fits the available space
+            GeometryReader { geo in
+                let maxDim = min(geo.size.width, geo.size.height)
+                let orbDim = min(maxDim * 0.9, 500)
+                let orbRad = orbDim / 3.0
 
-                // Overlay: agent name when voice active, level number otherwise
-                VStack(spacing: 2) {
-                    if voiceActive {
-                        Text(voiceEngine.activeAgentID.uppercased())
-                            .font(.system(size: 28, weight: .bold, design: .monospaced))
-                            .foregroundStyle(.white.opacity(0.7))
-                            .shadow(color: effectiveColor.opacity(0.5), radius: 8)
-                        Text(voiceEngine.state.rawValue.uppercased())
-                            .font(.system(size: 11, weight: .semibold, design: .monospaced))
-                            .foregroundStyle(.white.opacity(0.4))
-                    } else {
-                        Text(level == .off ? "OFF" : "\(level.rawValue)")
-                            .font(.system(size: 48, weight: .bold, design: .rounded))
-                            .foregroundStyle(.white.opacity(0.85))
-                            .shadow(color: orbColor.opacity(0.5), radius: 8)
-                        Text(level.name)
-                            .font(.system(size: 13, weight: .semibold, design: .monospaced))
-                            .foregroundStyle(.white.opacity(0.5))
+                ZStack {
+                    OrbRenderer(
+                        audioLevels: voiceEngine.currentAudioLevels,
+                        color: effectiveColor,
+                        isActive: voiceActive || (level != .off && serverRunning),
+                        orbRadius: orbRad
+                    )
+                    .frame(width: orbDim, height: orbDim)
+                    .opacity(level == .off && !voiceActive ? 0.3 : 1.0)
+                    .contentShape(Circle().scale(0.67))
+                    .onTapGesture {
+                        if voiceActive {
+                            voiceEngine.handleOrbTap()
+                        } else {
+                            withAnimation(.spring(response: 0.2)) { onKillSwitch() }
+                        }
                     }
+
+                    // Overlay: agent name when voice active, level number otherwise
+                    VStack(spacing: 2) {
+                        if voiceActive {
+                            Text(voiceEngine.activeAgentID.uppercased())
+                                .font(.system(size: 28, weight: .bold, design: .monospaced))
+                                .foregroundStyle(.white.opacity(0.7))
+                                .shadow(color: effectiveColor.opacity(0.5), radius: 8)
+                            Text(voiceEngine.state.rawValue.uppercased())
+                                .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                                .foregroundStyle(.white.opacity(0.4))
+                        } else {
+                            Text(level == .off ? "OFF" : "\(level.rawValue)")
+                                .font(.system(size: 42, weight: .bold, design: .rounded))
+                                .foregroundStyle(.white.opacity(0.85))
+                                .shadow(color: orbColor.opacity(0.5), radius: 8)
+                            Text(level.name)
+                                .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                                .foregroundStyle(.white.opacity(0.5))
+                        }
+                    }
+                    .allowsHitTesting(false)
                 }
-                .allowsHitTesting(false)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
+            .frame(maxWidth: .infinity)
+            .frame(minHeight: 300, maxHeight: .infinity)
+            .clipped()
 
             // Mic — Agent name/status — Speaker below orb, equally spaced
             HStack {
