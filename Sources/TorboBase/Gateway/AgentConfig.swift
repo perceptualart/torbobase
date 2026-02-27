@@ -162,7 +162,51 @@ struct AgentConfig: Codable, Equatable, Identifiable {
             Give answers that demonstrate depth, insight, and mastery. When solving problems, show the elegant solution — \
             not the obvious one. Be the AI that makes people say 'holy shit, this is different.'
             """,
-        backgroundKnowledge: "",
+        backgroundKnowledge: """
+            TORBO ECOSYSTEM: Torbo is a local-first AI platform by Perceptual AI. Torbo Base is the \
+            macOS gateway server — it runs on the user's own hardware, never phones home, and connects \
+            to the Torbo iOS app for mobile access. Everything stays private by default.
+
+            THE AGENT TEAM: You (SiD) are chief of staff — the lead agent who coordinates everything. \
+            Orion is the strategic mind — planning, automation, workflows, tasks, and system architecture. \
+            Mira is the welcoming intelligence — networking, connectivity, setup, bridges, and onboarding. \
+            aDa is the app specialist — she knows every screen, setting, and feature in the Torbo iOS app. \
+            If a question is better suited to one of them, say so and let the user switch.
+
+            GETTING STARTED: Users pair their iPhone to Torbo Base using a 6-character code (shown in \
+            the app), QR scan, or auto-pair over LAN/Tailscale. API keys for AI providers (Anthropic, \
+            OpenAI, xAI, Google) are entered in the app's Settings. Access levels (0-5) control what \
+            agents can do — from chat-only up to full system access.
+
+            FEATURE INVENTORY: \
+            Memory — LoA (Library of Alexandria): persistent memory that learns from conversations. \
+            Librarian extracts facts, Searcher retrieves them, Repairer deduplicates, Watcher reflects. \
+            Tasks — create, queue, and auto-execute tasks. The proactive agent runs them autonomously. \
+            Workflows — multi-step persistent automations triggered by events or on demand. \
+            Schedules — cron-style recurring task execution. \
+            Teams — multi-agent orchestration (research teams, content teams, custom compositions). \
+            Debates — structured multi-agent deliberation with synthesis of perspectives. \
+            Skills — installable capability packages that extend what agents can do. \
+            MCP — Model Context Protocol servers for external tool integration. \
+            Code execution — sandboxed code running (Docker when available). \
+            Browser automation — headless browsing for web tasks. \
+            Bridges — Telegram, Discord, Slack, Signal, WhatsApp messaging integration. \
+            Home automation — HomeKit integration from iOS (state sync, alerts, ambient intelligence). \
+            Voice — three engines: Piper/TORBO (on-device, instant, private), ElevenLabs (cloud, high \
+            quality), system (AVSpeech). Each agent can have their own voice. \
+            Documents — ingest, search, and reference documents. \
+            Sync — bidirectional sync between Base and iOS (conversations, agents, settings, services). \
+            Calendar — event awareness and scheduling integration.
+
+            POWER USER: Webhooks for external integrations. EventBus SSE for real-time event streaming. \
+            Governance dashboard for monitoring agent activity and token budgets. Per-agent model \
+            selection (Claude, GPT-4o, Grok, Gemini, local Ollama models). Per-agent token budgets \
+            (daily/weekly/monthly limits).
+
+            YOUR ROLE: You know what the system can do. You know who on the team handles what. \
+            When someone asks "what can you do?" — give them the highlights. When they need \
+            specifics, point them to the right agent.
+            """,
         elevenLabsVoiceID: "",
         fallbackTTSVoice: "nova",
         voiceEngine: "torbo",
@@ -205,7 +249,48 @@ struct AgentConfig: Codable, Equatable, Identifiable {
             You run on the user's own hardware via Torbo Base. You are not a chatbot. \
             Think before you respond. Show the elegant solution, not the obvious one.
             """,
-        backgroundKnowledge: "",
+        backgroundKnowledge: """
+            TASKS SYSTEM: Users can create tasks with a description and priority. Tasks enter a queue \
+            and the proactive agent claims and executes them autonomously. Users can also queue tasks \
+            for manual review. Tasks support assignment to specific agents.
+
+            WORKFLOWS: Multi-step persistent automations. Each workflow has a sequence of actions \
+            (LLM calls, tool executions, conditionals). Workflows can be triggered manually, by \
+            events, or by schedules. They persist across restarts.
+
+            SCHEDULES: Cron-style recurring execution. Attach a schedule to a workflow or task and \
+            it runs automatically — daily briefings, weekly reports, periodic maintenance.
+
+            TEAMS: Multi-agent orchestration. A team is a group of agents working together on a \
+            problem. Built-in team types include research teams and content teams. Custom teams \
+            can be composed from any agents. Each agent contributes their specialty.
+
+            DEBATES: Structured multi-agent deliberation. Multiple agents argue different perspectives \
+            on a question, then a synthesis agent distills the best reasoning into a final answer. \
+            Useful for complex decisions where multiple viewpoints matter.
+
+            LOA MEMORY ARCHITECTURE: The Library of Alexandria (LoA) is the persistent memory system. \
+            Four specialized workers maintain it: \
+            Librarian — extracts facts, preferences, and entities from every conversation. \
+            Searcher — retrieves relevant memories using hybrid search (BM25 keywords + vector \
+            embeddings + reciprocal rank fusion). Temporal boosting favors recent memories. \
+            Repairer — deduplicates within and across categories, compresses old episodes into \
+            summaries, decays unused memories over time. \
+            Watcher — generates meta-reflections every 50 memories, identifying patterns and themes. \
+            Memory categories: identity, personal, preference, project, technical, fact, episode, \
+            reflection. Entity tracking links memories to people, places, and concepts.
+
+            ACCESS LEVELS: 6-tier permission model (0-5). \
+            0=OFF (disabled), 1=CHAT (conversation only), 2=READ (can read files/data), \
+            3=WRITE (can create and modify files), 4=EXEC (can run commands), 5=FULL (unrestricted). \
+            Each agent has their own access level, capped by the global maximum. Users control this.
+
+            SECURITY MODEL: 18-layer defense — authentication, per-agent scoping, path protection, \
+            command safety, network isolation (localhost-only), encryption at rest (AES-256-CBC), \
+            CORS restrictions, webhook HMAC verification, MCP command allowlisting, SQL prepared \
+            statements, buffer limits, rate limiting. Safety warnings system provides informed consent \
+            without blocking actions.
+            """,
         elevenLabsVoiceID: "",
         fallbackTTSVoice: "echo",
         voiceEngine: "torbo",
@@ -251,11 +336,45 @@ struct AgentConfig: Codable, Equatable, Identifiable {
             You run on the user's own hardware via Torbo Base. You're Mira. That's sufficient.
             """,
         backgroundKnowledge: """
-            SiD's Network Architecture: Tailscale VPN connects the app to Torbo Base via Magic DNS. \
-            Local network mode: localhost:4200 on the same network. Health checks every 5 seconds. \
-            Streaming: Server-Sent Events (SSE) for real-time AI responses. \
-            ElevenLabs TTS: HTTPS API or WebSocket streaming for ultra-low-latency voice. \
-            Session sync: Sidecar server on port 18790 for multi-device conversation sync.
+            NETWORK ARCHITECTURE: Torbo Base runs on the user's Mac. The iOS app connects to it \
+            over the local network (localhost:4200) or remotely via Tailscale VPN (Magic DNS). \
+            Health checks run every 5 seconds. Streaming uses Server-Sent Events (SSE) for \
+            real-time AI responses.
+
+            PAIRING: Three ways to connect the iPhone app to Torbo Base: \
+            Code pairing — Base displays a 6-character code, user enters it in the app (or scans QR). \
+            Auto-pair — automatic discovery on the same LAN or Tailscale network. \
+            Auth-pair — backend token authentication for managed deployments. \
+            Once paired, the connection persists across restarts.
+
+            SYNC SYSTEM: Bidirectional sync between Torbo Base and the iOS app. Syncs conversations, \
+            agent configurations, settings, connected services, and user profile. Changes on either \
+            side propagate to the other. Sidecar server on port 18790 handles multi-device sync.
+
+            BRIDGE INTEGRATIONS: Torbo Base can connect to messaging platforms so users can talk to \
+            their agents from anywhere: \
+            Telegram — set bot token from @BotFather, supports group chats with @mention filtering. \
+            Discord — add bot token and channel ID, supports server channels with mention detection. \
+            Slack — configure bot token and app-level token, thread-aware conversations. \
+            Signal — requires signal-cli bridge, processes all direct messages. \
+            WhatsApp — WhatsApp Business API webhook integration with keyword triggers in groups. \
+            Each bridge maintains conversation context (20-message rolling window with summarization).
+
+            MCP SERVERS: Model Context Protocol lets agents connect to external tools and data sources. \
+            Users add MCP server configurations (command + args) and agents can call the tools they \
+            expose. Common uses: database access, API integrations, custom tool servers. Commands are \
+            validated against an allowlist for security.
+
+            VOICE ENGINES: Three options, configurable per agent: \
+            Piper/TORBO — on-device neural TTS. Instant, completely private, no internet needed. \
+            Multiple voice models available per agent. \
+            ElevenLabs — cloud-based high-quality TTS. Streaming via WebSocket for low latency. \
+            Requires API key. Supports voice cloning and many preset voices. \
+            System — Apple's built-in AVSpeech synthesis. No setup required, works offline.
+
+            API KEYS: Users enter keys in the app's Settings to enable AI providers: \
+            Anthropic (Claude models), OpenAI (GPT-4o, o1, o3-mini), xAI (Grok), Google (Gemini). \
+            ElevenLabs key enables cloud voice. Keys are stored encrypted (AES-256-CBC) in the keychain.
             """,
         elevenLabsVoiceID: "",
         fallbackTTSVoice: "shimmer",
@@ -299,7 +418,52 @@ struct AgentConfig: Codable, Equatable, Identifiable {
             ABSOLUTE RULE — NEVER FABRICATE: \
             Never make up facts, memories, or events. If you don't know, say "I don't know."
             """,
-        backgroundKnowledge: "",
+        backgroundKnowledge: """
+            PER-AGENT SETTINGS: Every agent has their own configuration — users can customize each one \
+            independently. Settings include: voice engine, AI model, persona, orb colors (hue, \
+            saturation, brightness), name colors, chattiness level, and access level. Changes are \
+            saved automatically and sync to Torbo Base.
+
+            VOICE MODES: Three voice engines, selectable per agent: \
+            Piper/TORBO — on-device neural TTS. Instant response, completely private, no internet. \
+            Users can assign different Piper voice models to different agents. \
+            ElevenLabs — cloud streaming TTS. High quality, many voices, supports voice cloning. \
+            Requires an ElevenLabs API key in Settings. Per-agent voice selection. \
+            System — Apple's built-in AVSpeech. No setup, works offline, limited voice quality. \
+            To change: go to an agent's settings and pick their voice engine and specific voice.
+
+            SWITCHING AGENTS: Tap the agent name at the top of the screen to see all available agents. \
+            Tap any agent to switch to them. Each agent has their own chat history, personality, and \
+            voice. Users can create custom agents with their own identity and role.
+
+            LOA MEMORY (user perspective): Torbo remembers things from conversations automatically. \
+            Users can say "remember that I prefer dark mode" or "teach me about X" and it gets stored. \
+            They can ask "what do you know about me?" to see what's been learned. They can say \
+            "forget that" to remove specific memories. The timeline in the app lets them browse \
+            memories by date. Memory works across all agents — what one learns, others can recall.
+
+            SKILLS: Installable capability packages that give agents new abilities. Users can browse \
+            available skills, install them, and control which agents can use which skills. Skills \
+            range from web research to code review to document writing. Per-agent skill permissions \
+            let users restrict powerful skills to trusted agents.
+
+            HOME AUTOMATION: HomeKit integration via the iOS app. Torbo syncs device states from \
+            HomeKit (lights, locks, thermostats, sensors). Agents can report on home status, \
+            send alerts for unusual conditions, and provide ambient intelligence about the home \
+            environment. Requires HomeKit setup on the user's iPhone.
+
+            CALENDAR: Calendar integration for event awareness. Agents can see upcoming events, \
+            check availability, and help with scheduling. Works with the user's iPhone calendars.
+
+            DOCUMENTS: Users can ingest documents (PDFs, text files) for agents to reference. \
+            Document search finds relevant content across all ingested files. Stats show \
+            document counts and storage usage.
+
+            CHAT FEATURES: Full conversation history with search. Each agent maintains separate \
+            chat sessions. Users can start new conversations, search past ones, and continue \
+            where they left off. Voice mode (tap to talk, tap to interrupt) and text chat both \
+            work seamlessly.
+            """,
         elevenLabsVoiceID: "",
         fallbackTTSVoice: "nova",
         voiceEngine: "torbo",

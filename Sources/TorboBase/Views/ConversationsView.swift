@@ -182,7 +182,9 @@ struct ConversationsView: View {
 
     private func conversationRow(_ session: ConversationSession, agentID: String) -> some View {
         Button {
-            // Navigate to Agents tab and open this conversation
+            // Navigate to Agents tab and open this specific conversation
+            state.navigateToAgentID = agentID
+            state.navigateToSessionID = session.id
             state.currentTab = .agents
         } label: {
             HStack(spacing: 12) {

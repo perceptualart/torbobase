@@ -324,6 +324,43 @@ actor ConversationStore {
         }
     }
 
+    /// Find the most recent chat session ID for an agent by scanning agent_chats/ directory
+    func mostRecentSessionID(forAgent agentID: String) -> UUID? {
+        let fm = FileManager.default
+        guard let files = try? fm.contentsOfDirectory(at: agentChatsDir, includingPropertiesForKeys: [.contentModificationDateKey]) else { return nil }
+        let prefix = "\(agentID)_"
+        var best: (uuid: UUID, date: Date)? = nil
+        for file in files where file.lastPathComponent.hasPrefix(prefix) && file.pathExtension == "json" {
+            let name = file.deletingPathExtension().lastPathComponent
+            let uuidStr = String(name.dropFirst(prefix.count))
+            guard let uuid = UUID(uuidString: uuidStr) else { continue }
+            let date = (try? file.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
+            if best == nil || date > best!.date {
+                best = (uuid, date)
+            }
+        }
+        return best?.uuid
+    }
+
+    /// Ensure a session entry exists in sessions.json for a given agent + session
+    func ensureSessionExists(agentID: String, sessionID: UUID, messageCount: Int) {
+        var sessions = loadSessions()
+        if let idx = sessions.firstIndex(where: { $0.id == sessionID }) {
+            // Update existing session
+            sessions[idx].lastActivity = Date()
+            sessions[idx].messageCount = messageCount
+        } else {
+            // Create new session entry with the exact UUID we're using
+            let session = ConversationSession(
+                id: sessionID, startedAt: Date(), lastActivity: Date(),
+                messageCount: messageCount, model: "unknown",
+                title: "Conversation", agentID: agentID
+            )
+            sessions.insert(session, at: 0)
+        }
+        saveSessions(sessions)
+    }
+
     /// Load sessions filtered by agent ID
     func loadSessions(forAgent agentID: String) -> [ConversationSession] {
         let all = loadSessions()

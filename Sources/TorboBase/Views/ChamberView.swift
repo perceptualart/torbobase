@@ -241,7 +241,7 @@ struct ChamberView: View {
     private func voiceModeView(_ chamber: Chamber) -> some View {
         VStack(spacing: 0) {
             // Black background with orbs — tap anywhere to interrupt speaking
-            TimelineView(.animation(minimumInterval: 1.0 / 20.0, paused: manager.respondingAgentID == nil)) { _ in
+            TimelineView(.animation(minimumInterval: 1.0 / 20.0, paused: manager.respondingAgentID == nil && !tts.isSpeaking && !isChamberVoiceActive)) { _ in
                 ZStack {
                     Color.black
 
@@ -438,37 +438,132 @@ struct ChamberView: View {
         }
     }
 
+    private var avgAudioLevel: Double {
+        let levels = tts.audioLevels
+        guard !levels.isEmpty else { return 0 }
+        return Double(levels.reduce(0, +)) / Double(levels.count)
+    }
+
+    private func orbAudioLevels(isActivelySpeaking: Bool, isResponding: Bool) -> [Float] {
+        if isActivelySpeaking {
+            // Boost the levels so OrbRenderer gets more dramatic input
+            return tts.audioLevels.map { min($0 * 1.8, 1.0) }
+        } else if isResponding {
+            // Thinking pulse — shows this agent is generating text
+            let t = Float(Date.timeIntervalSinceReferenceDate)
+            let pulse = Float(0.15 + sin(t * 2.0) * 0.08 + sin(t * 3.7) * 0.04)
+            return Array(repeating: pulse, count: 40)
+        } else {
+            return Array(repeating: Float(0.05), count: 40)
+        }
+    }
+
+    /// Dynamic orb size driven by audio level — breathes with speech
+    private func orbDisplaySize(baseSize: CGFloat, isActivelySpeaking: Bool, isResponding: Bool) -> CGFloat {
+        if isActivelySpeaking {
+            let avg = avgAudioLevel
+            // Scale from 1.15x (quiet) to 1.6x (loud) based on audio
+            let scale = 1.15 + avg * 1.2
+            return baseSize * min(CGFloat(scale), 1.6)
+        } else if isResponding {
+            // Gentle breathing while thinking
+            let t = Date.timeIntervalSinceReferenceDate
+            let breath = 1.05 + sin(t * 2.0) * 0.03
+            return baseSize * CGFloat(breath)
+        } else {
+            return baseSize
+        }
+    }
+
+    private func orbNameOpacity(isActivelySpeaking: Bool, isResponding: Bool, someoneSpeaking: Bool) -> Double {
+        if isActivelySpeaking {
+            let avg = avgAudioLevel
+            return 0.8 + min(avg * 0.5, 0.2)
+        } else if isResponding {
+            return 0.7
+        } else if someoneSpeaking {
+            // Dim non-speaking orb names when someone else is talking
+            return 0.25
+        } else {
+            return 0.5
+        }
+    }
+
+    /// Dim non-speaking orbs when one agent is active
+    private func orbDimming(isActivelySpeaking: Bool, isResponding: Bool, someoneSpeaking: Bool) -> Double {
+        if isActivelySpeaking || isResponding {
+            return 1.0
+        } else if someoneSpeaking {
+            return 0.5
+        } else {
+            return 1.0
+        }
+    }
+
+    private func isTopRow(index: Int, count: Int) -> Bool {
+        switch count {
+        case 1: return false
+        case 2: return false
+        case 3: return index == 0
+        case 4: return index < 2
+        default: return false
+        }
+    }
+
     @ViewBuilder
     private func singleOrb(agentID: String, index: Int, count: Int, center: CGPoint, radius: CGFloat) -> some View {
         let agent = agents.first(where: { $0.id == agentID })
         let name = agent?.name ?? agentID
-        let isSpeaking = manager.respondingAgentID == agentID
-        let accessLevel = agent?.accessLevel ?? 1
+        let isResponding = manager.respondingAgentID == agentID
+        let isActivelySpeaking = isResponding && tts.isSpeaking
+        let someoneSpeaking = manager.respondingAgentID != nil
         let orbSize: CGFloat = count <= 4 ? 240 : 180
         let pos = orbPosition(index: index, count: count, center: center, radius: radius)
-        let levels: [Float] = isSpeaking ? tts.audioLevels : Array(repeating: Float(0.08), count: 40)
-        let orbColor = AccessLevel(rawValue: accessLevel)?.color ?? Color.cyan
-        let displaySize = isSpeaking ? orbSize * 1.1 : orbSize
+        let levels = orbAudioLevels(isActivelySpeaking: isActivelySpeaking, isResponding: isResponding)
+        let hue = agentOrbHue(agentID) ?? 0.5
+        let orbColor = Color(hue: hue, saturation: 0.7, brightness: 0.9)
+        let displaySize = orbDisplaySize(baseSize: orbSize, isActivelySpeaking: isActivelySpeaking, isResponding: isResponding)
         let modelName = agent?.preferredModel.isEmpty == false ? agent!.preferredModel : "Default"
+        let nameOpacity = orbNameOpacity(isActivelySpeaking: isActivelySpeaking, isResponding: isResponding, someoneSpeaking: someoneSpeaking)
+        let dimming = orbDimming(isActivelySpeaking: isActivelySpeaking, isResponding: isResponding, someoneSpeaking: someoneSpeaking)
+        let nameOnTop = isTopRow(index: index, count: count)
 
         VStack(spacing: 6) {
-            OrbRenderer(
-                audioLevels: levels,
-                color: orbColor,
-                isActive: true
-            )
-            .frame(width: displaySize, height: displaySize)
-            .animation(.easeInOut(duration: 0.3), value: isSpeaking)
+            if nameOnTop {
+                Text(modelName)
+                    .font(.system(size: 10, weight: .medium, design: .monospaced))
+                    .foregroundStyle(.white.opacity(0.25 * dimming))
+                    .lineLimit(1)
+                Text(name)
+                    .font(.system(size: 28, weight: isResponding ? .bold : .medium, design: .monospaced))
+                    .foregroundStyle(.white.opacity(nameOpacity))
+            }
 
-            Text(name)
-                .font(.system(size: 28, weight: isSpeaking ? .bold : .medium, design: .monospaced))
-                .foregroundStyle(isSpeaking ? .white : .white.opacity(0.5))
+            Color.clear
+                .frame(width: displaySize, height: displaySize)
+                .overlay(
+                    OrbRenderer(
+                        audioLevels: levels,
+                        color: orbColor,
+                        isActive: true,
+                        orbRadius: displaySize * 0.42
+                    )
+                    .allowsHitTesting(false)
+                )
+                .opacity(dimming)
 
-            Text(modelName)
-                .font(.system(size: 10, weight: .medium, design: .monospaced))
-                .foregroundStyle(.white.opacity(0.25))
-                .lineLimit(1)
+            if !nameOnTop {
+                Text(name)
+                    .font(.system(size: 28, weight: isResponding ? .bold : .medium, design: .monospaced))
+                    .foregroundStyle(.white.opacity(nameOpacity))
+                Text(modelName)
+                    .font(.system(size: 10, weight: .medium, design: .monospaced))
+                    .foregroundStyle(.white.opacity(0.25 * dimming))
+                    .lineLimit(1)
+            }
         }
+        .animation(.easeOut(duration: 0.08), value: displaySize)
+        .animation(.easeInOut(duration: 0.2), value: isResponding)
         .position(pos)
     }
 

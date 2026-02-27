@@ -110,9 +110,16 @@ struct AgentChatView: View {
                 voiceAssistantIndex = nil
             }
         }
-        // Persistence: load on appear
+        // Persistence: load on appear (finds most recent session when no explicit sessionID)
         .task(id: sessionID ?? currentSessionID) {
-            let sid = sessionID ?? currentSessionID
+            let sid: UUID
+            if let explicit = sessionID {
+                sid = explicit
+            } else if let recent = await ConversationStore.shared.mostRecentSessionID(forAgent: agentID) {
+                sid = recent
+            } else {
+                sid = currentSessionID
+            }
             currentSessionID = sid
             let loaded = await ConversationStore.shared.loadAgentChat(agentID: agentID, sessionID: sid)
             if !loaded.isEmpty {
@@ -133,6 +140,9 @@ struct AgentChatView: View {
                 guard !toSave.isEmpty else { return }
                 await ConversationStore.shared.saveAgentChat(
                     agentID: agentID, sessionID: currentSessionID, messages: toSave
+                )
+                await ConversationStore.shared.ensureSessionExists(
+                    agentID: agentID, sessionID: currentSessionID, messageCount: toSave.count
                 )
             }
         }

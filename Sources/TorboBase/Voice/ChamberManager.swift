@@ -175,14 +175,18 @@ final class ChamberManager: ObservableObject {
             // Add to context for collaborative mode
             conversationContext.append(["role": "assistant", "content": "[\(agentName)]: \(cleaned)"])
 
+            // Set respondingAgentID right before TTS so the correct orb lights up
+            respondingAgentID = agentID
+
             // Fire callback — caller awaits TTS finish before next agent starts
             await onAgentDone(agentID, agentName, cleaned)
 
-            // Brief pause between agents
-            try? await Task.sleep(nanoseconds: 150_000_000)
-        }
+            // Clear between agents so orbs visually reset before next one lights up
+            respondingAgentID = nil
 
-        respondingAgentID = nil
+            // Brief pause between agents
+            try? await Task.sleep(nanoseconds: 300_000_000)
+        }
 
         // Advance round-robin offset
         if chamber.discussionStyle == .roundRobin {
@@ -217,6 +221,8 @@ final class ChamberManager: ObservableObject {
         Discussion style: \(chamber.discussionStyle.rawValue)
 
         Rules:
+        - NEVER introduce yourself or say your name — your identity is already shown in the UI
+        - Jump straight into your response — no "Hi, I'm X" or "As X, I think..."
         - Keep responses concise (2-4 sentences typically)
         - You may reference or build on what other agents said
         - Address other agents by name if responding to them

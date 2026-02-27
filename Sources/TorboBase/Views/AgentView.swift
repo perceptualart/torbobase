@@ -132,6 +132,31 @@ struct AgentsView: View {
             }
         }
         .task { await loadAgents() }
+        .onChange(of: state.navigateToAgentID) { targetAgentID in
+            guard let targetAgentID else { return }
+            // Switch to the requested agent
+            if let agent = agents.first(where: { $0.id == targetAgentID }) {
+                isSwitchingAgent = true
+                selectedAgentID = targetAgentID
+                editConfig = agent
+                Task { @MainActor in
+                    try? await Task.sleep(nanoseconds: 50_000_000)
+                    isSwitchingAgent = false
+                }
+                Task {
+                    agentTasks = await TaskQueue.shared.tasksForAgent(targetAgentID)
+                    agentActiveTasks = await ParallelExecutor.shared.activeTaskIDs
+                }
+            }
+            // Load the requested session if provided
+            if let sessionID = state.navigateToSessionID {
+                activeSessionID = sessionID
+                viewMode = .chat
+            }
+            // Clear navigation state so it doesn't re-trigger
+            state.navigateToAgentID = nil
+            state.navigateToSessionID = nil
+        }
         .sheet(isPresented: $showCreateSheet) { createAgentSheet }
         .alert("Delete Agent?", isPresented: $showDeleteConfirm) {
             Button("Delete", role: .destructive) { Task { await deleteSelectedAgent() } }
@@ -1195,31 +1220,39 @@ struct AgentsView: View {
     }
 
     private func sessionRow(_ session: ConversationSession) -> some View {
-        HStack(spacing: 8) {
-            Image(systemName: "bubble.left.fill")
-                .font(.system(size: 9))
-                .foregroundStyle(.white.opacity(0.25))
-            VStack(alignment: .leading, spacing: 2) {
-                Text(session.title)
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(.white.opacity(0.6))
-                    .lineLimit(1)
-                HStack(spacing: 4) {
-                    Text("\(session.messageCount) msgs")
-                        .font(.system(size: 9, design: .monospaced))
-                        .foregroundStyle(.white.opacity(0.25))
-                    Text("·")
-                        .foregroundStyle(.white.opacity(0.15))
-                    Text(relativeTime(session.lastActivity))
-                        .font(.system(size: 9, design: .monospaced))
-                        .foregroundStyle(.white.opacity(0.2))
+        let isActive = activeSessionID == session.id
+        return Button {
+            activeSessionID = session.id
+            viewMode = .chat
+        } label: {
+            HStack(spacing: 8) {
+                Image(systemName: "bubble.left.fill")
+                    .font(.system(size: 9))
+                    .foregroundStyle(isActive ? .cyan.opacity(0.6) : .white.opacity(0.25))
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(session.title)
+                        .font(.system(size: 11, weight: isActive ? .bold : .medium))
+                        .foregroundStyle(isActive ? .white : .white.opacity(0.6))
+                        .lineLimit(1)
+                    HStack(spacing: 4) {
+                        Text("\(session.messageCount) msgs")
+                            .font(.system(size: 9, design: .monospaced))
+                            .foregroundStyle(.white.opacity(0.25))
+                        Text("·")
+                            .foregroundStyle(.white.opacity(0.15))
+                        Text(relativeTime(session.lastActivity))
+                            .font(.system(size: 9, design: .monospaced))
+                            .foregroundStyle(.white.opacity(0.2))
+                    }
                 }
+                Spacer()
             }
-            Spacer()
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .background(isActive ? Color.cyan.opacity(0.06) : Color.clear)
+            .clipShape(RoundedRectangle(cornerRadius: 6))
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 6)
-        .clipShape(RoundedRectangle(cornerRadius: 6))
+        .buttonStyle(.plain)
     }
 
     // MARK: - Create Agent Sheet

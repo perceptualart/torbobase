@@ -614,6 +614,8 @@ final class AppState: _TorboObservable {
 
     // Navigation
     var currentTab: DashboardTab = .home { willSet { willChangeUI() } }
+    var navigateToAgentID: String? { willSet { willChangeUI() } }
+    var navigateToSessionID: UUID? { willSet { willChangeUI() } }
 
     // Voice
     var voiceEnabled: Bool = false { willSet { willChangeUI() } }
