@@ -609,7 +609,7 @@ actor GatewayServer {
 
     /// Detect this machine's Tailscale IP by scanning network interfaces for CGNAT range (100.64.0.0/10).
     /// Returns the IP string if found, nil otherwise. No subprocess — pure getifaddrs.
-    nonisolated private static func detectTailscaleIP() -> String? {
+    nonisolated static func detectTailscaleIP() -> String? {
         var ifaddr: UnsafeMutablePointer<ifaddrs>?
         guard getifaddrs(&ifaddr) == 0, let first = ifaddr else { return nil }
         defer { freeifaddrs(ifaddr) }
@@ -635,7 +635,7 @@ actor GatewayServer {
 
     /// Detect this machine's Tailscale Magic DNS hostname via `tailscale status --json`.
     /// Returns the hostname (e.g. "mymac.tail1234.ts.net") or nil if Tailscale not running.
-    nonisolated private static func detectTailscaleHostname() -> String? {
+    nonisolated static func detectTailscaleHostname() -> String? {
         // Check common Tailscale CLI locations
         let paths = ["/opt/homebrew/bin/tailscale", "/usr/local/bin/tailscale"]
         guard let execPath = paths.first(where: { FileManager.default.fileExists(atPath: $0) }) else { return nil }
@@ -883,8 +883,9 @@ actor GatewayServer {
         }
 
         // Per-token rate limiting: 100 requests/hour per bearer token
-        // Exempt sync endpoints — they poll frequently by design
-        if let token = Self.extractBearerToken(from: req), !req.path.hasPrefix("/v1/sync") {
+        // Exempt sync endpoints (poll frequently) and localhost (IP limiter suffices)
+        let isLoopback = clientIP == "127.0.0.1" || clientIP == "::1" || clientIP == "localhost"
+        if let token = Self.extractBearerToken(from: req), !req.path.hasPrefix("/v1/sync"), !isLoopback {
             let (limited, retryAfter) = isTokenRateLimited(token: token)
             if limited {
                 let masked = Self.maskToken(token)
@@ -936,6 +937,18 @@ actor GatewayServer {
         // Unpair user account (requires auth)
         if req.method == "POST" && req.path == "/unpair" {
             return await handleUnpair(req, clientIP: clientIP)
+        }
+
+        // Owner management (Apple ID binding)
+        if req.method == "GET" && req.path == "/v1/owner" {
+            return await guardedRoute(level: .readFiles, current: currentLevel, clientIP: clientIP, req: req) {
+                await self.handleGetOwner()
+            }
+        }
+        if req.method == "POST" && req.path == "/v1/owner/reset" {
+            return await guardedRoute(level: .fullAccess, current: currentLevel, clientIP: clientIP, req: req) {
+                await self.handleResetOwner(req, clientIP: clientIP)
+            }
         }
 
         // ── Cloud Auth Routes (require cloud JWT) ──
@@ -2258,6 +2271,54 @@ actor GatewayServer {
         // L-7: Sanitize device name
         let deviceName = String(rawDeviceName.unicodeScalars.filter { !$0.properties.isDefaultIgnorableCodePoint && $0.value >= 0x20 }.prefix(64))
 
+        // Require Apple Sign-In identity token
+        guard let authToken = body["authToken"] as? String, !authToken.isEmpty else {
+            return HTTPResponse(statusCode: 401, headers: ["Content-Type": "application/json"],
+                              body: Data("{\"error\":\"Missing 'authToken' — Apple Sign-In required\"}".utf8))
+        }
+
+        // Verify the Apple JWT
+        let claims: AppleJWTClaims
+        do {
+            claims = try await AppleJWTVerifier.shared.verify(authToken)
+        } catch let error as AppleJWTError {
+            let statusCode: Int
+            switch error {
+            case .expired:
+                statusCode = 401
+            case .offlineNoCache:
+                statusCode = 503
+            default:
+                statusCode = 403
+            }
+            TorboLog.warn("Auto-pair JWT verification failed: \(error)", subsystem: "Pairing")
+            await audit(clientIP: clientIP, method: "POST", path: "/pair/auto",
+                       required: .chatOnly, granted: false, detail: "JWT verification failed: \(error)")
+            return HTTPResponse(statusCode: statusCode, headers: ["Content-Type": "application/json"],
+                              body: Data("{\"error\":\"Apple Sign-In verification failed: \(error)\"}".utf8))
+        } catch {
+            TorboLog.error("Auto-pair unexpected JWT error: \(error)", subsystem: "Pairing")
+            return HTTPResponse(statusCode: 500, headers: ["Content-Type": "application/json"],
+                              body: Data("{\"error\":\"Internal verification error\"}".utf8))
+        }
+
+        // Owner check: bind this Base to one Apple account
+        let storedOwner = KeychainManager.getOwnerAppleUserID()
+        if let storedOwner {
+            // Already claimed — verify same account
+            guard claims.sub == storedOwner else {
+                TorboLog.warn("Auto-pair owner mismatch: \(claims.sub.prefix(8))... vs stored \(storedOwner.prefix(8))...", subsystem: "Pairing")
+                await audit(clientIP: clientIP, method: "POST", path: "/pair/auto",
+                           required: .chatOnly, granted: false, detail: "Owner mismatch")
+                return HTTPResponse(statusCode: 403, headers: ["Content-Type": "application/json"],
+                                  body: Data("{\"error\":\"This Base is owned by a different Apple account\"}".utf8))
+            }
+        } else {
+            // First auto-pair — claim ownership
+            KeychainManager.setOwnerAppleUserID(claims.sub)
+            TorboLog.info("Owner claimed: \(claims.sub.prefix(8))... (email: \(claims.email ?? "hidden"))", subsystem: "Pairing")
+        }
+
         // Check if this device is already paired (by name) — return existing token
         let existing: (token: String, id: String)? = await MainActor.run {
             if let device = PairingManager.shared.pairedDevices.first(where: { $0.name == deviceName }) {
@@ -2275,9 +2336,9 @@ actor GatewayServer {
 
         let networkType = clientIP.hasPrefix("100.") ? "Tailscale" : "LAN"
 
-        // Create a new paired device directly (no code needed — trusted network is the anchor)
+        // Create a new paired device directly (verified Apple identity is the trust anchor)
         let result: (token: String, deviceId: String) = await MainActor.run {
-            PairingManager.shared.autoPair(deviceName: deviceName)
+            PairingManager.shared.autoPair(deviceName: deviceName, appleUserID: claims.sub)
         }
 
         let token = result.token
@@ -2289,9 +2350,9 @@ actor GatewayServer {
                               body: Data("{\"error\":\"Auto-pair failed\"}".utf8))
         }
 
-        TorboLog.info("Auto-paired \(deviceName) from \(networkType) IP \(clientIP)", subsystem: "Pairing")
+        TorboLog.info("Auto-paired \(deviceName) from \(networkType) IP \(clientIP) (Apple: \(claims.sub.prefix(8))...)", subsystem: "Pairing")
         await audit(clientIP: clientIP, method: "POST", path: "/pair/auto",
-                   required: .chatOnly, granted: true, detail: "Auto-paired: \(deviceName) (\(networkType))")
+                   required: .chatOnly, granted: true, detail: "Auto-paired: \(deviceName) (\(networkType), Apple verified)")
         Task { await TelegramBridge.shared.notify("Device auto-paired: \(deviceName) (\(networkType))") }
         var newResponse: [String: Any] = ["token": token, "deviceId": deviceId, "status": "new"]
         if let tsIP = Self.detectTailscaleIP() { newResponse["tailscaleIP"] = tsIP }
@@ -2373,7 +2434,8 @@ actor GatewayServer {
         var response: [String: Any] = [
             "paired": account != nil,
             "devices": deviceList,
-            "device_count": devices.count
+            "device_count": devices.count,
+            "hasOwner": KeychainManager.getOwnerAppleUserID() != nil
         ]
 
         if let account {
@@ -2400,6 +2462,43 @@ actor GatewayServer {
         Task { await EventBus.shared.publish("sync.user.unpaired", payload: ["wipe_data": String(wipeData)], source: "Gateway") }
 
         return HTTPResponse.json(["status": "unpaired", "data_wiped": wipeData])
+    }
+
+    // MARK: - Owner Management
+
+    private func handleGetOwner() async -> HTTPResponse {
+        let ownerID = KeychainManager.getOwnerAppleUserID()
+        let devices = await MainActor.run { PairingManager.shared.pairedDevices }
+        var response: [String: Any] = [
+            "hasOwner": ownerID != nil,
+            "pairedDeviceCount": devices.count
+        ]
+        if let ownerID {
+            // Return a prefix for identification without exposing the full sub
+            response["ownerPrefix"] = String(ownerID.prefix(8))
+        }
+        return HTTPResponse.json(response)
+    }
+
+    private func handleResetOwner(_ req: HTTPRequest, clientIP: String) async -> HTTPResponse {
+        let wipeDevices = (req.jsonBody?["wipe_devices"] as? Bool) ?? false
+
+        KeychainManager.clearOwnerAppleUserID()
+        TorboLog.info("Owner Apple ID cleared", subsystem: "Pairing")
+
+        if wipeDevices {
+            await MainActor.run {
+                PairingManager.shared.pairedDevices.removeAll()
+            }
+            // Save cleared device list
+            KeychainManager.savePairedDevices([])
+            TorboLog.info("All paired devices wiped during owner reset", subsystem: "Pairing")
+        }
+
+        await audit(clientIP: clientIP, method: "POST", path: "/v1/owner/reset",
+                   required: .fullAccess, granted: true, detail: "Owner reset (wipe_devices: \(wipeDevices))")
+
+        return HTTPResponse.json(["status": "owner_reset", "devices_wiped": wipeDevices])
     }
 
     // MARK: - Network Helpers
@@ -2623,7 +2722,7 @@ actor GatewayServer {
                         } else {
                             simulateStreamResponse(content, model: model, writer: writer, corsOrigin: corsOrigin)
                         }
-                        logAssistantResponse(response, model: model, clientIP: clientIP, originalMessages: req.jsonBody?["messages"], cloudContext: cloudContext, router: router)
+                        logAssistantResponse(response, model: model, clientIP: clientIP, originalMessages: req.jsonBody?["messages"], agentID: agentID, cloudContext: cloudContext, router: router)
                     } else {
                         let bodyStr = String(data: response.body, encoding: .utf8) ?? "(empty)"
                         TorboLog.warn("Tool loop: empty/unparseable response from \(model) (status \(response.statusCode)): \(bodyStr.prefix(500))", subsystem: "Gateway")
@@ -2743,7 +2842,7 @@ actor GatewayServer {
 
         // Route cloud models through their streaming APIs
         if model.hasPrefix("claude") || model.hasPrefix("gpt") || model.hasPrefix("gemini") || model.hasPrefix("grok") {
-            await streamCloudCompletion(body: body, model: model, clientIP: clientIP, writer: writer, corsOrigin: corsOrigin, cloudContext: cloudContext, router: router)
+            await streamCloudCompletion(body: body, model: model, clientIP: clientIP, agentID: agentID, writer: writer, corsOrigin: corsOrigin, cloudContext: cloudContext, router: router)
             return
         }
 
@@ -2846,7 +2945,7 @@ actor GatewayServer {
 
     // MARK: - Cloud Streaming
 
-    private func streamCloudCompletion(body: [String: Any], model: String, clientIP: String, writer: ResponseWriter, corsOrigin: String? = nil, cloudContext: CloudRequestContext? = nil, router: MemoryRouter? = nil) async {
+    private func streamCloudCompletion(body: [String: Any], model: String, clientIP: String, agentID: String = "sid", writer: ResponseWriter, corsOrigin: String? = nil, cloudContext: CloudRequestContext? = nil, router: MemoryRouter? = nil) async {
         let keys = await MainActor.run { AppState.shared.cloudAPIKeys }
         var fullContent = ""
 
@@ -3222,7 +3321,7 @@ actor GatewayServer {
         // Log the full assistant response
         let capturedCloudContent = fullContent
         if !capturedCloudContent.isEmpty {
-            let assistantMsg = ConversationMessage(role: "assistant", content: capturedCloudContent, model: model, clientIP: clientIP)
+            let assistantMsg = ConversationMessage(role: "assistant", content: capturedCloudContent, model: model, clientIP: clientIP, agentID: agentID)
             if let ctx = cloudContext {
                 let svc = await CloudUserManager.shared.services(for: ctx)
                 await svc.conversationStore.appendMessage(assistantMsg)
@@ -3375,7 +3474,7 @@ actor GatewayServer {
                   let json = try? JSONSerialization.jsonObject(with: response.body) as? [String: Any],
                   await ToolProcessor.shared.hasBuiltInToolCalls(json) else {
                 // No built-in tool calls (or error) — log and return as-is
-                logAssistantResponse(response, model: model, clientIP: clientIP, originalMessages: req.jsonBody?["messages"], cloudContext: cloudContext, router: router)
+                logAssistantResponse(response, model: model, clientIP: clientIP, originalMessages: req.jsonBody?["messages"], agentID: agentID, cloudContext: cloudContext, router: router)
                 return response
             }
 
@@ -3432,7 +3531,7 @@ actor GatewayServer {
 
         // Max rounds reached — return whatever we have
         let finalResponse = await sendChatRequest(body: currentBody, model: model, clientIP: clientIP)
-        logAssistantResponse(finalResponse, model: model, clientIP: clientIP, originalMessages: req.jsonBody?["messages"], cloudContext: cloudContext, router: router)
+        logAssistantResponse(finalResponse, model: model, clientIP: clientIP, originalMessages: req.jsonBody?["messages"], agentID: agentID, cloudContext: cloudContext, router: router)
         return finalResponse
     }
 
@@ -3454,14 +3553,14 @@ actor GatewayServer {
     }
 
     /// Log assistant response and forward to Telegram
-    private func logAssistantResponse(_ response: HTTPResponse, model: String, clientIP: String, originalMessages: Any?, cloudContext: CloudRequestContext? = nil, router: MemoryRouter? = nil) {
+    private func logAssistantResponse(_ response: HTTPResponse, model: String, clientIP: String, originalMessages: Any?, agentID: String = "sid", cloudContext: CloudRequestContext? = nil, router: MemoryRouter? = nil) {
         guard response.statusCode == 200,
               let json = try? JSONSerialization.jsonObject(with: response.body) as? [String: Any],
               let choices = json["choices"] as? [[String: Any]],
               let first = choices.first,
               let message = first["message"] as? [String: Any],
               let content = message["content"] as? String else { return }
-        let assistantMsg = ConversationMessage(role: "assistant", content: content, model: model, clientIP: clientIP)
+        let assistantMsg = ConversationMessage(role: "assistant", content: content, model: model, clientIP: clientIP, agentID: agentID)
         if cloudContext == nil {
             let s = appState
             Task { @MainActor in s?.addMessage(assistantMsg) }

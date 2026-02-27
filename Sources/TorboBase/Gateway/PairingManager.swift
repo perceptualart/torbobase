@@ -56,6 +56,7 @@ struct PairedDevice: Codable, Identifiable {
     let pairedAt: Date
     var lastSeen: Date?
     var userID: String?     // Set when paired via /pair/auth (nil for code/auto-pair)
+    var appleUserID: String? // Apple Sign-In sub claim (set during auto-pair with JWT)
 
     var isRecent: Bool {
         guard let lastSeen else { return false }
@@ -146,10 +147,20 @@ final class PairingManager: _PairingManagerBase {
             port: Int32(port)
         )
 
-        // TXT record — minimal broadcast (no version or machine name for security)
-        let txt: [String: Data] = [
+        // TXT record — platform + Tailscale IP for zero-config discovery
+        var txt: [String: Data] = [
             "platform": Data("macos".utf8)
         ]
+
+        // Include Tailscale IP so the app can cache it during LAN discovery
+        // (eliminates chicken-and-egg: app knows TS IP before pairing)
+        if let tsIP = GatewayServer.detectTailscaleIP() {
+            txt["tsIP"] = Data(tsIP.utf8)
+        }
+        if let tsHost = GatewayServer.detectTailscaleHostname() {
+            txt["tsHost"] = Data(tsHost.utf8)
+        }
+
         netService?.setTXTRecord(NetService.data(fromTXTRecord: txt))
         netService?.publish()
         TorboLog.info("Bonjour: advertising \(serviceName) on port \(port)", subsystem: "Pairing")
@@ -234,7 +245,7 @@ final class PairingManager: _PairingManagerBase {
 
     /// Auto-pair a device without a code (for trusted networks like Tailscale).
     /// Creates a new paired device and returns its token + deviceId.
-    func autoPair(deviceName: String) -> (token: String, deviceId: String) {
+    func autoPair(deviceName: String, appleUserID: String? = nil) -> (token: String, deviceId: String) {
         let token = generateToken()
         let deviceId = UUID().uuidString
 
@@ -243,7 +254,8 @@ final class PairingManager: _PairingManagerBase {
             name: deviceName,
             token: token,
             pairedAt: Date(),
-            lastSeen: Date()
+            lastSeen: Date(),
+            appleUserID: appleUserID
         )
 
         pairedDevices.append(device)

@@ -398,6 +398,25 @@ enum KeychainManager {
         delete(userAccountKey)
     }
 
+    // MARK: - Convenience: Owner Apple User ID
+
+    private static let ownerAppleUserIDKey = "owner.appleUserID"
+
+    /// Store the owner's Apple user ID (sub claim from Sign-In JWT)
+    static func setOwnerAppleUserID(_ sub: String) {
+        set(sub, for: ownerAppleUserIDKey)
+    }
+
+    /// Retrieve the owner's Apple user ID
+    static func getOwnerAppleUserID() -> String? {
+        get(ownerAppleUserIDKey)
+    }
+
+    /// Clear the owner's Apple user ID (used during owner reset)
+    static func clearOwnerAppleUserID() {
+        delete(ownerAppleUserIDKey)
+    }
+
     // MARK: - Convenience: Paired Devices
 
     private static let pairedDevicesKey = "paired.devices"
