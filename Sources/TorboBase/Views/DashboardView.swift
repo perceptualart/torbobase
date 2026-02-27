@@ -45,7 +45,7 @@ struct DashboardView: View {
                 // Navigation
                 ScrollView(.vertical, showsIndicators: false) {
                     VStack(spacing: 20) {
-                        sidebarSection(nil, tabs: [.home, .agents, .chambers, .conversations])
+                        sidebarSection(nil, tabs: [.home, .agents, .chambers, .conversations, .connectors])
                         sidebarSection("Automation", tabs: [.jobs, .workflows, .scheduler, .skills])
                         sidebarSection("System", tabs: [.models, .security, .iam, .governance, .teams, .calendar])
                     }
@@ -122,6 +122,8 @@ struct DashboardView: View {
                     ConversationsView()
                 case .chambers:
                     ChamberView()
+                case .connectors:
+                    ConnectorsView()
                 case .jobs:
                     JobsView()
                 case .calendar:

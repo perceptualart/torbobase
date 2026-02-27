@@ -42,6 +42,7 @@ struct AgentConfig: Codable, Equatable, Identifiable {
     var directoryScopes: [String]       // Allowed paths (empty = unrestricted within sandbox)
     var enabledSkillIDs: [String]       // Skills this agent can use (empty = all)
     var enabledCapabilities: [String: Bool] = [:]  // Category toggles (empty = all enabled, false = disabled)
+    var enabledConnectors: [String: Bool] = [:]   // Per-agent connector toggles (empty = all global, false = disabled)
 
     // Model
     var preferredModel: String = ""    // Empty = use default; e.g. "llama3.2:3b", "claude-opus-4-6"
@@ -63,7 +64,8 @@ struct AgentConfig: Codable, Equatable, Identifiable {
          elevenLabsVoiceID: String, fallbackTTSVoice: String,
          voiceEngine: String = "system", systemVoiceIdentifier: String = "",
          accessLevel: Int, directoryScopes: [String], enabledSkillIDs: [String],
-         enabledCapabilities: [String: Bool] = [:], preferredModel: String = "",
+         enabledCapabilities: [String: Bool] = [:], enabledConnectors: [String: Bool] = [:],
+         preferredModel: String = "",
          dailyTokenLimit: Int = 0, weeklyTokenLimit: Int = 0, monthlyTokenLimit: Int = 0,
          hardStopOnBudget: Bool = true, lastModifiedAt: Date? = nil) {
         self.id = id; self.isBuiltIn = isBuiltIn; self.createdAt = createdAt
@@ -75,7 +77,7 @@ struct AgentConfig: Codable, Equatable, Identifiable {
         self.voiceEngine = voiceEngine; self.systemVoiceIdentifier = systemVoiceIdentifier
         self.accessLevel = accessLevel; self.directoryScopes = directoryScopes
         self.enabledSkillIDs = enabledSkillIDs; self.enabledCapabilities = enabledCapabilities
-        self.preferredModel = preferredModel
+        self.enabledConnectors = enabledConnectors; self.preferredModel = preferredModel
         self.dailyTokenLimit = dailyTokenLimit; self.weeklyTokenLimit = weeklyTokenLimit
         self.monthlyTokenLimit = monthlyTokenLimit; self.hardStopOnBudget = hardStopOnBudget
         self.lastModifiedAt = lastModifiedAt
@@ -88,7 +90,7 @@ struct AgentConfig: Codable, Equatable, Identifiable {
         case voiceTone, personalityPreset, coreValues, topicsToAvoid
         case customInstructions, backgroundKnowledge
         case elevenLabsVoiceID, fallbackTTSVoice, voiceEngine, systemVoiceIdentifier
-        case accessLevel, directoryScopes, enabledSkillIDs, enabledCapabilities, preferredModel
+        case accessLevel, directoryScopes, enabledSkillIDs, enabledCapabilities, enabledConnectors, preferredModel
         case dailyTokenLimit, weeklyTokenLimit, monthlyTokenLimit, hardStopOnBudget
         case lastModifiedAt
     }
@@ -114,8 +116,9 @@ struct AgentConfig: Codable, Equatable, Identifiable {
         accessLevel = try c.decode(Int.self, forKey: .accessLevel)
         directoryScopes = try c.decode([String].self, forKey: .directoryScopes)
         enabledSkillIDs = try c.decode([String].self, forKey: .enabledSkillIDs)
-        // New field — defaults to empty (all enabled) for existing agent JSON files
+        // New fields — default to empty (all enabled) for existing agent JSON files
         enabledCapabilities = try c.decodeIfPresent([String: Bool].self, forKey: .enabledCapabilities) ?? [:]
+        enabledConnectors = try c.decodeIfPresent([String: Bool].self, forKey: .enabledConnectors) ?? [:]
         preferredModel = try c.decodeIfPresent(String.self, forKey: .preferredModel) ?? ""
         dailyTokenLimit = try c.decodeIfPresent(Int.self, forKey: .dailyTokenLimit) ?? 0
         weeklyTokenLimit = try c.decodeIfPresent(Int.self, forKey: .weeklyTokenLimit) ?? 0

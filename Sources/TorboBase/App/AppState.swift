@@ -832,6 +832,7 @@ enum DashboardTab: String, CaseIterable {
     case agents = "Agents"
     case conversations = "Conversations"
     case chambers = "Chambers"
+    case connectors = "Connectors"
     case jobs = "Jobs"
     case calendar = "Calendar"
     case skills = "Skills"
@@ -850,6 +851,7 @@ enum DashboardTab: String, CaseIterable {
         case .agents: return "person.2.fill"
         case .conversations: return "bubble.left.and.bubble.right.fill"
         case .chambers: return "person.3.sequence.fill"
+        case .connectors: return "cable.connector.horizontal"
         case .jobs: return "point.3.connected.trianglepath.dotted"
         case .calendar: return "calendar"
         case .skills: return "puzzlepiece.fill"
@@ -870,6 +872,7 @@ enum DashboardTab: String, CaseIterable {
         case .agents: return "agents"
         case .conversations: return "conversations"
         case .chambers: return "chambers"
+        case .connectors: return "connectors"
         case .jobs: return "jobs"
         case .calendar: return "calendar"
         case .skills: return "skills"
@@ -894,6 +897,8 @@ enum DashboardTab: String, CaseIterable {
             return "Browse and search past conversations across all agents. Messages are encrypted at rest and organized by session."
         case .chambers:
             return "Multi-agent discussion rooms. Put agents together to collaborate, debate, or brainstorm — with turn-taking and tap-to-interrupt."
+        case .connectors:
+            return "Browse and configure 40+ service integrations. Connect messaging platforms, AI providers, productivity tools, and developer services — all from one place."
         case .jobs:
             return "Autonomous task queue. Agents pick up and execute jobs in the background — file operations, research, code generation, and more."
         case .calendar:
