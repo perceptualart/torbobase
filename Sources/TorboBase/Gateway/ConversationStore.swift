@@ -186,6 +186,36 @@ actor ConversationStore {
         }
     }
 
+    // MARK: - User Profile
+
+    private var profileFile: URL {
+        storageDir.appendingPathComponent("profile.json")
+    }
+
+    /// Load user profile from disk
+    func loadProfile() -> UserProfile {
+        guard FileManager.default.fileExists(atPath: profileFile.path) else {
+            return UserProfile()
+        }
+        do {
+            let data = try Data(contentsOf: profileFile)
+            return try decoder.decode(UserProfile.self, from: data)
+        } catch {
+            TorboLog.error("Failed to load profile: \(error)", subsystem: "ConvStore")
+            return UserProfile()
+        }
+    }
+
+    /// Save user profile to disk
+    func saveProfile(_ profile: UserProfile) {
+        do {
+            let data = try encoder.encode(profile)
+            try data.write(to: profileFile, options: .atomic)
+        } catch {
+            TorboLog.error("Failed to save profile: \(error)", subsystem: "ConvStore")
+        }
+    }
+
     // MARK: - Maintenance
 
     /// Get total storage size in bytes

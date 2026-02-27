@@ -105,6 +105,32 @@ struct ConversationMessage: Identifiable, Codable {
         self.clientIP = clientIP
         self.agentID = agentID
     }
+
+    /// Explicit-ID init for synced messages from paired devices
+    init(id: UUID, role: String, content: String, model: String = "",
+         timestamp: Date = Date(), clientIP: String? = nil, agentID: String? = nil) {
+        self.id = id
+        self.role = role
+        self.content = content
+        self.model = model
+        self.timestamp = timestamp
+        self.clientIP = clientIP
+        self.agentID = agentID
+    }
+}
+
+// MARK: - User Profile
+
+struct UserProfile: Codable {
+    var name: String
+    var createdAt: Date
+    var lastModifiedAt: Date
+
+    init(name: String = "") {
+        self.name = name
+        self.createdAt = Date()
+        self.lastModifiedAt = Date()
+    }
 }
 
 // MARK: - Session
@@ -125,6 +151,18 @@ struct ConversationSession: Identifiable, Codable {
         self.messageCount = 0
         self.model = model
         self.title = "New Session"
+        self.agentID = agentID
+    }
+
+    /// Explicit-ID init for synced sessions from paired devices
+    init(id: UUID, startedAt: Date, lastActivity: Date, messageCount: Int,
+         model: String, title: String, agentID: String) {
+        self.id = id
+        self.startedAt = startedAt
+        self.lastActivity = lastActivity
+        self.messageCount = messageCount
+        self.model = model
+        self.title = title
         self.agentID = agentID
     }
 
@@ -526,6 +564,9 @@ final class AppState: _TorboObservable {
     // Setup
     var setupCompleted: Bool = AppConfig.setupCompleted { willSet { willChangeUI() } }
 
+    // User Profile
+    var userProfile: UserProfile = UserProfile() { willSet { willChangeUI() } }
+
     // Cloud providers
     var cloudAPIKeys: [String: String] = AppConfig.cloudAPIKeys { willSet { willChangeUI() } }
 
@@ -667,6 +708,14 @@ final class AppState: _TorboObservable {
                 content: msg.content, sessionID: "", timestamp: msg.timestamp
             )
         }
+        // Notify SSE clients of new message (for iOS sync)
+        Task {
+            await EventBus.shared.publish("sync.message.created", payload: [
+                "message_id": msg.id.uuidString,
+                "agent_id": msg.agentID ?? "sid",
+                "role": msg.role
+            ], source: "base")
+        }
     }
 
     /// Load persisted conversations on launch
@@ -800,6 +849,41 @@ enum DashboardTab: String, CaseIterable {
         case .scheduler: return "cron scheduler"
         case .workflows: return "visual workflows"
         case .settings: return "settings"
+        }
+    }
+
+    var info: String {
+        switch self {
+        case .home:
+            return "Your command center. Voice-activate any agent, monitor system status, and control access levels from the central orb."
+        case .agents:
+            return "Create, configure, and manage AI agents. Each agent has its own personality, voice, access level, and set of capabilities."
+        case .conversations:
+            return "Browse and search past conversations across all agents. Messages are encrypted at rest and organized by session."
+        case .chambers:
+            return "Multi-agent discussion rooms. Put agents together to collaborate, debate, or brainstorm — with turn-taking and tap-to-interrupt."
+        case .jobs:
+            return "Autonomous task queue. Agents pick up and execute jobs in the background — file operations, research, code generation, and more."
+        case .calendar:
+            return "View and manage calendar events. Agents can check your schedule and create events on your behalf."
+        case .skills:
+            return "Skill packs extend what agents can do. Install, create, and manage modular capabilities like web research, code review, or document writing."
+        case .models:
+            return "Manage AI models — local (Ollama) and cloud. See which models are available, download new ones, and set defaults per agent."
+        case .security:
+            return "Security dashboard with 18-layer defense. Monitor active protections, audit logs, threat detection, encryption status, and rate limiting."
+        case .iam:
+            return "Identity & Access Management. Fine-grained permissions for each agent — control exactly which tools, files, and APIs they can access."
+        case .governance:
+            return "Policy engine for agent behavior. Set guardrails, approval workflows, and compliance rules that agents must follow."
+        case .teams:
+            return "Organize agents into teams for coordinated work. Assign roles, set team-level permissions, and manage collaboration."
+        case .scheduler:
+            return "Cron-style task scheduling. Set agents to run jobs automatically — hourly reports, daily summaries, periodic maintenance, and more."
+        case .workflows:
+            return "Visual workflow builder. Chain tools and agents together into automated pipelines with conditional logic and branching."
+        case .settings:
+            return "App preferences — voice settings, server configuration, API keys, theme, and system options."
         }
     }
 }

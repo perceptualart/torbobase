@@ -328,6 +328,7 @@ struct AgentConfig: Codable, Equatable, Identifiable {
             backgroundKnowledge: "",
             elevenLabsVoiceID: "",
             fallbackTTSVoice: "nova",
+            voiceEngine: "torbo",
             accessLevel: 1,
             directoryScopes: [],
             enabledSkillIDs: []
@@ -761,6 +762,7 @@ actor AgentConfigManager {
         configs[config.id] = stamped
         saveAgent(config.id)
         TorboLog.info("Created agent: \(config.name) (id: \(config.id), level: \(config.accessLevel))", subsystem: "Agents")
+        Task { await EventBus.shared.publish("sync.agent.created", payload: ["agent_id": config.id], source: "base") }
     }
 
     // MARK: - Update
@@ -778,6 +780,7 @@ actor AgentConfigManager {
 
         // Sync IAM permissions when agent config changes
         Task { await AgentIAMMigration.syncAgent(updated) }
+        Task { await EventBus.shared.publish("sync.agent.updated", payload: ["agent_id": config.id], source: "base") }
     }
 
     // MARK: - Delete
@@ -792,6 +795,7 @@ actor AgentConfigManager {
 
         // Auto-revoke all IAM permissions for deleted agent
         Task { await AgentIAMEngine.shared.removeAgent(id) }
+        Task { await EventBus.shared.publish("sync.agent.deleted", payload: ["agent_id": id], source: "base") }
     }
 
     // MARK: - Reset

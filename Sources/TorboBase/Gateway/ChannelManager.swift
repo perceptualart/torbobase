@@ -275,7 +275,7 @@ actor ChannelManager {
 
     // MARK: - Config Persistence
 
-    private func loadConfig() -> ChannelConfig {
+    func loadConfig() -> ChannelConfig {
         guard let data = try? Data(contentsOf: URL(fileURLWithPath: configPath)),
               let config = try? JSONDecoder().decode(ChannelConfig.self, from: data) else {
             createTemplateConfig()
