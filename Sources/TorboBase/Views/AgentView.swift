@@ -284,6 +284,8 @@ struct AgentsView: View {
         let isSelected = selectedAgentID == agent.id
         return Button {
             isSwitchingAgent = true
+            activeSessionID = nil
+            CanvasStore.shared.switchAgent(to: agent.id)
             selectedAgentID = agent.id
             editConfig = agent
             // Allow onChange to settle, then re-enable saving
@@ -343,6 +345,7 @@ struct AgentsView: View {
             }
             .padding(.horizontal, 10)
             .padding(.vertical, 8)
+            .contentShape(Rectangle())
             .background(isSelected ? Color.white.opacity(0.06) : Color.clear)
             .clipShape(RoundedRectangle(cornerRadius: 8))
         }
@@ -1480,83 +1483,6 @@ struct AgentsView: View {
 
     private var canvasPanel: some View {
         VStack(spacing: 0) {
-            // Voice control bar
-            HStack(spacing: 10) {
-                // State dot + label
-                Circle()
-                    .fill(voiceStateColor)
-                    .frame(width: 8, height: 8)
-                Text(voiceStateText)
-                    .font(.system(size: 11, weight: .medium, design: .monospaced))
-                    .foregroundStyle(.white.opacity(0.4))
-                    .frame(width: 80, alignment: .leading)
-
-                // Live audio level meter
-                TimelineView(.animation(minimumInterval: 1.0 / 20.0, paused: !isVoiceActive)) { _ in
-                    audioLevelMeter
-                }
-                .frame(maxWidth: .infinity)
-
-                // Voice controls — inline
-                Button {
-                    if isVoiceActive {
-                        voiceEngine.deactivate()
-                    } else {
-                        voiceEngine.activate(agentID: editConfig.id)
-                        applyAgentVoiceSettings()
-                    }
-                } label: {
-                    Image(systemName: isVoiceActive ? "power.circle.fill" : "power.circle")
-                        .font(.system(size: 16))
-                        .foregroundStyle(isVoiceActive ? .green : .red.opacity(0.6))
-                }
-                .buttonStyle(.plain)
-                .help("Toggle voice")
-
-                Button {
-                    if voiceEngine.isActive {
-                        voiceEngine.isMicMuted.toggle()
-                        if !voiceEngine.isMicMuted && voiceEngine.state != .listening {
-                            voiceEngine.listen()
-                        } else if voiceEngine.isMicMuted && voiceEngine.state == .listening {
-                            speechRecognizer.stopListening()
-                            voiceEngine.transition(to: .idle, reason: "mic muted")
-                        }
-                    } else {
-                        voiceEngine.activate(agentID: editConfig.id)
-                        applyAgentVoiceSettings()
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-                            voiceEngine.listen()
-                        }
-                    }
-                } label: {
-                    Image(systemName: voiceEngine.isMicMuted ? "mic.slash.fill" : (voiceEngine.state == .listening ? "mic.fill" : "mic"))
-                        .font(.system(size: 16))
-                        .foregroundStyle(
-                            !isVoiceActive ? .white.opacity(0.3) :
-                            voiceEngine.isMicMuted ? .red : .green
-                        )
-                }
-                .buttonStyle(.plain)
-                .help(voiceEngine.isMicMuted ? "Unmute mic" : "Mute mic")
-
-                Button {
-                    voiceEngine.isMuted.toggle()
-                } label: {
-                    Image(systemName: voiceEngine.isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill")
-                        .font(.system(size: 14))
-                        .foregroundStyle(
-                            !isVoiceActive ? .white.opacity(0.3) :
-                            voiceEngine.isMuted ? .red : .green
-                        )
-                }
-                .buttonStyle(.plain)
-                .help(voiceEngine.isMuted ? "Unmute speaker" : "Mute speaker")
-            }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 8)
-            .background(Color.white.opacity(0.02))
-
             // Error display
             if let err = speechRecognizer.error {
                 HStack(spacing: 6) {
@@ -1648,44 +1574,9 @@ struct AgentsView: View {
                 agentID: editConfig.id,
                 agentName: editConfig.name,
                 showHeader: false,
-                sessionID: activeSessionID,
-                aboveInput: isVoiceActive ? AnyView(
-                    HStack(spacing: 12) {
-                        HStack(spacing: 4) {
-                            Text("GAIN")
-                                .font(.system(size: 8, weight: .bold, design: .monospaced))
-                                .foregroundStyle(.white.opacity(0.3))
-                                .frame(width: 30, alignment: .trailing)
-                            Slider(value: Binding(
-                                get: { Double(speechRecognizer.inputGain) },
-                                set: { speechRecognizer.inputGain = Float($0) }
-                            ), in: 0.5...4.0)
-                            .controlSize(.mini)
-                            Text(String(format: "%.1fx", speechRecognizer.inputGain))
-                                .font(.system(size: 9, weight: .medium, design: .monospaced))
-                                .foregroundStyle(.white.opacity(0.3))
-                                .frame(width: 28, alignment: .leading)
-                        }
-                        HStack(spacing: 4) {
-                            Text("GATE")
-                                .font(.system(size: 8, weight: .bold, design: .monospaced))
-                                .foregroundStyle(.white.opacity(0.3))
-                                .frame(width: 30, alignment: .trailing)
-                            Slider(value: Binding(
-                                get: { Double(speechRecognizer.noiseGateLevel) },
-                                set: { speechRecognizer.noiseGateLevel = Float($0) }
-                            ), in: 0.0...0.3)
-                            .controlSize(.mini)
-                            Text(String(format: "%.0f%%", speechRecognizer.noiseGateLevel * 100))
-                                .font(.system(size: 9, weight: .medium, design: .monospaced))
-                                .foregroundStyle(.white.opacity(0.3))
-                                .frame(width: 28, alignment: .leading)
-                        }
-                    }
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 4)
-                ) : nil
+                sessionID: activeSessionID
             )
+                .id(editConfig.id)
                 .environmentObject(state)
         }
     }
@@ -2261,7 +2152,7 @@ struct AgentsView: View {
         // Cloud models based on API keys
         let keys = state.cloudAPIKeys
         if let k = keys["ANTHROPIC_API_KEY"], !k.isEmpty {
-            models.append(contentsOf: ["claude-opus-4-6", "claude-sonnet-4-6-20260217", "claude-haiku-4-5-20251001"])
+            models.append(contentsOf: ["claude-opus-4-6", "claude-sonnet-4-6", "claude-haiku-4-5-20251001"])
         }
         if let k = keys["OPENAI_API_KEY"], !k.isEmpty {
             models.append(contentsOf: ["gpt-4o", "gpt-4o-mini"])
@@ -2296,6 +2187,27 @@ struct AgentsView: View {
             .frame(maxWidth: 260)
 
             Spacer()
+
+            // Per-agent autonomy toggle
+            Button { editConfig.autonomyEnabled.toggle() } label: {
+                HStack(spacing: 6) {
+                    Circle()
+                        .fill(editConfig.autonomyEnabled ? Color.green : Color.white.opacity(0.15))
+                        .frame(width: 7, height: 7)
+                        .shadow(color: editConfig.autonomyEnabled ? .green.opacity(0.6) : .clear, radius: 4)
+                    Text("AUTO")
+                        .font(.system(size: 10, weight: .bold, design: .monospaced))
+                        .foregroundStyle(editConfig.autonomyEnabled ? .green : .white.opacity(0.3))
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .background(
+                    Capsule()
+                        .fill(editConfig.autonomyEnabled ? Color.green.opacity(0.15) : Color.white.opacity(0.04))
+                )
+                .overlay(Capsule().stroke(editConfig.autonomyEnabled ? Color.green.opacity(0.3) : Color.white.opacity(0.06), lineWidth: 1))
+            }
+            .buttonStyle(.plain)
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)

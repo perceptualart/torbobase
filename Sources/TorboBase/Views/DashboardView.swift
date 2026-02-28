@@ -46,7 +46,7 @@ struct DashboardView: View {
                 ScrollView(.vertical, showsIndicators: false) {
                     VStack(spacing: 20) {
                         sidebarSection(nil, tabs: [.home, .agents, .chambers, .conversations, .connectors])
-                        sidebarSection("Automation", tabs: [.jobs, .workflows, .scheduler, .skills])
+                        sidebarSection("Automation", tabs: [.jobs, .workflows, .scheduler, .skills, .terminal])
                         sidebarSection("System", tabs: [.models, .security, .iam, .governance, .teams, .calendar])
                     }
                     .padding(.horizontal, 12)
@@ -144,6 +144,8 @@ struct DashboardView: View {
                     CronSchedulerView()
                 case .workflows:
                     WorkflowCanvasView()
+                case .terminal:
+                    TerminalView()
                 case .settings:
                     SettingsView()
                 }
@@ -256,6 +258,7 @@ struct HomeView: View {
                 // The Torbo — hero with rainbow slider
                 OrbAccessView(
                     level: $state.accessLevel,
+                    autonomyEnabled: $state.proactiveAgentEnabled,
                     onKillSwitch: { state.killSwitch() },
                     serverRunning: state.serverRunning
                 )
@@ -487,8 +490,7 @@ struct HomeView: View {
             guard !Task.isCancelled else { return }
             hasPlayedGreeting = true
             UserDefaults.standard.set(true, forKey: "torboFirstGreetingDone")
-            VoiceEngine.shared.activate(agentID: "sid")
-            // Placeholder greeting — replace with final script
+            // Speak greeting directly — don't activate VoiceEngine (that starts the auto-listen loop)
             TTSManager.shared.speak("Hello! I'm SiD, your AI assistant. Welcome to Torbo Base.")
         }
     }
@@ -829,7 +831,7 @@ struct ModelsView: View {
         let keys = state.cloudAPIKeys
         if let k = keys["ANTHROPIC_API_KEY"], !k.isEmpty {
             models.append(("claude-opus-4-6", "Anthropic", .white.opacity(0.5)))
-            models.append(("claude-sonnet-4-6-20260217", "Anthropic", .white.opacity(0.5)))
+            models.append(("claude-sonnet-4-6", "Anthropic", .white.opacity(0.5)))
             models.append(("claude-sonnet-4-5-20250929", "Anthropic", .white.opacity(0.5)))
             models.append(("claude-haiku-4-5-20251001", "Anthropic", .white.opacity(0.5)))
         }
