@@ -318,6 +318,13 @@ enum SkillPackageManager {
         return manifests.sorted { $0.name < $1.name }
     }
 
+    // MARK: - Hashing
+
+    /// SHA-256 hash of a .tbskill package for integrity verification.
+    static func hashPackage(at url: URL) throws -> String {
+        try SkillIntegrityVerifier.hashPackage(at: url)
+    }
+
     // MARK: - Helpers
 
     /// Recursively find skill.json in a directory tree.

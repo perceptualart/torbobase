@@ -47,7 +47,7 @@ struct DashboardView: View {
                     VStack(spacing: 20) {
                         sidebarSection(nil, tabs: [.home, .agents, .chambers, .conversations, .connectors])
                         sidebarSection("Automation", tabs: [.jobs, .workflows, .scheduler, .skills, .terminal])
-                        sidebarSection("System", tabs: [.models, .security, .iam, .governance, .teams, .calendar])
+                        sidebarSection("System", tabs: [.models, .security])
                     }
                     .padding(.horizontal, 12)
                     .padding(.top, 8)
@@ -126,20 +126,12 @@ struct DashboardView: View {
                     ConnectorsView()
                 case .jobs:
                     JobsView()
-                case .calendar:
-                    CalendarDashboardView()
                 case .skills:
                     SkillsView()
                 case .models:
                     ModelsView()
                 case .security:
                     SecurityView()
-                case .iam:
-                    AgentIAMDashboardView()
-                case .governance:
-                    GovernanceDashboardView()
-                case .teams:
-                    AgentTeamsView()
                 case .scheduler:
                     CronSchedulerView()
                 case .workflows:
@@ -267,7 +259,7 @@ struct HomeView: View {
 
                 // Welcome card for new users
                 if showWelcome {
-                    VStack(alignment: .leading, spacing: 12) {
+                    VStack(alignment: .leading, spacing: 14) {
                         HStack {
                             Text("Welcome to TORBO BASE")
                                 .font(.system(size: 14, weight: .semibold))
@@ -284,12 +276,30 @@ struct HomeView: View {
                             .buttonStyle(.plain)
                         }
 
+                        // Safety warning
+                        HStack(alignment: .top, spacing: 8) {
+                            Image(systemName: "exclamationmark.triangle.fill")
+                                .font(.system(size: 11))
+                                .foregroundStyle(.orange)
+                                .frame(width: 16)
+                            Text("Torbo Base gives AI agents real capabilities — reading files, executing code, searching the web, managing your calendar, and controlling system tools. These are powerful autonomous agents, not chatbots. Review the access level system before granting permissions. Start at a low level and increase only as needed.")
+                                .font(.system(size: 11, weight: .medium))
+                                .foregroundStyle(.orange.opacity(0.85))
+                                .lineSpacing(2)
+                        }
+                        .padding(10)
+                        .background(Color.orange.opacity(0.06))
+                        .clipShape(RoundedRectangle(cornerRadius: 8))
+                        .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.orange.opacity(0.15), lineWidth: 1))
+
+                        // Feature guide
                         VStack(alignment: .leading, spacing: 8) {
-                            welcomeStep(icon: "circle.hexagongrid.fill", text: "Click the orb or drag the slider to set your access level")
-                            welcomeStep(icon: "person.2.fill", text: "Go to Agents to create and customize AI agents")
-                            welcomeStep(icon: "mic.fill", text: "Tap the orb to start a voice conversation")
-                            welcomeStep(icon: "person.3.sequence.fill", text: "Use Chambers to put multiple agents in a room together")
-                            welcomeStep(icon: "info.circle", text: "Look for the \(Image(systemName: "info.circle")) icon next to any sidebar item for details on what it does")
+                            welcomeStep(icon: "shield.lefthalf.filled", text: "Access Levels control what agents can do — from chat-only (Level 1) up to full system access (Level 5). The orb on the Home tab sets the global maximum.")
+                            welcomeStep(icon: "person.2.fill", text: "Agents tab lets you create agents with their own personality, voice, model, and permission level. Each agent has scoped access independent of others.")
+                            welcomeStep(icon: "waveform", text: "Each agent has its own on-device voice. Click an agent's orb to start a voice conversation. Agents hear you, think, and speak back in real time.")
+                            welcomeStep(icon: "person.3.sequence.fill", text: "Chambers put multiple agents in a live voice discussion. They debate, build on each other's ideas, and respond to your questions as a group.")
+                            welcomeStep(icon: "brain.head.profile", text: "The Library of Alexandria (LoA) is the shared memory system. Agents learn from conversations, remember facts, and build a knowledge base over time.")
+                            welcomeStep(icon: "bolt.horizontal.fill", text: "114 built-in tools — web search, file management, image generation, code execution, email, calendar, screen reading, and more. Tools activate based on access level.")
                         }
 
                         Text("You can dismiss this card — it won't come back.")
@@ -485,13 +495,11 @@ struct HomeView: View {
             .padding(.vertical, 12)
         }
         .task {
-            guard !hasPlayedGreeting else { return }
-            try? await Task.sleep(nanoseconds: 2_000_000_000)
-            guard !Task.isCancelled else { return }
-            hasPlayedGreeting = true
-            UserDefaults.standard.set(true, forKey: "torboFirstGreetingDone")
-            // Speak greeting directly — don't activate VoiceEngine (that starts the auto-listen loop)
-            TTSManager.shared.speak("Hello! I'm SiD, your AI assistant. Welcome to Torbo Base.")
+            // Greeting removed — home screen orb is silent
+            if !hasPlayedGreeting {
+                hasPlayedGreeting = true
+                UserDefaults.standard.set(true, forKey: "torboFirstGreetingDone")
+            }
         }
     }
 
@@ -1116,6 +1124,13 @@ struct SecurityView: View {
     @EnvironmentObject private var state: AppState
     @State private var capabilitiesExpanded = false
     @State private var auditExpanded = false
+    @State private var securitySection: SecuritySection = .overview
+
+    enum SecuritySection: String, CaseIterable {
+        case overview = "Overview"
+        case iam = "IAM"
+        case governance = "Governance"
+    }
 
     /// H9: Detect non-local IPs from audit log
     private var nonLocalIPs: [String]? {
@@ -1130,8 +1145,9 @@ struct SecurityView: View {
     }
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 24) {
+        VStack(spacing: 0) {
+            // Section picker
+            HStack {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Security")
                         .font(.system(size: 22, weight: .bold))
@@ -1140,6 +1156,35 @@ struct SecurityView: View {
                         .font(.system(size: 12))
                         .foregroundStyle(.white.opacity(0.4))
                 }
+
+                Spacer()
+
+                Picker("", selection: $securitySection) {
+                    ForEach(SecuritySection.allCases, id: \.self) { section in
+                        Text(section.rawValue).tag(section)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .frame(width: 280)
+            }
+            .padding(.horizontal, 24)
+            .padding(.top, 24)
+            .padding(.bottom, 12)
+
+            switch securitySection {
+            case .overview:
+                securityOverviewContent
+            case .iam:
+                AgentIAMDashboardView()
+            case .governance:
+                GovernanceDashboardView()
+            }
+        }
+    }
+
+    private var securityOverviewContent: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 24) {
 
                 // Security status cards
                 HStack(spacing: 12) {

@@ -161,6 +161,11 @@ actor SkillsManager {
         enabledSkills(forAccessLevel: level).flatMap { $0.toolDefinitions ?? [] }
     }
 
+    /// Get community knowledge block for a skill (Phase 1: stub, Phase 2: wired to SkillCommunityManager).
+    func communityKnowledgeBlock(forSkill skillID: String) async -> String {
+        await SkillCommunityManager.shared.communityKnowledgeBlock(forSkill: skillID)
+    }
+
     // MARK: - Install / Remove
 
     func installSkill(from sourceDir: URL) -> Bool {

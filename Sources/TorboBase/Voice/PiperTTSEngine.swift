@@ -24,6 +24,15 @@ class PiperTTSEngine {
         "sid": "sid_piper",
         "orion": "orion_piper",
         "mira": "mira_piper",
+        "ada": "ada_piper",
+    ]
+
+    /// Per-agent voice tuning parameters (personality-matched)
+    private static let voiceTuning: [String: (noiseScale: Float, noiseW: Float, lengthScale: Float)] = [
+        "sid":   (noiseScale: 0.80, noiseW: 0.90, lengthScale: 0.95),  // Confident, clear leader
+        "orion": (noiseScale: 0.75, noiseW: 0.85, lengthScale: 1.00),  // Analytical, measured
+        "mira":  (noiseScale: 0.85, noiseW: 0.95, lengthScale: 1.00),  // Warm, expressive
+        "ada":   (noiseScale: 0.80, noiseW: 0.90, lengthScale: 0.93),  // Creative, energetic
     ]
 
     /// Display names for log messages
@@ -45,11 +54,14 @@ class PiperTTSEngine {
     private var models: [String: SherpaOnnxOfflineTtsWrapper] = [:]
     private let queue = DispatchQueue(label: "com.torbo.piper-tts", qos: .userInitiated)
     private var isInitialized = false
+    private var isReady = false
+    /// Continuations waiting for model loading to complete
+    private var readyWaiters: [CheckedContinuation<Void, Never>] = []
 
     private init() {}
 
     /// Whether the Piper engine is available and has at least one model loaded.
-    var isAvailable: Bool { !models.isEmpty }
+    var isAvailable: Bool { isReady && !models.isEmpty }
 
     /// Check if a Piper voice is available for the given agent (or fallback).
     func hasVoice(for agentID: String) -> Bool {
@@ -61,43 +73,60 @@ class PiperTTSEngine {
         return models[agentID] != nil
     }
 
-    /// Load all available Piper voice models.
-    /// Call once at app startup. Looks in ~/Library/Application Support/TorboBase/voices/
+    /// Load all available Piper voice models ASYNCHRONOUSLY on a background queue.
+    /// Call once at app startup. Does NOT block the calling thread.
     func loadModels() {
-        queue.sync {
-            guard !isInitialized else { return }
-            isInitialized = true
+        guard !isInitialized else { return }
+        isInitialized = true
 
+        // CRITICAL: dispatch async — NOT sync. Sync blocked the main thread and caused
+        // macOS to terminate the app at launch (Phase 6.1 fix).
+        queue.async { [self] in
+            let startTime = CFAbsoluteTimeGetCurrent()
             let voicesDir = PlatformPaths.dataDir + "/voices"
             let espeakDataPath = voicesDir + "/espeak-ng-data"
             let fm = FileManager.default
 
             guard fm.fileExists(atPath: espeakDataPath) else {
                 TorboLog.info("espeak-ng-data not found at \(espeakDataPath) — Piper TTS unavailable", subsystem: "PiperTTS")
+                self.markReady()
                 return
             }
 
             for (agentID, prefix) in Self.agentModels {
                 let name = Self.displayNames[agentID] ?? agentID
                 let modelPath = voicesDir + "/\(prefix).onnx"
-                let tokensPath = voicesDir + "/\(prefix).onnx.json"
+                let configPath = voicesDir + "/\(prefix).onnx.json"
 
                 guard fm.fileExists(atPath: modelPath),
-                      fm.fileExists(atPath: tokensPath) else {
+                      fm.fileExists(atPath: configPath) else {
                     TorboLog.info("Voice model not found for \(name): \(prefix).onnx", subsystem: "PiperTTS")
                     continue
                 }
 
+                // Tokens file is required by sherpa-onnx. Try agent-specific, then SiD fallback.
                 let agentTokensPath = voicesDir + "/\(agentID)_tokens.txt"
-                let tokensFile = fm.fileExists(atPath: agentTokensPath) ? agentTokensPath : ""
+                let sidTokensPath = voicesDir + "/sid_tokens.txt"
+                let tokensFile: String
+                if fm.fileExists(atPath: agentTokensPath) {
+                    tokensFile = agentTokensPath
+                } else if fm.fileExists(atPath: sidTokensPath) {
+                    tokensFile = sidTokensPath
+                } else {
+                    TorboLog.warn("No tokens file for \(name) — skipping (sherpa-onnx requires tokens)", subsystem: "PiperTTS")
+                    continue
+                }
+
+                // Per-agent voice tuning
+                let tuning = Self.voiceTuning[agentID] ?? (noiseScale: 0.80, noiseW: 0.90, lengthScale: 1.0)
 
                 let vitsConfig = sherpaOnnxOfflineTtsVitsModelConfig(
                     model: modelPath,
                     tokens: tokensFile,
                     dataDir: espeakDataPath,
-                    noiseScale: 0.667,
-                    noiseScaleW: 0.8,
-                    lengthScale: 1.0
+                    noiseScale: tuning.noiseScale,
+                    noiseScaleW: tuning.noiseW,
+                    lengthScale: tuning.lengthScale
                 )
 
                 let modelConfig = sherpaOnnxOfflineTtsModelConfig(
@@ -110,21 +139,47 @@ class PiperTTSEngine {
                 let wrapper = SherpaOnnxOfflineTtsWrapper(config: &ttsConfig)
 
                 if wrapper.tts != nil {
-                    models[agentID] = wrapper
+                    self.models[agentID] = wrapper
                     TorboLog.info("Loaded voice for \(name)", subsystem: "PiperTTS")
                 } else {
                     TorboLog.warn("Failed to load voice for \(name)", subsystem: "PiperTTS")
                 }
             }
 
-            TorboLog.info("Loaded \(models.count)/\(Self.agentModels.count) voices", subsystem: "PiperTTS")
+            let elapsed = (CFAbsoluteTimeGetCurrent() - startTime) * 1000
+            TorboLog.info("Loaded \(self.models.count)/\(Self.agentModels.count) voices in \(String(format: "%.0f", elapsed))ms", subsystem: "PiperTTS")
+            self.markReady()
+        }
+    }
+
+    /// Signal that model loading is complete — resume any waiters.
+    private func markReady() {
+        isReady = true
+        let waiters = readyWaiters
+        readyWaiters.removeAll()
+        for waiter in waiters {
+            waiter.resume()
+        }
+    }
+
+    /// Wait until models have finished loading (up to 10 seconds).
+    private func waitUntilReady() async {
+        if isReady { return }
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            queue.async { [self] in
+                if self.isReady {
+                    continuation.resume()
+                } else {
+                    self.readyWaiters.append(continuation)
+                }
+            }
         }
     }
 
     /// Warm up by running a short synthesis for each loaded model.
     func warmup() {
-        for (agentID, model) in models {
-            queue.async {
+        queue.async { [self] in
+            for (agentID, model) in self.models {
                 let startTime = CFAbsoluteTimeGetCurrent()
                 let _ = model.generate(text: "warmup", speed: 1.0)
                 let elapsed = (CFAbsoluteTimeGetCurrent() - startTime) * 1000
@@ -147,7 +202,13 @@ class PiperTTSEngine {
 
     /// Synthesize text to WAV audio data using the agent's Piper voice.
     /// Falls back to SiD voice if agent has no custom model. Returns nil only if NO models loaded.
+    /// Waits for model loading to complete if called before models are ready.
     func synthesize(text: String, agentID: String, speed: Float = 1.0) async -> Data? {
+        // Wait for background model loading to finish (non-blocking if already ready)
+        if !isReady {
+            await waitUntilReady()
+        }
+
         guard let (model, resolvedID) = resolveModel(for: agentID) else {
             TorboLog.warn("No voice loaded (not even fallback)", subsystem: "PiperTTS")
             return nil

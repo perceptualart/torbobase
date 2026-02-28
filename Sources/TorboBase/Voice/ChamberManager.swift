@@ -60,6 +60,15 @@ struct ChamberMessage: Identifiable {
     var isStreaming: Bool
 }
 
+// MARK: - Chamber View Mode
+
+enum ChamberViewMode: String, CaseIterable {
+    case voice = "Voice"
+    case chat = "Chat"
+    case settings = "Settings"
+    case teams = "Teams"
+}
+
 // MARK: - Chamber Manager
 
 @MainActor
@@ -70,6 +79,7 @@ final class ChamberManager: ObservableObject {
     @Published var activeChamberID: String?
     @Published var respondingAgentID: String?
     @Published var messages: [ChamberMessage] = []
+    @Published var chamberViewMode: ChamberViewMode = .voice
 
     private var roundRobinOffset: [String: Int] = [:]
     private let persistenceURL = URL(fileURLWithPath: PlatformPaths.dataDir + "/chambers.json")
@@ -133,8 +143,13 @@ final class ChamberManager: ObservableObject {
         // Determine agent order
         let orderedAgents = agentOrder(for: chamber)
 
-        // Build system prompt with roundtable context
-        let systemPrompt = chamberSystemPrompt(chamber: chamber)
+        // Build system prompt with roundtable context — include agent display names
+        var agentNamesList: [String] = []
+        for aid in chamber.agentIDs {
+            let displayName = await agentDisplayName(aid)
+            agentNamesList.append(displayName)
+        }
+        let systemPrompt = chamberSystemPrompt(chamber: chamber, agentNames: agentNamesList)
 
         // Collect conversation history for collaborative mode
         var conversationContext: [[String: String]] = [
@@ -212,29 +227,46 @@ final class ChamberManager: ObservableObject {
 
     // MARK: - System Prompt
 
-    private func chamberSystemPrompt(chamber: Chamber) -> String {
-        let agentNames = chamber.agentIDs.joined(separator: ", ")
+    private func chamberSystemPrompt(chamber: Chamber, agentNames: [String] = []) -> String {
+        let roster = agentNames.isEmpty ? chamber.agentIDs.joined(separator: ", ") : agentNames.joined(separator: ", ")
         return """
-        [ROUNDTABLE]
-        You are in a multi-agent discussion chamber called "\(chamber.name)".
-        Participants: \(agentNames)
-        Discussion style: \(chamber.discussionStyle.rawValue)
+        [ROUNDTABLE — "\(chamber.name)"]
+        Agents in this room: \(roster)
+        This is a live multi-agent discussion. You are one of several agents responding to the user's message.
 
-        Rules:
-        - NEVER introduce yourself or say your name — your identity is already shown in the UI
-        - Jump straight into your response — no "Hi, I'm X" or "As X, I think..."
-        - Keep responses concise (2-4 sentences typically)
-        - You may reference or build on what other agents said
-        - Address other agents by name if responding to them
-        - Don't repeat what others already covered
-        - Be collaborative, not competitive
-        - If you have nothing new to add, say so briefly
+        RULES:
+        - Do NOT say your name or introduce yourself. The UI already shows who you are.
+        - Do NOT start with "I think" or "As [name]" — just respond directly.
+        - Answer the user's actual question or respond to the topic. Stay on topic.
+        - Have genuine opinions. If you disagree with another agent, say so and explain why.
+        - Reference other agents by name when responding to their points.
+        - Don't repeat what others already said — add something new or a different angle.
+        - Keep responses focused. 2-4 sentences. Say what matters.
+        - Your personality and expertise make you unique. Let that come through naturally.
+        - NEVER output just your name. Always provide a substantive response.
         """
     }
 
     // MARK: - HTTP Streaming
 
     private func streamAgentResponse(agentID: String, messages: [[String: String]]) async -> String {
+        // Race: stream vs 3-second timeout (skip slow/broken agents)
+        return await withTaskGroup(of: String.self) { group in
+            group.addTask { await self.doStream(agentID: agentID, messages: messages) }
+            group.addTask {
+                try? await Task.sleep(nanoseconds: 3_000_000_000)
+                if !Task.isCancelled {
+                    TorboLog.warn("Chamber: 3s timeout for agent \(agentID) — skipping", subsystem: "Chamber")
+                }
+                return ""
+            }
+            let first = await group.next() ?? ""
+            group.cancelAll()
+            return first
+        }
+    }
+
+    private func doStream(agentID: String, messages: [[String: String]]) async -> String {
         let port = AppState.shared.serverPort
         let token = KeychainManager.serverToken
 
@@ -289,14 +321,29 @@ final class ChamberManager: ObservableObject {
 
     private func stripSelfAttribution(_ text: String, agentName: String) -> String {
         var result = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        // Strip "[AgentName]: " prefix
-        let prefixes = ["\(agentName): ", "[\(agentName)]: ", "\(agentName.lowercased()): "]
+        let lower = result.lowercased()
+        let nameLower = agentName.lowercased()
+
+        // Strip various self-attribution prefixes the LLM might produce
+        let prefixes = [
+            "[\(agentName)]: ", "[\(agentName)]:", "[\(agentName)] ",
+            "\(agentName): ", "\(agentName):",
+            "**\(agentName)**: ", "**\(agentName)**:",
+            "\(agentName) — ", "\(agentName) - ",
+        ]
         for prefix in prefixes {
-            if result.lowercased().hasPrefix(prefix.lowercased()) {
-                result = String(result.dropFirst(prefix.count))
+            if lower.hasPrefix(prefix.lowercased()) {
+                result = String(result.dropFirst(prefix.count)).trimmingCharacters(in: .whitespaces)
                 break
             }
         }
+
+        // If the entire response is just the agent's name (with optional punctuation), treat as empty
+        let stripped = result.trimmingCharacters(in: .punctuationCharacters).trimmingCharacters(in: .whitespaces)
+        if stripped.lowercased() == nameLower {
+            return ""
+        }
+
         return result
     }
 

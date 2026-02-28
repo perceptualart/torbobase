@@ -186,7 +186,7 @@ actor ProactiveAgent {
             return ModelConfig(model: "qwen2.5:14b", provider: "ollama", apiKeyName: "")
         case .complex:
             // Cloud model — best reasoning, costs money
-            return ModelConfig(model: "claude-sonnet-4-6-20260217", provider: "anthropic", apiKeyName: "anthropic_api_key")
+            return ModelConfig(model: "claude-sonnet-4-6", provider: "anthropic", apiKeyName: "anthropic_api_key")
         }
     }
 

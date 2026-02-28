@@ -556,6 +556,10 @@ actor GatewayServer {
         if colons == 1, let colon = s.firstIndex(of: ":") {
             return String(s[s.startIndex..<colon])
         }
+        // NWEndpoint unbracketed IPv6 dot-port: "::1.61935" — trailing dot+digits is the port
+        if s.contains(":"), let dotRange = s.range(of: #"\.\d+$"#, options: .regularExpression) {
+            return String(s[s.startIndex..<dotRange.lowerBound])
+        }
         // Pure IPv6 or already clean — return as-is
         return s
     }
@@ -710,7 +714,8 @@ actor GatewayServer {
             var response: [String: Any] = [
                 "status": "ok",
                 "service": "torbo-base",
-                "version": TorboVersion.current
+                "version": TorboVersion.current,
+                "uptime_seconds": Int(Date().timeIntervalSince(GatewayServer.serverStartTime))
             ]
             // L-2: Only expose Tailscale hostname/IP to authenticated requests
             let hasAuth = req.headers["Authorization"] != nil || req.headers["authorization"] != nil
@@ -918,9 +923,11 @@ actor GatewayServer {
             guard let state = stateRef else { return .off }
             if state.accessLevel == .off { return .off }
             let agentLevel = state.accessLevel(for: agentID)
-            // Client header can request a lower level (e.g. for testing), but never higher
+            // Client header can request a lower level (e.g. for testing), but never higher.
+            // Floor at .chatOnly — .off is an admin-only kill switch, not client-requestable.
             if let raw = req.headers["x-torbo-access-level"] ?? req.headers["X-Torbo-Access-Level"],
-               let val = Int(raw), let requested = AccessLevel(rawValue: val),
+               let val = Int(raw), val >= AccessLevel.chatOnly.rawValue,
+               let requested = AccessLevel(rawValue: val),
                requested.rawValue < agentLevel.rawValue {
                 return requested
             }
@@ -928,8 +935,11 @@ actor GatewayServer {
         }
 
         if currentLevel == .off {
+            let headerVal = req.headers["x-torbo-access-level"] ?? req.headers["X-Torbo-Access-Level"] ?? "none"
+            let globalRaw = await MainActor.run { stateRef?.accessLevel.rawValue ?? -1 }
+            TorboLog.warn("Gateway OFF for \(req.method) \(req.path) | agent=\(agentID) header=\(headerVal) global=\(globalRaw)", subsystem: "Access")
             await audit(clientIP: clientIP, method: req.method, path: req.path,
-                       required: .chatOnly, granted: false, detail: "Gateway OFF")
+                       required: .chatOnly, granted: false, detail: "Gateway OFF (header=\(headerVal) agent=\(agentID))")
             return HTTPResponse(statusCode: 403, headers: ["Content-Type": "application/json"],
                               body: Data("{\"error\":\"Gateway is OFF\"}".utf8))
         }
@@ -1130,6 +1140,13 @@ actor GatewayServer {
         // MARK: - Skills Registry
         if req.path.hasPrefix("/v1/skills/registry") || req.path.hasPrefix("/v1/skills/install") || req.path.hasPrefix("/v1/skills/search") || req.path.hasPrefix("/v1/skills/create") {
             return await handleSkillsRegistryRoute(req, clientIP: clientIP, currentLevel: currentLevel)
+        }
+
+        // MARK: - Skill Community Network
+        if req.path.hasPrefix("/v1/community") {
+            if let response = await handleSkillCommunityRoute(req, clientIP: clientIP, currentLevel: currentLevel) {
+                return response
+            }
         }
 
         // MARK: - Debate API (multi-agent decision analysis)
@@ -2271,52 +2288,36 @@ actor GatewayServer {
         // L-7: Sanitize device name
         let deviceName = String(rawDeviceName.unicodeScalars.filter { !$0.properties.isDefaultIgnorableCodePoint && $0.value >= 0x20 }.prefix(64))
 
-        // Require Apple Sign-In identity token
-        guard let authToken = body["authToken"] as? String, !authToken.isEmpty else {
-            return HTTPResponse(statusCode: 401, headers: ["Content-Type": "application/json"],
-                              body: Data("{\"error\":\"Missing 'authToken' — Apple Sign-In required\"}".utf8))
-        }
+        // Apple Sign-In identity token — optional for trusted networks
+        // The LAN/Tailscale IP check above is the primary trust anchor.
+        // If provided, verify and enforce owner binding. If not, allow pairing
+        // based on network trust alone.
+        var verifiedAppleUserID: String? = nil
+        if let authToken = body["authToken"] as? String, !authToken.isEmpty {
+            do {
+                let claims = try await AppleJWTVerifier.shared.verify(authToken)
+                verifiedAppleUserID = claims.sub
 
-        // Verify the Apple JWT
-        let claims: AppleJWTClaims
-        do {
-            claims = try await AppleJWTVerifier.shared.verify(authToken)
-        } catch let error as AppleJWTError {
-            let statusCode: Int
-            switch error {
-            case .expired:
-                statusCode = 401
-            case .offlineNoCache:
-                statusCode = 503
-            default:
-                statusCode = 403
-            }
-            TorboLog.warn("Auto-pair JWT verification failed: \(error)", subsystem: "Pairing")
-            await audit(clientIP: clientIP, method: "POST", path: "/pair/auto",
-                       required: .chatOnly, granted: false, detail: "JWT verification failed: \(error)")
-            return HTTPResponse(statusCode: statusCode, headers: ["Content-Type": "application/json"],
-                              body: Data("{\"error\":\"Apple Sign-In verification failed: \(error)\"}".utf8))
-        } catch {
-            TorboLog.error("Auto-pair unexpected JWT error: \(error)", subsystem: "Pairing")
-            return HTTPResponse(statusCode: 500, headers: ["Content-Type": "application/json"],
-                              body: Data("{\"error\":\"Internal verification error\"}".utf8))
-        }
-
-        // Owner check: bind this Base to one Apple account
-        let storedOwner = KeychainManager.getOwnerAppleUserID()
-        if let storedOwner {
-            // Already claimed — verify same account
-            guard claims.sub == storedOwner else {
-                TorboLog.warn("Auto-pair owner mismatch: \(claims.sub.prefix(8))... vs stored \(storedOwner.prefix(8))...", subsystem: "Pairing")
-                await audit(clientIP: clientIP, method: "POST", path: "/pair/auto",
-                           required: .chatOnly, granted: false, detail: "Owner mismatch")
-                return HTTPResponse(statusCode: 403, headers: ["Content-Type": "application/json"],
-                                  body: Data("{\"error\":\"This Base is owned by a different Apple account\"}".utf8))
+                // Owner check: bind this Base to one Apple account
+                let storedOwner = KeychainManager.getOwnerAppleUserID()
+                if let storedOwner {
+                    guard claims.sub == storedOwner else {
+                        TorboLog.warn("Auto-pair owner mismatch: \(claims.sub.prefix(8))... vs stored \(storedOwner.prefix(8))...", subsystem: "Pairing")
+                        await audit(clientIP: clientIP, method: "POST", path: "/pair/auto",
+                                   required: .chatOnly, granted: false, detail: "Owner mismatch")
+                        return HTTPResponse(statusCode: 403, headers: ["Content-Type": "application/json"],
+                                          body: Data("{\"error\":\"This Base is owned by a different Apple account\"}".utf8))
+                    }
+                } else {
+                    KeychainManager.setOwnerAppleUserID(claims.sub)
+                    TorboLog.info("Owner claimed: \(claims.sub.prefix(8))... (email: \(claims.email ?? "hidden"))", subsystem: "Pairing")
+                }
+            } catch {
+                // Token provided but invalid — log and continue (network trust is sufficient)
+                TorboLog.info("Auto-pair: Apple token verification failed (\(error)) — proceeding with network trust", subsystem: "Pairing")
             }
         } else {
-            // First auto-pair — claim ownership
-            KeychainManager.setOwnerAppleUserID(claims.sub)
-            TorboLog.info("Owner claimed: \(claims.sub.prefix(8))... (email: \(claims.email ?? "hidden"))", subsystem: "Pairing")
+            TorboLog.info("Auto-pair: No Apple token — pairing via network trust (\(clientIP))", subsystem: "Pairing")
         }
 
         // Check if this device is already paired (by name) — return existing token
@@ -2336,9 +2337,9 @@ actor GatewayServer {
 
         let networkType = clientIP.hasPrefix("100.") ? "Tailscale" : "LAN"
 
-        // Create a new paired device directly (verified Apple identity is the trust anchor)
+        // Create a new paired device (network trust + optional Apple identity)
         let result: (token: String, deviceId: String) = await MainActor.run {
-            PairingManager.shared.autoPair(deviceName: deviceName, appleUserID: claims.sub)
+            PairingManager.shared.autoPair(deviceName: deviceName, appleUserID: verifiedAppleUserID)
         }
 
         let token = result.token
@@ -2350,9 +2351,10 @@ actor GatewayServer {
                               body: Data("{\"error\":\"Auto-pair failed\"}".utf8))
         }
 
-        TorboLog.info("Auto-paired \(deviceName) from \(networkType) IP \(clientIP) (Apple: \(claims.sub.prefix(8))...)", subsystem: "Pairing")
+        let authDetail = verifiedAppleUserID.map { "Apple: \($0.prefix(8))..." } ?? "network trust"
+        TorboLog.info("Auto-paired \(deviceName) from \(networkType) IP \(clientIP) (\(authDetail))", subsystem: "Pairing")
         await audit(clientIP: clientIP, method: "POST", path: "/pair/auto",
-                   required: .chatOnly, granted: true, detail: "Auto-paired: \(deviceName) (\(networkType), Apple verified)")
+                   required: .chatOnly, granted: true, detail: "Auto-paired: \(deviceName) (\(networkType), \(authDetail))")
         Task { await TelegramBridge.shared.notify("Device auto-paired: \(deviceName) (\(networkType))") }
         var newResponse: [String: Any] = ["token": token, "deviceId": deviceId, "status": "new"]
         if let tsIP = Self.detectTailscaleIP() { newResponse["tailscaleIP"] = tsIP }
@@ -2643,10 +2645,13 @@ actor GatewayServer {
             var clientTools = body["tools"] as? [[String: Any]] ?? []
             let clientToolNames = Set(extractToolNames(from: clientTools))
             let serverTools = await ToolProcessor.toolDefinitionsWithMCP(for: accessLevel, agentID: agentID)
-            // Add server tools that aren't already provided by the client (avoid duplicates)
+            // Add server tools that aren't already provided by the client (avoid duplicates).
+            // Skip canvas_write for remote clients — it opens a Mac-local window that the
+            // remote user can't see, and its progress markers leak to TTS on iOS.
             for tool in serverTools {
                 let name = ((tool["function"] as? [String: Any])?["name"] as? String) ?? ""
                 if !name.isEmpty && !clientToolNames.contains(name) {
+                    if hasClientSystem && name == "canvas_write" { continue }
                     clientTools.append(tool)
                 }
             }
@@ -3407,9 +3412,12 @@ actor GatewayServer {
             var clientTools = body["tools"] as? [[String: Any]] ?? []
             let clientToolNames = Set(extractToolNames(from: clientTools))
             let serverTools = await ToolProcessor.toolDefinitionsWithMCP(for: accessLevel, agentID: agentID)
+            // Skip canvas_write for remote clients — it opens a Mac-local window that the
+            // remote user can't see, and its progress markers leak to TTS on iOS.
             for tool in serverTools {
                 let name = ((tool["function"] as? [String: Any])?["name"] as? String) ?? ""
                 if !name.isEmpty && !clientToolNames.contains(name) {
+                    if hasClientSystem && name == "canvas_write" { continue }
                     clientTools.append(tool)
                 }
             }

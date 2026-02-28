@@ -11,6 +11,7 @@ struct SkillsView: View {
     @State private var isLoading = true
     @State private var showRemoveConfirm = false
     @State private var skillToRemove: String? = nil
+    @State private var showCommunity = false
 
     var body: some View {
         ScrollView {
@@ -26,6 +27,23 @@ struct SkillsView: View {
                             .foregroundStyle(.white.opacity(0.4))
                     }
                     Spacer()
+                    Button {
+                        showCommunity = true
+                    } label: {
+                        HStack(spacing: 6) {
+                            Image(systemName: "globe")
+                                .font(.system(size: 11, weight: .bold))
+                            Text("Community")
+                                .font(.system(size: 12, weight: .medium))
+                        }
+                        .foregroundStyle(.white.opacity(0.5))
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 6)
+                        .background(Color.white.opacity(0.06))
+                        .clipShape(RoundedRectangle(cornerRadius: 6))
+                    }
+                    .buttonStyle(.plain)
+
                     Button {
                         installSkillFromFolder()
                     } label: {
@@ -77,6 +95,11 @@ struct SkillsView: View {
             }
         }
         .task { await loadSkills() }
+        .sheet(isPresented: $showCommunity) {
+            SkillCommunityView()
+                .environmentObject(state)
+                .frame(minWidth: 700, minHeight: 500)
+        }
         .alert("Remove Skill?", isPresented: $showRemoveConfirm) {
             Button("Remove", role: .destructive) {
                 if let id = skillToRemove {

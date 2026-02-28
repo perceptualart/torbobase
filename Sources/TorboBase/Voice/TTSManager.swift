@@ -19,7 +19,7 @@ final class TTSManager: NSObject, ObservableObject {
 
     // MARK: - Configuration
 
-    var engine: String = "system" // "system", "elevenlabs", or "torbo"
+    var engine: String = "torbo" // "torbo" (Piper on-device), "elevenlabs", or "system"
     var agentID: String = "sid" // Current agent for Piper voice selection
     static let defaultElevenLabsVoice = "21m00Tcm4TlvDq8ikWAM" // Rachel
     var elevenLabsVoiceID: String = TTSManager.defaultElevenLabsVoice
@@ -37,7 +37,9 @@ final class TTSManager: NSObject, ObservableObject {
     private override init() {
         super.init()
         synthesizer.delegate = self
-        // Initialize Piper on-device TTS (loads voice models if available)
+        // Initialize Piper on-device TTS on a background thread.
+        // loadModels() dispatches async internally — does NOT block the main thread.
+        // warmup() runs after loading completes, also async.
         PiperTTSEngine.shared.loadModels()
         PiperTTSEngine.shared.warmup()
     }
@@ -93,27 +95,17 @@ final class TTSManager: NSObject, ObservableObject {
 
     private func synthesizePiper(_ text: String) async {
         let piperEngine = PiperTTSEngine.shared
-        guard piperEngine.isAvailable else {
-            // Piper not compiled/available — fall back to ElevenLabs (never system voice)
-            let hasEL = !(AppState.shared.cloudAPIKeys["ELEVENLABS_API_KEY"] ?? "").isEmpty
-            if hasEL {
-                TorboLog.info("Piper not available — falling back to ElevenLabs", subsystem: "TTS")
-                await synthesizeElevenLabs(text)
-            } else {
-                TorboLog.info("Piper not available, no ElevenLabs key — falling back to system voice", subsystem: "TTS")
-                await MainActor.run { speakSystem(text) }
-            }
-            return
-        }
 
+        // synthesize() waits for model loading if not ready yet (non-blocking)
         guard let wavData = await piperEngine.synthesize(text: text, agentID: agentID) else {
+            // Piper failed — fall back to ElevenLabs (NEVER system voice per design)
             let hasEL = !(AppState.shared.cloudAPIKeys["ELEVENLABS_API_KEY"] ?? "").isEmpty
             if hasEL {
-                TorboLog.warn("Piper synthesis failed — falling back to ElevenLabs", subsystem: "TTS")
+                TorboLog.warn("Piper synthesis failed for \(agentID) — falling back to ElevenLabs", subsystem: "TTS")
                 await synthesizeElevenLabs(text)
             } else {
-                TorboLog.warn("Piper synthesis failed — falling back to system voice", subsystem: "TTS")
-                await MainActor.run { speakSystem(text) }
+                TorboLog.warn("Piper synthesis failed for \(agentID), no ElevenLabs key — silent", subsystem: "TTS")
+                await MainActor.run { isSpeaking = false }
             }
             return
         }

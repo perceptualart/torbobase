@@ -739,13 +739,19 @@ final class AppState: _TorboObservable {
                 sessionID = UUID()
             }
             var msgs = await store.loadAgentChat(agentID: agentForChat, sessionID: sessionID)
-            msgs.append(AgentChatMessage(role: msg.role, content: msg.content, timestamp: msg.timestamp))
-            await store.saveAgentChat(agentID: agentForChat, sessionID: sessionID, messages: msgs)
-            await store.ensureSessionExists(agentID: agentForChat, sessionID: sessionID, messageCount: msgs.count)
-            // Title the session from the first user message
-            if msg.role == "user", msgs.count <= 2 {
-                let title = String(msg.content.prefix(60))
-                await store.updateSessionTitle(agentID: agentForChat, sessionID: sessionID, title: title)
+            let newMsg = AgentChatMessage(role: msg.role, content: msg.content, timestamp: msg.timestamp)
+            // Dedup: skip if last message matches (same role + content)
+            if let last = msgs.last, last.role == newMsg.role, last.content == newMsg.content {
+                // Already saved — skip duplicate append
+            } else {
+                msgs.append(newMsg)
+                await store.saveAgentChat(agentID: agentForChat, sessionID: sessionID, messages: msgs)
+                await store.ensureSessionExists(agentID: agentForChat, sessionID: sessionID, messageCount: msgs.count)
+                // Title the session from the first user message
+                if msg.role == "user", msgs.count <= 2 {
+                    let title = String(msg.content.prefix(60))
+                    await store.updateSessionTitle(agentID: agentForChat, sessionID: sessionID, title: title)
+                }
             }
         }
     }
@@ -834,15 +840,12 @@ enum DashboardTab: String, CaseIterable {
     case chambers = "Chambers"
     case connectors = "Connectors"
     case jobs = "Jobs"
-    case calendar = "Calendar"
     case skills = "Skills"
     case models = "Models"
     case security = "Security"
-    case iam = "IAM"
-    case governance = "Governance"
-    case teams = "Teams"
     case scheduler = "Scheduler"
     case workflows = "Workflows"
+    case terminal = "Terminal"
     case settings = "Settings"
 
     var icon: String {
@@ -853,15 +856,12 @@ enum DashboardTab: String, CaseIterable {
         case .chambers: return "person.3.sequence.fill"
         case .connectors: return "cable.connector.horizontal"
         case .jobs: return "point.3.connected.trianglepath.dotted"
-        case .calendar: return "calendar"
         case .skills: return "puzzlepiece.fill"
         case .models: return "cube.fill"
         case .security: return "shield.checkered"
-        case .iam: return "person.badge.shield.checkmark.fill"
-        case .governance: return "shield.lefthalf.filled"
-        case .teams: return "person.3.fill"
         case .scheduler: return "clock.badge.checkmark"
         case .workflows: return "arrow.triangle.branch"
+        case .terminal: return "terminal.fill"
         case .settings: return "gearshape.fill"
         }
     }
@@ -874,15 +874,12 @@ enum DashboardTab: String, CaseIterable {
         case .chambers: return "chambers"
         case .connectors: return "connectors"
         case .jobs: return "jobs"
-        case .calendar: return "calendar"
         case .skills: return "skills"
         case .models: return "models"
         case .security: return "security"
-        case .iam: return "agent IAM"
-        case .governance: return "governance"
-        case .teams: return "agent teams"
         case .scheduler: return "cron scheduler"
         case .workflows: return "visual workflows"
+        case .terminal: return "terminal"
         case .settings: return "settings"
         }
     }
@@ -901,24 +898,18 @@ enum DashboardTab: String, CaseIterable {
             return "Browse and configure 40+ service integrations. Connect messaging platforms, AI providers, productivity tools, and developer services — all from one place."
         case .jobs:
             return "Autonomous task queue. Agents pick up and execute jobs in the background — file operations, research, code generation, and more."
-        case .calendar:
-            return "View and manage calendar events. Agents can check your schedule and create events on your behalf."
         case .skills:
             return "Skill packs extend what agents can do. Install, create, and manage modular capabilities like web research, code review, or document writing."
         case .models:
             return "Manage AI models — local (Ollama) and cloud. See which models are available, download new ones, and set defaults per agent."
         case .security:
-            return "Security dashboard with 18-layer defense. Monitor active protections, audit logs, threat detection, encryption status, and rate limiting."
-        case .iam:
-            return "Identity & Access Management. Fine-grained permissions for each agent — control exactly which tools, files, and APIs they can access."
-        case .governance:
-            return "Policy engine for agent behavior. Set guardrails, approval workflows, and compliance rules that agents must follow."
-        case .teams:
-            return "Organize agents into teams for coordinated work. Assign roles, set team-level permissions, and manage collaboration."
+            return "Security dashboard with 18-layer defense. Monitor active protections, audit logs, threat detection, encryption status, and rate limiting. Includes IAM and Governance sub-tabs."
         case .scheduler:
             return "Cron-style task scheduling. Set agents to run jobs automatically — hourly reports, daily summaries, periodic maintenance, and more."
         case .workflows:
             return "Visual workflow builder. Chain tools and agents together into automated pipelines with conditional logic and branching."
+        case .terminal:
+            return "Interactive terminal emulator. Run shell commands, manage files, and use CLI tools — all within the dashboard."
         case .settings:
             return "App preferences — voice settings, server configuration, API keys, theme, and system options."
         }

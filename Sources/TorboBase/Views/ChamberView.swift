@@ -11,21 +11,15 @@ struct ChamberView: View {
     @ObservedObject private var voiceEngine = VoiceEngine.shared
     @ObservedObject private var tts = TTSManager.shared
 
-    @State private var selectedChamberID: String?
     @State private var showCreateSheet = false
-    @State private var viewMode: ChamberViewMode = .voice
     @State private var inputText = ""
     @State private var agents: [AgentConfig] = []
     @State private var sendTask: Task<Void, Never>?
     @State private var lastVoiceTrigger: Int = 0
     @State private var showAddAgentPopover = false
     @State private var isInterrupted = false
-
-    enum ChamberViewMode: String, CaseIterable {
-        case voice = "Voice"
-        case chat = "Chat"
-        case settings = "Settings"
-    }
+    @State private var liveTranscript: String = ""
+    @State private var liveTranscriptAgent: String = ""
 
     private var isChamberVoiceActive: Bool {
         voiceEngine.isActive && voiceEngine.chamberMode
@@ -40,7 +34,7 @@ struct ChamberView: View {
             Divider().background(Color.white.opacity(0.06))
 
             // Right panel — Chamber detail
-            if let chamberID = selectedChamberID,
+            if let chamberID = manager.activeChamberID,
                let chamber = manager.chambers.first(where: { $0.id == chamberID }) {
                 chamberDetailPanel(chamber)
                     .frame(maxWidth: .infinity)
@@ -51,8 +45,8 @@ struct ChamberView: View {
         }
         .task {
             agents = await AgentConfigManager.shared.listAgents()
-            if selectedChamberID == nil {
-                selectedChamberID = manager.chambers.first?.id
+            if manager.activeChamberID == nil {
+                manager.activeChamberID = manager.chambers.first?.id
             }
         }
         .sheet(isPresented: $showCreateSheet) { createChamberSheet }
@@ -64,30 +58,37 @@ struct ChamberView: View {
             let userText = voiceEngine.lastUserTranscript
             guard !userText.isEmpty else { return }
 
-            if let chamberID = selectedChamberID,
+            if let chamberID = manager.activeChamberID,
                let chamber = manager.chambers.first(where: { $0.id == chamberID }) {
+                // Barge-in cleanup: stop any in-progress agent speech before starting new round
+                tts.stop()
+                manager.respondingAgentID = nil
                 sendTask?.cancel()
                 isInterrupted = false
+                liveTranscript = ""
 
                 sendTask = Task {
-                    // Stop mic so agents don't hear each other through speakers
+                    // Disable auto-listen so transcript finalization doesn't re-trigger
                     voiceEngine.autoListen = false
-                    voiceEngine.speech.stopListening()
+                    // NOTE: Do NOT call speech.stopListening() — mic stays active for barge-in
 
                     await manager.sendChamberMessage(userText, chamberID: chamber.id) { agentID, agentName, response in
                         guard !isInterrupted && !Task.isCancelled else { return }
                         guard !response.isEmpty else { return }
 
+                        liveTranscriptAgent = agentName
+                        liveTranscript = response
+
                         applyAgentVoice(agentID)
 
                         if !voiceEngine.isMuted {
                             tts.speak(response)
-                            // Wait for this agent to finish before next agent starts
                             await waitForTTSWithBargeIn()
                         }
                     }
 
-                    // All agents done — restore mic and resume listening
+                    // All agents done — clear transcript, restore mic
+                    liveTranscript = ""
                     voiceEngine.autoListen = true
                     manager.respondingAgentID = nil
 
@@ -100,14 +101,8 @@ struct ChamberView: View {
                 }
             }
         }
-        .onDisappear {
-            pauseChamberSession()
-        }
-        .onChange(of: state.currentTab) { newTab in
-            if newTab != .chambers {
-                pauseChamberSession()
-            }
-        }
+        // NOTE: No onDisappear/onChange tab cleanup — chamber session stays alive
+        // across tab switches. Use the power button to explicitly stop.
     }
 
     // MARK: - Chamber List Panel
@@ -160,9 +155,9 @@ struct ChamberView: View {
     }
 
     private func chamberRow(_ chamber: Chamber) -> some View {
-        let isSelected = selectedChamberID == chamber.id
+        let isSelected = manager.activeChamberID == chamber.id
         return Button {
-            selectedChamberID = chamber.id
+            manager.activeChamberID = chamber.id
             manager.activeChamberID = chamber.id
         } label: {
             HStack(spacing: 10) {
@@ -193,20 +188,39 @@ struct ChamberView: View {
         VStack(spacing: 0) {
             // Mode picker
             HStack {
-                Picker("", selection: $viewMode) {
+                Picker("", selection: $manager.chamberViewMode) {
                     ForEach(ChamberViewMode.allCases, id: \.self) { mode in
                         Text(mode.rawValue).tag(mode)
                     }
                 }
                 .pickerStyle(.segmented)
-                .frame(width: 240)
+                .frame(width: 320)
 
                 Spacer()
+
+                // Canvas button
+                Button {
+                    WindowOpener.openWindow?(id: "canvas")
+                    NSApp.activate(ignoringOtherApps: true)
+                } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: "rectangle.on.rectangle.angled")
+                            .font(.system(size: 10))
+                        Text("Canvas")
+                            .font(.system(size: 11, weight: .medium))
+                    }
+                    .foregroundStyle(.cyan.opacity(0.7))
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 5)
+                    .background(Color.cyan.opacity(0.06))
+                    .clipShape(RoundedRectangle(cornerRadius: 6))
+                }
+                .buttonStyle(.plain)
 
                 // Delete chamber
                 Button {
                     manager.deleteChamber(id: chamber.id)
-                    selectedChamberID = manager.chambers.first?.id
+                    manager.activeChamberID = manager.chambers.first?.id
                 } label: {
                     HStack(spacing: 4) {
                         Image(systemName: "trash").font(.system(size: 10))
@@ -225,13 +239,15 @@ struct ChamberView: View {
 
             Divider().overlay(Color.white.opacity(0.06))
 
-            switch viewMode {
+            switch manager.chamberViewMode {
             case .voice:
                 voiceModeView(chamber)
             case .chat:
                 chatModeView(chamber)
             case .settings:
                 settingsModeView(chamber)
+            case .teams:
+                AgentTeamsView()
             }
         }
     }
@@ -257,11 +273,41 @@ struct ChamberView: View {
                 }
             }
 
+            // Live transcript — shows current agent's spoken text
+            chamberTranscriptBar
+
             // Voice control bar
             chamberVoiceBar(chamber)
 
             // Input bar
             chamberInputBar(chamber)
+        }
+    }
+
+    // MARK: - Live Transcript Bar
+
+    private var chamberTranscriptBar: some View {
+        Group {
+            if !liveTranscript.isEmpty {
+                HStack(spacing: 8) {
+                    Circle()
+                        .fill(Color(hue: Self.agentOrbHue(manager.respondingAgentID ?? ""), saturation: 0.7, brightness: 0.9))
+                        .frame(width: 6, height: 6)
+                    Text(liveTranscriptAgent)
+                        .font(.system(size: 10, weight: .bold, design: .monospaced))
+                        .foregroundStyle(.white.opacity(0.5))
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        Text(liveTranscript)
+                            .font(.system(size: 12, weight: .regular, design: .monospaced))
+                            .foregroundStyle(.white.opacity(0.75))
+                            .lineLimit(2)
+                            .id(liveTranscript) // auto-scroll to latest text
+                    }
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 8)
+                .background(Color.black.opacity(0.6))
+            }
         }
     }
 
@@ -277,7 +323,7 @@ struct ChamberView: View {
             Text(chamberVoiceStateText)
                 .font(.system(size: 11, weight: .medium, design: .monospaced))
                 .foregroundStyle(.white.opacity(0.4))
-                .frame(width: 120, alignment: .leading)
+                .frame(width: 80, alignment: .leading)
 
             // Live audio level meter
             TimelineView(.animation(minimumInterval: 1.0 / 20.0, paused: !isChamberVoiceActive)) { _ in
@@ -354,14 +400,17 @@ struct ChamberView: View {
             Button { voiceEngine.isMuted.toggle() } label: {
                 Image(systemName: voiceEngine.isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill")
                     .font(.system(size: 14))
-                    .foregroundStyle(voiceEngine.isMuted ? .red : .white.opacity(0.5))
+                    .foregroundStyle(
+                        !isChamberVoiceActive ? .white.opacity(0.3) :
+                        voiceEngine.isMuted ? .red : .green
+                    )
             }
             .buttonStyle(.plain)
             .help("Toggle speaker")
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 8)
-        .background(Color.white.opacity(0.03))
+        .background(Color.white.opacity(0.02))
     }
 
     private var chamberVoiceStateColor: Color {
@@ -409,172 +458,79 @@ struct ChamberView: View {
         .frame(height: 20)
     }
 
-    // MARK: - Orb Layout
+    // MARK: - Orb Layout (helpers moved to ChamberOrbView struct below)
 
-    private func orbPosition(index: Int, count: Int, center: CGPoint, radius: CGFloat) -> CGPoint {
-        let r = Double(radius)
-        let cx = Double(center.x)
-        let cy = Double(center.y)
+    /// Compute (x, y, cellW, cellH) for each agent index in a grid layout.
+    /// Returns positions as fractions of container size for a given agent count.
+    private func agentCellLayout(index: Int, count: Int, width: CGFloat, height: CGFloat) -> (x: CGFloat, y: CGFloat, cellW: CGFloat, cellH: CGFloat) {
+        // Row assignments: which row does each index go in, how many per row?
+        let rowAssignments: [[Int]]
         switch count {
-        case 1:
-            return center
-        case 2:
-            let xOff = r * (index == 0 ? -1.0 : 1.0)
-            return CGPoint(x: cx + xOff, y: cy)
-        case 3:
-            let angle = Double(index) * (2.0 * .pi / 3.0) - .pi / 2.0
-            return CGPoint(x: cx + cos(angle) * r, y: cy + sin(angle) * r)
-        case 4:
-            let row = index / 2
-            let col = index % 2
-            let sp = r * 0.8
-            return CGPoint(
-                x: cx + (col == 0 ? -sp : sp),
-                y: cy + (row == 0 ? -sp * 0.6 : sp * 0.6)
-            )
+        case 1: rowAssignments = [[0]]
+        case 2: rowAssignments = [[0, 1]]
+        case 3: rowAssignments = [[0], [1, 2]]         // triangle: 1 top, 2 bottom
+        case 4: rowAssignments = [[0, 1], [2, 3]]
+        case 5: rowAssignments = [[0, 1, 2], [3, 4]]
+        case 6: rowAssignments = [[0, 1, 2], [3, 4, 5]]
         default:
-            let angle = Double(index) * (2.0 * .pi / Double(count)) - .pi / 2.0
-            return CGPoint(x: cx + cos(angle) * r, y: cy + sin(angle) * r)
-        }
-    }
-
-    private var avgAudioLevel: Double {
-        let levels = tts.audioLevels
-        guard !levels.isEmpty else { return 0 }
-        return Double(levels.reduce(0, +)) / Double(levels.count)
-    }
-
-    private func orbAudioLevels(isActivelySpeaking: Bool, isResponding: Bool) -> [Float] {
-        if isActivelySpeaking {
-            // Boost the levels so OrbRenderer gets more dramatic input
-            return tts.audioLevels.map { min($0 * 1.8, 1.0) }
-        } else if isResponding {
-            // Thinking pulse — shows this agent is generating text
-            let t = Float(Date.timeIntervalSinceReferenceDate)
-            let pulse = Float(0.15 + sin(t * 2.0) * 0.08 + sin(t * 3.7) * 0.04)
-            return Array(repeating: pulse, count: 40)
-        } else {
-            return Array(repeating: Float(0.05), count: 40)
-        }
-    }
-
-    /// Dynamic orb size driven by audio level — breathes with speech
-    private func orbDisplaySize(baseSize: CGFloat, isActivelySpeaking: Bool, isResponding: Bool) -> CGFloat {
-        if isActivelySpeaking {
-            let avg = avgAudioLevel
-            // Scale from 1.15x (quiet) to 1.6x (loud) based on audio
-            let scale = 1.15 + avg * 1.2
-            return baseSize * min(CGFloat(scale), 1.6)
-        } else if isResponding {
-            // Gentle breathing while thinking
-            let t = Date.timeIntervalSinceReferenceDate
-            let breath = 1.05 + sin(t * 2.0) * 0.03
-            return baseSize * CGFloat(breath)
-        } else {
-            return baseSize
-        }
-    }
-
-    private func orbNameOpacity(isActivelySpeaking: Bool, isResponding: Bool, someoneSpeaking: Bool) -> Double {
-        if isActivelySpeaking {
-            let avg = avgAudioLevel
-            return 0.8 + min(avg * 0.5, 0.2)
-        } else if isResponding {
-            return 0.7
-        } else if someoneSpeaking {
-            // Dim non-speaking orb names when someone else is talking
-            return 0.25
-        } else {
-            return 0.5
-        }
-    }
-
-    /// Dim non-speaking orbs when one agent is active
-    private func orbDimming(isActivelySpeaking: Bool, isResponding: Bool, someoneSpeaking: Bool) -> Double {
-        if isActivelySpeaking || isResponding {
-            return 1.0
-        } else if someoneSpeaking {
-            return 0.5
-        } else {
-            return 1.0
-        }
-    }
-
-    private func isTopRow(index: Int, count: Int) -> Bool {
-        switch count {
-        case 1: return false
-        case 2: return false
-        case 3: return index == 0
-        case 4: return index < 2
-        default: return false
-        }
-    }
-
-    @ViewBuilder
-    private func singleOrb(agentID: String, index: Int, count: Int, center: CGPoint, radius: CGFloat) -> some View {
-        let agent = agents.first(where: { $0.id == agentID })
-        let name = agent?.name ?? agentID
-        let isResponding = manager.respondingAgentID == agentID
-        let isActivelySpeaking = isResponding && tts.isSpeaking
-        let someoneSpeaking = manager.respondingAgentID != nil
-        let orbSize: CGFloat = count <= 4 ? 240 : 180
-        let pos = orbPosition(index: index, count: count, center: center, radius: radius)
-        let levels = orbAudioLevels(isActivelySpeaking: isActivelySpeaking, isResponding: isResponding)
-        let hue = agentOrbHue(agentID) ?? 0.5
-        let orbColor = Color(hue: hue, saturation: 0.7, brightness: 0.9)
-        let displaySize = orbDisplaySize(baseSize: orbSize, isActivelySpeaking: isActivelySpeaking, isResponding: isResponding)
-        let modelName = agent?.preferredModel.isEmpty == false ? agent!.preferredModel : "Default"
-        let nameOpacity = orbNameOpacity(isActivelySpeaking: isActivelySpeaking, isResponding: isResponding, someoneSpeaking: someoneSpeaking)
-        let dimming = orbDimming(isActivelySpeaking: isActivelySpeaking, isResponding: isResponding, someoneSpeaking: someoneSpeaking)
-        let nameOnTop = isTopRow(index: index, count: count)
-
-        VStack(spacing: 6) {
-            if nameOnTop {
-                Text(modelName)
-                    .font(.system(size: 10, weight: .medium, design: .monospaced))
-                    .foregroundStyle(.white.opacity(0.25 * dimming))
-                    .lineLimit(1)
-                Text(name)
-                    .font(.system(size: 28, weight: isResponding ? .bold : .medium, design: .monospaced))
-                    .foregroundStyle(.white.opacity(nameOpacity))
+            // Generic: 3 columns
+            var rows: [[Int]] = []
+            var idx = 0
+            while idx < count {
+                let rowCount = min(3, count - idx)
+                rows.append(Array(idx..<(idx + rowCount)))
+                idx += rowCount
             }
+            rowAssignments = rows
+        }
 
-            Color.clear
-                .frame(width: displaySize, height: displaySize)
-                .overlay(
-                    OrbRenderer(
-                        audioLevels: levels,
-                        color: orbColor,
-                        isActive: true,
-                        orbRadius: displaySize * 0.42
-                    )
-                    .allowsHitTesting(false)
-                )
-                .opacity(dimming)
+        let numRows = CGFloat(rowAssignments.count)
+        let cellH = height / numRows
 
-            if !nameOnTop {
-                Text(name)
-                    .font(.system(size: 28, weight: isResponding ? .bold : .medium, design: .monospaced))
-                    .foregroundStyle(.white.opacity(nameOpacity))
-                Text(modelName)
-                    .font(.system(size: 10, weight: .medium, design: .monospaced))
-                    .foregroundStyle(.white.opacity(0.25 * dimming))
-                    .lineLimit(1)
+        // Find which row this index is in
+        for (rowIdx, row) in rowAssignments.enumerated() {
+            if let colIdx = row.firstIndex(of: index) {
+                let itemsInRow = CGFloat(row.count)
+                let cellW = width / itemsInRow
+                let x = (CGFloat(colIdx) + 0.5) * cellW
+                let y = (CGFloat(rowIdx) + 0.5) * cellH
+                return (x, y, cellW, cellH)
             }
         }
-        .animation(.easeOut(duration: 0.08), value: displaySize)
-        .animation(.easeInOut(duration: 0.2), value: isResponding)
-        .position(pos)
+        // Fallback: center
+        return (width / 2, height / 2, width, height)
     }
 
     private func orbArrangement(_ chamber: Chamber) -> some View {
         let count = chamber.agentIDs.count
-        return GeometryReader { geo in
-            let center = CGPoint(x: geo.size.width / 2, y: geo.size.height / 2 - 20)
-            let radius = min(geo.size.width, geo.size.height) * 0.3
 
+        return GeometryReader { geo in
+            let w = geo.size.width
+            let h = geo.size.height
+
+            // Determine grid dimensions for sizing
+            let maxCols: CGFloat = count <= 1 ? 1 : (count <= 2 ? 2 : (count <= 4 ? 2 : 3))
+            let numRows: CGFloat = count <= 2 ? 1 : 2
+
+            // Calculate orb size to fit: reserve space for name + model text below each orb
+            let textReserve: CGFloat = 56
+            let cellH = h / numRows
+            let cellW = w / maxCols
+            let maxOrbFromHeight = (cellH - textReserve) * 0.85
+            let maxOrbFromWidth = cellW * 0.65
+            let orbSize = max(50, min(maxOrbFromHeight, maxOrbFromWidth))
+
+            // Font sizes scale with orb
+            let nameSize = max(12, min(28, orbSize * 0.14))
+            let modelSize = max(10, min(20, orbSize * 0.09))
+
+            // Single flat ForEach keyed by agent ID — critical for SwiftUI identity
             ForEach(Array(chamber.agentIDs.enumerated()), id: \.element) { index, agentID in
-                singleOrb(agentID: agentID, index: index, count: count, center: center, radius: radius)
+                let layout = agentCellLayout(index: index, count: count, width: w, height: h)
+
+                ChamberOrbView(agentID: agentID, orbSize: orbSize, nameSize: nameSize, modelSize: modelSize, agents: agents)
+                    .frame(width: layout.cellW, height: layout.cellH)
+                    .position(x: layout.x, y: layout.y)
             }
         }
     }
@@ -594,6 +550,7 @@ struct ChamberView: View {
             }
 
             Divider().overlay(Color.white.opacity(0.06))
+
             chamberInputBar(chamber)
         }
     }
@@ -606,7 +563,7 @@ struct ChamberView: View {
                 HStack(spacing: 4) {
                     if !isUser {
                         Circle()
-                            .fill(Color(hue: agentOrbHue(msg.agentID) ?? 0.5, saturation: 0.7, brightness: 0.9))
+                            .fill(Color(hue: Self.agentOrbHue(msg.agentID), saturation: 0.7, brightness: 0.9))
                             .frame(width: 6, height: 6)
                     }
                     Text(msg.agentName)
@@ -677,7 +634,7 @@ struct ChamberView: View {
                         let agent = agents.first(where: { $0.id == agentID })
                         HStack(spacing: 10) {
                             Circle()
-                                .fill(Color(hue: agentOrbHue(agentID) ?? 0.5, saturation: 0.7, brightness: 0.9))
+                                .fill(Color(hue: Self.agentOrbHue(agentID), saturation: 0.7, brightness: 0.9))
                                 .frame(width: 8, height: 8)
                             Text(agent?.name ?? agentID)
                                 .font(.system(size: 13, weight: .medium))
@@ -736,10 +693,42 @@ struct ChamberView: View {
         }
     }
 
+    // MARK: - Audio Level Meter
+
+    private var chamberAudioMeter: some View {
+        GeometryReader { geo in
+            let levels: [Float] = voiceEngine.currentAudioLevels
+            let barCount = min(40, Int(geo.size.width / 3))
+            let stride = max(1, levels.count / max(barCount, 1))
+
+            HStack(spacing: 1) {
+                ForEach(0..<barCount, id: \.self) { i in
+                    let idx = min(i * stride, levels.count - 1)
+                    let level = CGFloat(levels[idx])
+                    RoundedRectangle(cornerRadius: 1)
+                        .fill(level > 0.3 ? Color.green : (level > 0.15 ? Color.cyan.opacity(0.6) : Color.white.opacity(0.15)))
+                        .frame(width: 2, height: max(2, level * geo.size.height * 0.9))
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+        }
+    }
+
     // MARK: - Input Bar
 
     private func chamberInputBar(_ chamber: Chamber) -> some View {
         HStack(alignment: .bottom, spacing: 10) {
+            // File attachment button
+            Button {
+                // TODO: wire file attachment for chambers
+            } label: {
+                Image(systemName: "paperclip")
+                    .font(.system(size: 16))
+                    .foregroundStyle(.white.opacity(0.3))
+                    .padding(8)
+            }
+            .buttonStyle(.plain)
+
             ZStack(alignment: .topLeading) {
                 if inputText.isEmpty {
                     Text("Message chamber...")
@@ -753,7 +742,7 @@ struct ChamberView: View {
                     .scrollContentBackground(.hidden)
                     .padding(.horizontal, 8)
                     .padding(.vertical, 6)
-                    .frame(minHeight: 36, maxHeight: 80)
+                    .frame(minHeight: 36, maxHeight: 120)
                     .fixedSize(horizontal: false, vertical: true)
             }
             .background(Color.white.opacity(0.04))
@@ -783,16 +772,20 @@ struct ChamberView: View {
         isInterrupted = false
 
         sendTask?.cancel()
+        liveTranscript = ""
         sendTask = Task {
-            // Stop mic during speaking so agents don't hear each other
+            // Disable auto-listen so transcript finalization doesn't re-trigger
             if isChamberVoiceActive {
                 voiceEngine.autoListen = false
-                voiceEngine.speech.stopListening()
+                // NOTE: Do NOT call speech.stopListening() — mic stays active for barge-in
             }
 
             await manager.sendChamberMessage(text, chamberID: chamber.id) { agentID, agentName, response in
                 guard !isInterrupted && !Task.isCancelled else { return }
                 guard !response.isEmpty else { return }
+
+                liveTranscriptAgent = agentName
+                liveTranscript = response
 
                 applyAgentVoice(agentID)
 
@@ -802,7 +795,8 @@ struct ChamberView: View {
                 }
             }
 
-            // Restore auto-listen after all agents done
+            // All agents done — clear transcript and restore mic
+            liveTranscript = ""
             if isChamberVoiceActive {
                 voiceEngine.autoListen = true
                 if !voiceEngine.isMicMuted && !isInterrupted {
@@ -818,7 +812,15 @@ struct ChamberView: View {
     /// Apply a specific agent's voice settings to TTSManager before speaking
     private func applyAgentVoice(_ agentID: String) {
         let agent = agents.first(where: { $0.id == agentID })
-        let engine = agent?.voiceEngine ?? "torbo"
+        var engine = agent?.voiceEngine ?? "torbo"
+
+        // If engine is "torbo" (Piper) but no voice model exists for this agent, fall back
+        if engine == "torbo" && !PiperTTSEngine.shared.hasVoice(for: agentID) {
+            let hasEL = !(AppState.shared.cloudAPIKeys["ELEVENLABS_API_KEY"] ?? "").isEmpty
+            engine = hasEL ? "elevenlabs" : "system"
+            TorboLog.warn("No Piper voice for \(agentID) — falling back to \(engine)", subsystem: "TTS")
+        }
+
         tts.engine = engine
         tts.agentID = agentID
         // Always keep a valid ElevenLabs voice ID for torbo→ElevenLabs fallback
@@ -932,7 +934,7 @@ struct ChamberView: View {
                         name: newChamberName,
                         agentIDs: Array(newChamberAgents)
                     )
-                    selectedChamberID = manager.chambers.last?.id
+                    manager.activeChamberID = manager.chambers.last?.id
                     newChamberName = ""
                     newChamberAgents = []
                     showCreateSheet = false
@@ -997,7 +999,7 @@ struct ChamberView: View {
                     } label: {
                         HStack(spacing: 8) {
                             Circle()
-                                .fill(Color(hue: agentOrbHue(agent.id) ?? 0.5, saturation: 0.7, brightness: 0.9))
+                                .fill(Color(hue: Self.agentOrbHue(agent.id), saturation: 0.7, brightness: 0.9))
                                 .frame(width: 8, height: 8)
                             VStack(alignment: .leading, spacing: 1) {
                                 Text(agent.name)
@@ -1027,7 +1029,7 @@ struct ChamberView: View {
 
     // MARK: - Helpers
 
-    private func agentOrbHue(_ agentID: String) -> Double? {
+    static func agentOrbHue(_ agentID: String) -> Double {
         switch agentID.lowercased() {
         case "sid":   return 0.9
         case "ada":   return 0.55
@@ -1037,6 +1039,117 @@ struct ChamberView: View {
         default:
             let hash = agentID.utf8.reduce(0) { ($0 &+ Int($1)) &* 31 }
             return Double(abs(hash) % 1000) / 1000.0
+        }
+    }
+}
+
+// MARK: - ChamberOrbView — Independent observation scope per orb
+
+/// Each orb is its own struct so SwiftUI creates independent observation scopes.
+/// This fixes the bug where all orbs animate together because singleOrb() was a function
+/// (not a View struct) and shared one evaluation context inside the TimelineView.
+struct ChamberOrbView: View {
+    let agentID: String
+    let orbSize: CGFloat
+    let nameSize: CGFloat
+    let modelSize: CGFloat
+    let agents: [AgentConfig]
+
+    @ObservedObject private var manager = ChamberManager.shared
+    @ObservedObject private var tts = TTSManager.shared
+
+    private var agent: AgentConfig? { agents.first(where: { $0.id == agentID }) }
+    private var isResponding: Bool { manager.respondingAgentID == agentID }
+    private var isActivelySpeaking: Bool { isResponding && tts.isSpeaking }
+    private var someoneSpeaking: Bool { manager.respondingAgentID != nil }
+
+    private var avgAudioLevel: Double {
+        let levels = tts.audioLevels
+        guard !levels.isEmpty else { return 0 }
+        return Double(levels.reduce(0, +)) / Double(levels.count)
+    }
+
+    var body: some View {
+        let name = agent?.name ?? agentID
+        let levels = orbAudioLevels()
+        let hue = ChamberView.agentOrbHue(agentID)
+        let orbColor = Color(hue: hue, saturation: 0.7, brightness: 0.9)
+        let visualScale = orbVisualScale()
+        let modelName = agent?.preferredModel.isEmpty == false ? agent!.preferredModel : "Default"
+        let nameOp = orbNameOpacity()
+        let dimming = orbDimming()
+
+        VStack(spacing: 4) {
+            Color.clear
+                .frame(width: orbSize, height: orbSize)
+                .overlay(
+                    OrbRenderer(
+                        audioLevels: levels,
+                        color: orbColor,
+                        isActive: isActivelySpeaking || isResponding || !someoneSpeaking,
+                        orbRadius: orbSize * 0.42
+                    )
+                    .scaleEffect(visualScale)
+                    .allowsHitTesting(false)
+                )
+                .opacity(dimming)
+
+            Text(name)
+                .font(.system(size: nameSize, weight: isResponding ? .bold : .medium, design: .monospaced))
+                .foregroundStyle(.white.opacity(nameOp))
+                .lineLimit(1)
+                .minimumScaleFactor(0.6)
+            Text(modelName)
+                .font(.system(size: modelSize, weight: .medium, design: .monospaced))
+                .foregroundStyle(.white.opacity(0.25 * dimming))
+                .lineLimit(1)
+                .minimumScaleFactor(0.6)
+        }
+    }
+
+    private func orbAudioLevels() -> [Float] {
+        if isActivelySpeaking {
+            return tts.audioLevels.map { min($0 * 1.8, 1.0) }
+        } else if isResponding {
+            let t = Float(Date.timeIntervalSinceReferenceDate)
+            let pulse = Float(0.15 + sin(t * 2.0) * 0.08 + sin(t * 3.7) * 0.04)
+            return Array(repeating: pulse, count: 40)
+        } else {
+            return Array(repeating: Float(0.05), count: 40)
+        }
+    }
+
+    private func orbVisualScale() -> CGFloat {
+        if isActivelySpeaking {
+            let avg = avgAudioLevel
+            return 1.0 + CGFloat(min(avg * 0.4, 0.12))
+        } else if isResponding {
+            let t = Date.timeIntervalSinceReferenceDate
+            return 1.0 + CGFloat(sin(t * 2.0) * 0.03)
+        } else {
+            return 1.0
+        }
+    }
+
+    private func orbNameOpacity() -> Double {
+        if isActivelySpeaking {
+            return 0.8 + min(avgAudioLevel * 0.5, 0.2)
+        } else if isResponding {
+            return 0.7
+        } else if someoneSpeaking {
+            return 0.25
+        } else {
+            return 0.5
+        }
+    }
+
+    private func orbDimming() -> Double {
+        if isActivelySpeaking || isResponding {
+            return 1.0
+        } else if someoneSpeaking {
+            return 0.2
+        } else {
+            return 0.8
         }
     }
 }

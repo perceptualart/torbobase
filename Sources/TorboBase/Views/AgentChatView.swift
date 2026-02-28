@@ -79,16 +79,8 @@ struct AgentChatView: View {
 
             Divider().background(Color.white.opacity(0.06))
 
-            // Live audio level meter — visible when voice is active for this agent
-            if voiceEngine.isActive && voiceEngine.activeAgentID == agentID {
-                TimelineView(.animation(minimumInterval: 1.0 / 20.0, paused: false)) { _ in
-                    chatAudioMeter
-                }
-                .frame(maxWidth: .infinity)
-                .frame(height: 20)
-                .padding(.horizontal, 16)
-                .padding(.top, 6)
-            }
+            // Voice control bar — matches Chambers layout
+            chatVoiceBar
 
             // Injected content above input (e.g. GAIN/GATE sliders)
             if let aboveInput { aboveInput }
@@ -161,6 +153,25 @@ struct AgentChatView: View {
                 )
             }
         }
+        .onChange(of: isLoading) { loading in
+            guard !loading else { return }
+            // Stream just finished — save finalized messages
+            saveTask?.cancel()
+            saveTask = Task {
+                try? await Task.sleep(nanoseconds: 300_000_000) // 300ms settle
+                guard !Task.isCancelled else { return }
+                let toSave = messages.filter { !$0.isStreaming }.map {
+                    AgentChatMessage(role: $0.role, content: $0.content, timestamp: $0.timestamp)
+                }
+                guard !toSave.isEmpty else { return }
+                await ConversationStore.shared.saveAgentChat(
+                    agentID: agentID, sessionID: currentSessionID, messages: toSave
+                )
+                await ConversationStore.shared.ensureSessionExists(
+                    agentID: agentID, sessionID: currentSessionID, messageCount: toSave.count
+                )
+            }
+        }
     }
 
     // MARK: - Header
@@ -186,6 +197,25 @@ struct AgentChatView: View {
             }
 
             Spacer()
+
+            // Canvas button
+            Button {
+                WindowOpener.openWindow?(id: "canvas")
+                NSApp.activate(ignoringOtherApps: true)
+            } label: {
+                HStack(spacing: 4) {
+                    Image(systemName: "rectangle.on.rectangle.angled")
+                        .font(.system(size: 11))
+                    Text("Canvas")
+                        .font(.system(size: 10, weight: .medium))
+                }
+                .foregroundStyle(.cyan.opacity(0.7))
+                .padding(.horizontal, 10)
+                .padding(.vertical, 5)
+                .background(Color.cyan.opacity(0.06))
+                .clipShape(RoundedRectangle(cornerRadius: 5))
+            }
+            .buttonStyle(.plain)
 
             // Export button
             Button {
@@ -298,6 +328,34 @@ struct AgentChatView: View {
                     )
                 }
 
+                // "Open in Canvas" buttons for code blocks in assistant messages
+                if !isUser && !isTool && !msg.isStreaming {
+                    let codeBlocks = extractCodeBlocks(msg.content)
+                    ForEach(Array(codeBlocks.enumerated()), id: \.offset) { idx, block in
+                        Button {
+                            let ext = block.language.isEmpty ? "txt" : block.language
+                            CanvasStore.shared.write(title: "code.\(ext)", content: block.code)
+                        } label: {
+                            HStack(spacing: 4) {
+                                Image(systemName: "rectangle.on.rectangle.angled")
+                                    .font(.system(size: 9))
+                                Text(block.language.isEmpty ? "Open in Canvas" : "\(block.language) → Canvas")
+                                    .font(.system(size: 9, weight: .medium, design: .monospaced))
+                            }
+                            .foregroundStyle(.cyan.opacity(0.6))
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 4)
+                            .background(Color.cyan.opacity(0.04))
+                            .clipShape(RoundedRectangle(cornerRadius: 5))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 5)
+                                    .stroke(Color.cyan.opacity(0.1), lineWidth: 1)
+                            )
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+
                 // Tool calls display
                 if let tools = msg.toolCalls {
                     ForEach(tools) { tool in
@@ -374,24 +432,123 @@ struct AgentChatView: View {
         .padding(.vertical, 10)
     }
 
-    // MARK: - Audio Level Meter
+    // MARK: - Voice Control Bar
 
-    private var chatAudioMeter: some View {
-        GeometryReader { geo in
-            let levels: [Float] = voiceEngine.currentAudioLevels
-            let barCount = min(40, Int(geo.size.width / 3))
-            let stride = max(1, levels.count / max(barCount, 1))
+    private var isVoiceActiveForAgent: Bool {
+        voiceEngine.isActive && voiceEngine.activeAgentID == agentID
+    }
 
-            HStack(spacing: 1) {
-                ForEach(0..<barCount, id: \.self) { i in
-                    let idx = min(i * stride, levels.count - 1)
-                    let level = CGFloat(levels[idx])
-                    RoundedRectangle(cornerRadius: 1)
-                        .fill(level > 0.3 ? Color.green : (level > 0.15 ? Color.cyan.opacity(0.6) : Color.white.opacity(0.15)))
-                        .frame(width: 2, height: max(2, level * geo.size.height * 0.9))
+    private var chatVoiceBar: some View {
+        HStack(spacing: 10) {
+            // State dot + label
+            Circle()
+                .fill(chatVoiceStateColor)
+                .frame(width: 8, height: 8)
+            Text(chatVoiceStateText)
+                .font(.system(size: 11, weight: .medium, design: .monospaced))
+                .foregroundStyle(.white.opacity(0.4))
+                .frame(width: 80, alignment: .leading)
+
+            // Live audio level meter
+            TimelineView(.animation(minimumInterval: 1.0 / 20.0, paused: !isVoiceActiveForAgent)) { _ in
+                GeometryReader { geo in
+                    let levels: [Float] = isVoiceActiveForAgent ? voiceEngine.currentAudioLevels : Array(repeating: Float(0), count: 40)
+                    let barCount = min(40, Int(geo.size.width / 3))
+                    let stride = max(1, levels.count / max(barCount, 1))
+
+                    HStack(spacing: 1) {
+                        ForEach(0..<barCount, id: \.self) { i in
+                            let idx = min(i * stride, levels.count - 1)
+                            let level = CGFloat(levels[idx])
+                            RoundedRectangle(cornerRadius: 1)
+                                .fill(level > 0.3 ? Color.green : (level > 0.15 ? Color.cyan.opacity(0.6) : Color.white.opacity(0.15)))
+                                .frame(width: 2, height: max(2, level * geo.size.height * 0.9))
+                        }
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
                 }
+                .frame(height: 20)
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+            .frame(maxWidth: .infinity)
+
+            // Power button
+            Button {
+                if isVoiceActiveForAgent {
+                    voiceEngine.deactivate()
+                } else {
+                    voiceEngine.activate(agentID: agentID)
+                }
+            } label: {
+                Image(systemName: isVoiceActiveForAgent ? "power.circle.fill" : "power.circle")
+                    .font(.system(size: 16))
+                    .foregroundStyle(isVoiceActiveForAgent ? .green : .red.opacity(0.6))
+            }
+            .buttonStyle(.plain)
+            .help("Toggle voice")
+
+            // Mic button
+            Button {
+                if voiceEngine.isActive {
+                    voiceEngine.isMicMuted.toggle()
+                    if !voiceEngine.isMicMuted && voiceEngine.state != .listening {
+                        voiceEngine.listen()
+                    } else if voiceEngine.isMicMuted && voiceEngine.state == .listening {
+                        voiceEngine.speech.stopListening()
+                        voiceEngine.transition(to: .idle, reason: "mic muted")
+                    }
+                } else {
+                    voiceEngine.activate(agentID: agentID)
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                        voiceEngine.listen()
+                    }
+                }
+            } label: {
+                Image(systemName: voiceEngine.isMicMuted ? "mic.slash.fill" : (voiceEngine.state == .listening ? "mic.fill" : "mic"))
+                    .font(.system(size: 16))
+                    .foregroundStyle(
+                        !isVoiceActiveForAgent ? .white.opacity(0.3) :
+                        voiceEngine.isMicMuted ? .red : .green
+                    )
+            }
+            .buttonStyle(.plain)
+            .help(voiceEngine.isMicMuted ? "Unmute mic" : "Mute mic")
+
+            // Speaker button
+            Button {
+                voiceEngine.isMuted.toggle()
+            } label: {
+                Image(systemName: voiceEngine.isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill")
+                    .font(.system(size: 14))
+                    .foregroundStyle(
+                        !isVoiceActiveForAgent ? .white.opacity(0.3) :
+                        voiceEngine.isMuted ? .red : .green
+                    )
+            }
+            .buttonStyle(.plain)
+            .help(voiceEngine.isMuted ? "Unmute speaker" : "Mute speaker")
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 8)
+        .background(Color.white.opacity(0.02))
+    }
+
+    private var chatVoiceStateColor: Color {
+        guard isVoiceActiveForAgent else { return .white.opacity(0.3) }
+        switch voiceEngine.state {
+        case .idle: return .white.opacity(0.3)
+        case .listening: return .green
+        case .thinking: return .cyan
+        case .speaking: return .orange
+        }
+    }
+
+    private var chatVoiceStateText: String {
+        guard isVoiceActiveForAgent else { return "Voice Off" }
+        switch voiceEngine.state {
+        case .idle: return "Ready"
+        case .listening: return "Listening..."
+        case .thinking: return "Thinking..."
+        case .speaking: return "Speaking..."
         }
     }
 
@@ -707,6 +864,39 @@ struct AgentChatView: View {
             return attributed
         }
         return AttributedString(text)
+    }
+
+    // MARK: - Code Block Extraction
+
+    private struct CodeBlock {
+        let language: String
+        let code: String
+    }
+
+    /// Extracts fenced code blocks (```lang\n...\n```) from markdown text.
+    private func extractCodeBlocks(_ text: String) -> [CodeBlock] {
+        var blocks: [CodeBlock] = []
+        let lines = text.components(separatedBy: "\n")
+        var inBlock = false
+        var lang = ""
+        var code: [String] = []
+
+        for line in lines {
+            if !inBlock && line.hasPrefix("```") {
+                inBlock = true
+                lang = String(line.dropFirst(3)).trimmingCharacters(in: .whitespaces)
+                code = []
+            } else if inBlock && line.hasPrefix("```") {
+                inBlock = false
+                let joined = code.joined(separator: "\n")
+                if !joined.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    blocks.append(CodeBlock(language: lang, code: joined))
+                }
+            } else if inBlock {
+                code.append(line)
+            }
+        }
+        return blocks
     }
 }
 #endif

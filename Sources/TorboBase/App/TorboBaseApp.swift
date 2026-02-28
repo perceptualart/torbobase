@@ -84,6 +84,20 @@ struct TorboBaseApp: App {
         .windowStyle(.hiddenTitleBar)
         .windowResizability(.contentMinSize)
         .defaultSize(width: 520, height: 640)
+
+        // Terminal — pop-out terminal canvas window
+        Window("Terminal", id: "terminal-canvas") {
+            TerminalCanvasWindow()
+                .frame(minWidth: 400, minHeight: 300)
+                .onAppear {
+                    DispatchQueue.main.async {
+                        AppDelegate.styleTerminalCanvasWindow()
+                    }
+                }
+        }
+        .windowStyle(.hiddenTitleBar)
+        .windowResizability(.contentMinSize)
+        .defaultSize(width: 600, height: 480)
     }
 }
 
@@ -146,6 +160,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let canvasSize = NSSize(width: canvas.frame.width, height: mainFrame.height)
             canvas.setContentSize(canvasSize)
         }
+    }
+
+    /// Style the terminal canvas window — dark theme
+    static func styleTerminalCanvasWindow() {
+        guard let win = NSApp.windows.first(where: {
+            $0.identifier?.rawValue.contains("terminal-canvas") == true
+        }) else { return }
+
+        win.backgroundColor = NSColor(red: 0.06, green: 0.06, blue: 0.08, alpha: 1)
+        win.titlebarAppearsTransparent = true
+        win.titleVisibility = .hidden
+        win.makeKeyAndOrderFront(nil)
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {

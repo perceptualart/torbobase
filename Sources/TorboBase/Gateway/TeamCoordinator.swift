@@ -489,7 +489,7 @@ actor TeamCoordinator {
         ]
 
         let body: [String: Any] = [
-            "model": "claude-sonnet-4-6-20260217",
+            "model": "claude-sonnet-4-6",
             "messages": messages,
             "stream": false
         ]

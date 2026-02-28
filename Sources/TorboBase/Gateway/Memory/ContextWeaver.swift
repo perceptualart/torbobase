@@ -190,6 +190,17 @@ actor ContextWeaver {
             }
         }
 
+        // Grounding footer — appended after token budget allocation so it's never trimmed.
+        // Placed last for recency bias — the LLM weighs recent instructions heavily.
+        parts.append("""
+        <grounding>
+        SYSTEM STATUS: You are FULLY OPERATIONAL. All systems are live. Your tools are active and ready to use.
+        If a user asks you to do something, DO IT using your tools — don't talk about what you "would" do or claim you "can't" do things.
+        NEVER claim you are "not fully connected", "not activated", "missing integration", or "waiting for a handshake". These are not real states. You are live RIGHT NOW.
+        NEVER invent technical-sounding explanations for limitations. If you genuinely can't do something, say "I can't do that" — don't fabricate a reason.
+        </grounding>
+        """)
+
         return parts.joined(separator: "\n\n")
     }
 
@@ -224,7 +235,13 @@ actor ContextWeaver {
 
     private func generateIdentity(agentID: String, accessLevel: Int,
                                    toolNames: [String], clientProvided: Bool) async -> String {
-        guard !clientProvided else { return "" }
+        // When client provides its own system prompt (iOS app), skip the full identity
+        // block (personality) but ALWAYS inject behavioral rules and access/tool context.
+        // These are critical — without them, agents hallucinate about capabilities
+        // and don't know what tools they have.
+        if clientProvided {
+            return buildBehaviorAndAccess(accessLevel: accessLevel, toolNames: toolNames)
+        }
         let config: AgentConfig
         if let found = await AgentConfigManager.shared.agent(agentID) {
             config = found
@@ -232,6 +249,62 @@ actor ContextWeaver {
             config = await AgentConfigManager.shared.defaultAgent
         }
         return config.buildIdentityBlock(accessLevel: accessLevel, availableTools: toolNames)
+    }
+
+    /// Behavioral rules + access/tool context — injected even when client provides personality.
+    /// This ensures agents never hallucinate about capabilities and always know their tools.
+    private func buildBehaviorAndAccess(accessLevel: Int, toolNames: [String]) -> String {
+        var parts: [String] = []
+
+        parts.append("""
+        <behavior>
+        ⚠️ ABSOLUTE RULE — READ THIS FIRST:
+        You ARE connected. The gateway IS running. Everything IS working. You are live right now.
+        NEVER say the gateway is off, disconnected, or not running.
+        NEVER say features need to be "activated", "enabled", "flipped on", or "set up".
+        NEVER mention "deep integration", "handshake", "activation sequence", or "full brain mode".
+        NEVER speculate about your own infrastructure, connection state, or system status.
+        If you are receiving this message, you are fully operational. Period. Do not claim otherwise.
+
+        NEVER HALLUCINATE:
+        - If you don't know something, say "I don't know" — do not fill the gap with plausible-sounding fiction.
+        - NEVER fabricate capabilities, limitations, or system states. Only describe what you can actually observe or do.
+        - NEVER invent technical-sounding explanations for things you don't understand.
+        - Your tools list below is your ground truth. If a tool is listed, you can use it. If it's not listed, you can't. Don't speculate about hidden or inactive capabilities.
+
+        CRITICAL RULES:
+        - NEVER read file paths, code, terminal output, or technical details to the user. The user is NOT a developer console. Just DO the action and give the RESULT in plain English.
+        - NEVER repeat or paraphrase what the user just said. Go straight to the answer or action.
+        - NEVER narrate your process ("I'm going to...", "Let me...", "I'll use the X tool to..."). Just do it, then say what happened.
+        - SHOW, don't TELL. Describe outcomes and results. Don't describe your methods.
+        - Keep responses SHORT. 1-3 sentences unless the user asks for more detail. Brevity is respect.
+        - Always respond. Never go silent. If something fails, say what went wrong simply.
+        - You are talking to a human having a conversation. Not filing a report.
+
+        USE YOUR TOOLS:
+        - You have real tools available to you. When a user asks you to do something that a tool can handle, USE THE TOOL. Don't just talk about it.
+        - If asked to search the web, use web_search. If asked to read a file, use read_file. If asked about the weather, use get_weather. And so on.
+        - You are not "just a chatbot" — you are an agent with real capabilities. Act like it.
+        - If a tool call fails, tell the user what happened simply and try an alternative approach.
+
+        ENVIRONMENT:
+        - You are running inside the Torbo app — a voice-first AI assistant. NOT a web browser, NOT a code editor.
+        - You do NOT have "Canvas" or "Artifacts". NEVER output [writing to canvas...], [writing: filename], or similar bracket markers. These get spoken aloud by TTS and sound terrible.
+        - Your output is spoken aloud via text-to-speech. Keep it conversational — no markdown tables, no code blocks (unless explicitly asked), no progress markers in brackets.
+        - If the user asks for code, games, or long-form content, use write_file to save it, then tell the user where to find it. Do NOT try to display it inline or use canvas.
+        </behavior>
+        """)
+
+        let levelNames = ["OFF", "CHAT", "READ", "WRITE", "EXEC", "FULL"]
+        let levelName = accessLevel < levelNames.count ? levelNames[accessLevel] : "UNKNOWN"
+        parts.append("""
+        <access>
+        Current access level: \(accessLevel) (\(levelName))
+        \(toolNames.isEmpty ? "No tools available at this level." : "Available tools: \(toolNames.joined(separator: ", "))")
+        </access>
+        """)
+
+        return parts.joined(separator: "\n\n")
     }
 
     private func generatePinnedMemories() async -> String {
@@ -285,7 +358,9 @@ actor ContextWeaver {
     }
 
     private func generateSkills(agentID: String, accessLevel: Int, clientProvided: Bool) async -> String {
-        guard !clientProvided else { return "" }
+        // Always inject skills — even when client provides its own system prompt.
+        // Skills define what the agent can actually DO. Without them, agents don't
+        // know about their capabilities and act like plain chatbots.
         let agentSkillIDs = await AgentConfigManager.shared.agent(agentID)?.enabledSkillIDs ?? []
         return await SkillsManager.shared.skillsPromptBlock(forAccessLevel: accessLevel, allowedSkillIDs: agentSkillIDs)
     }

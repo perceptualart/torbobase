@@ -10,28 +10,15 @@ import SwiftUI
 /// When a voice session is active, shows the agent's live orb with real audio levels.
 struct OrbAccessView: View {
     @Binding var level: AccessLevel
+    @Binding var autonomyEnabled: Bool
     var onKillSwitch: () -> Void = {}
     var serverRunning: Bool = false
 
-    @ObservedObject private var voiceEngine = VoiceEngine.shared
     @State private var confirmingFull = false
     @State private var sliderDragging = false
 
-    /// Whether the voice engine is actively running (agent speaking/listening)
-    private var voiceActive: Bool { voiceEngine.isActive }
-
     /// Effective orb color — always access-level based
     private var effectiveColor: Color { orbColor }
-
-    /// Color for the voice state dot
-    private var voiceStateColor: Color {
-        switch voiceEngine.state {
-        case .idle:      return .gray
-        case .listening: return .green
-        case .thinking:  return .orange
-        case .speaking:  return .cyan
-        }
-    }
 
     var body: some View {
         VStack(spacing: 16) {
@@ -43,41 +30,27 @@ struct OrbAccessView: View {
 
                 ZStack {
                     OrbRenderer(
-                        audioLevels: voiceEngine.currentAudioLevels,
+                        audioLevels: Array(repeating: Float(0.15), count: 40),
                         color: effectiveColor,
-                        isActive: voiceActive || (level != .off && serverRunning),
+                        isActive: level != .off && serverRunning,
                         orbRadius: orbRad
                     )
                     .frame(width: orbDim, height: orbDim)
-                    .opacity(level == .off && !voiceActive ? 0.3 : 1.0)
+                    .opacity(level == .off ? 0.3 : 1.0)
                     .contentShape(Circle().scale(0.67))
                     .onTapGesture {
-                        if voiceActive {
-                            voiceEngine.handleOrbTap()
-                        } else {
-                            withAnimation(.spring(response: 0.2)) { onKillSwitch() }
-                        }
+                        withAnimation(.spring(response: 0.2)) { onKillSwitch() }
                     }
 
-                    // Overlay: agent name when voice active, level number otherwise
+                    // Overlay: level number
                     VStack(spacing: 2) {
-                        if voiceActive {
-                            Text(voiceEngine.activeAgentID.uppercased())
-                                .font(.system(size: 28, weight: .bold, design: .monospaced))
-                                .foregroundStyle(.white.opacity(0.7))
-                                .shadow(color: effectiveColor.opacity(0.5), radius: 8)
-                            Text(voiceEngine.state.rawValue.uppercased())
-                                .font(.system(size: 11, weight: .semibold, design: .monospaced))
-                                .foregroundStyle(.white.opacity(0.4))
-                        } else {
-                            Text(level == .off ? "OFF" : "\(level.rawValue)")
-                                .font(.system(size: 42, weight: .bold, design: .rounded))
-                                .foregroundStyle(.white.opacity(0.85))
-                                .shadow(color: orbColor.opacity(0.5), radius: 8)
-                            Text(level.name)
-                                .font(.system(size: 12, weight: .semibold, design: .monospaced))
-                                .foregroundStyle(.white.opacity(0.5))
-                        }
+                        Text(level == .off ? "OFF" : "\(level.rawValue)")
+                            .font(.system(size: 42, weight: .bold, design: .rounded))
+                            .foregroundStyle(.white.opacity(0.85))
+                            .shadow(color: orbColor.opacity(0.5), radius: 8)
+                        Text(level.name)
+                            .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                            .foregroundStyle(.white.opacity(0.5))
                     }
                     .allowsHitTesting(false)
                 }
@@ -87,56 +60,10 @@ struct OrbAccessView: View {
             .frame(minHeight: 300, maxHeight: .infinity)
             .clipped()
 
-            // Mic — Agent name/status — Speaker below orb, equally spaced
-            HStack {
-                Button {
-                    voiceEngine.isMicMuted.toggle()
-                } label: {
-                    Image(systemName: voiceEngine.isMicMuted ? "mic.slash.fill" : "mic.fill")
-                        .font(.system(size: 14))
-                        .foregroundStyle(voiceEngine.isMicMuted ? .red : .white.opacity(0.7))
-                        .frame(width: 32, height: 32)
-                        .background(Circle().fill(Color.black.opacity(0.3)))
-                }
-                .buttonStyle(.plain)
-
-                Spacer()
-
-                // Agent name + voice state (centered)
-                if voiceActive {
-                    HStack(spacing: 6) {
-                        Circle()
-                            .fill(voiceStateColor)
-                            .frame(width: 6, height: 6)
-                        Text(voiceEngine.activeAgentID.uppercased())
-                            .font(.system(size: 12, weight: .bold, design: .monospaced))
-                            .foregroundStyle(.white.opacity(0.6))
-                        Text("·")
-                            .foregroundStyle(.white.opacity(0.3))
-                        Text(voiceEngine.state.rawValue.uppercased())
-                            .font(.system(size: 10, weight: .medium, design: .monospaced))
-                            .foregroundStyle(.white.opacity(0.35))
-                    }
-                } else {
-                    Text(level.name)
-                        .font(.system(size: 12, weight: .bold, design: .monospaced))
-                        .foregroundStyle(.white.opacity(0.5))
-                }
-
-                Spacer()
-
-                Button {
-                    voiceEngine.isMuted.toggle()
-                } label: {
-                    Image(systemName: voiceEngine.isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill")
-                        .font(.system(size: 14))
-                        .foregroundStyle(voiceEngine.isMuted ? .red : .white.opacity(0.7))
-                        .frame(width: 32, height: 32)
-                        .background(Circle().fill(Color.black.opacity(0.3)))
-                }
-                .buttonStyle(.plain)
-            }
-            .padding(.horizontal, 24)
+            // Level name below orb
+            Text(level.name)
+                .font(.system(size: 12, weight: .bold, design: .monospaced))
+                .foregroundStyle(.white.opacity(0.5))
 
             // Description
             Text(level.description)
@@ -149,26 +76,53 @@ struct OrbAccessView: View {
                 .frame(height: 48)
                 .padding(.horizontal, 8)
 
-            // Kill switch
-            Button(action: {
-                withAnimation(.spring(response: 0.2)) { onKillSwitch() }
-            }) {
-                HStack(spacing: 6) {
-                    Image(systemName: level == .off ? "bolt.fill" : "power")
-                        .font(.system(size: 11, weight: .bold))
-                    Text(level == .off ? "CONNECT" : "KILL SWITCH")
-                        .font(.system(size: 10, weight: .bold, design: .monospaced))
+            // Kill switch + autonomy toggle
+            HStack {
+                Spacer()
+
+                Button(action: {
+                    withAnimation(.spring(response: 0.2)) { onKillSwitch() }
+                }) {
+                    HStack(spacing: 6) {
+                        Image(systemName: level == .off ? "bolt.fill" : "power")
+                            .font(.system(size: 11, weight: .bold))
+                        Text(level == .off ? "CONNECT" : "KILL SWITCH")
+                            .font(.system(size: 10, weight: .bold, design: .monospaced))
+                    }
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 20)
+                    .padding(.vertical, 8)
+                    .background(
+                        Capsule()
+                            .fill(level == .off ? Color.cyan.opacity(0.7) : Color.red.opacity(0.7))
+                            .shadow(color: level == .off ? .cyan.opacity(0.3) : .red.opacity(0.3), radius: 6)
+                    )
                 }
-                .foregroundStyle(.white)
-                .padding(.horizontal, 20)
-                .padding(.vertical, 8)
-                .background(
-                    Capsule()
-                        .fill(level == .off ? Color.cyan.opacity(0.7) : Color.red.opacity(0.7))
-                        .shadow(color: level == .off ? .cyan.opacity(0.3) : .red.opacity(0.3), radius: 6)
-                )
+                .buttonStyle(.plain)
+
+                Spacer()
+
+                Button { autonomyEnabled.toggle() } label: {
+                    HStack(spacing: 6) {
+                        Circle()
+                            .fill(autonomyEnabled ? Color.green : Color.white.opacity(0.15))
+                            .frame(width: 7, height: 7)
+                            .shadow(color: autonomyEnabled ? .green.opacity(0.6) : .clear, radius: 4)
+                        Text("AUTO")
+                            .font(.system(size: 10, weight: .bold, design: .monospaced))
+                            .foregroundStyle(autonomyEnabled ? .green : .white.opacity(0.3))
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    .background(
+                        Capsule()
+                            .fill(autonomyEnabled ? Color.green.opacity(0.15) : Color.white.opacity(0.04))
+                            .shadow(color: autonomyEnabled ? .green.opacity(0.3) : .clear, radius: 6)
+                    )
+                }
+                .buttonStyle(.plain)
             }
-            .buttonStyle(.plain)
+            .padding(.horizontal, 24)
         }
         .alert("Enable Full Access?", isPresented: $confirmingFull) {
             Button("Cancel", role: .cancel) {}

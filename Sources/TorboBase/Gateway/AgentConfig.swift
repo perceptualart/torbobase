@@ -52,6 +52,7 @@ struct AgentConfig: Codable, Equatable, Identifiable {
     var weeklyTokenLimit: Int = 0      // 0 = unlimited
     var monthlyTokenLimit: Int = 0     // 0 = unlimited
     var hardStopOnBudget: Bool = true  // Stop at 100% or allow override
+    var autonomyEnabled: Bool = false   // Per-agent autonomous task execution
 
     // Sync
     var lastModifiedAt: Date?  // Timestamp for bidirectional sync with iOS app
@@ -67,7 +68,7 @@ struct AgentConfig: Codable, Equatable, Identifiable {
          enabledCapabilities: [String: Bool] = [:], enabledConnectors: [String: Bool] = [:],
          preferredModel: String = "",
          dailyTokenLimit: Int = 0, weeklyTokenLimit: Int = 0, monthlyTokenLimit: Int = 0,
-         hardStopOnBudget: Bool = true, lastModifiedAt: Date? = nil) {
+         hardStopOnBudget: Bool = true, autonomyEnabled: Bool = false, lastModifiedAt: Date? = nil) {
         self.id = id; self.isBuiltIn = isBuiltIn; self.createdAt = createdAt
         self.name = name; self.pronouns = pronouns; self.role = role
         self.voiceTone = voiceTone; self.personalityPreset = personalityPreset
@@ -80,7 +81,7 @@ struct AgentConfig: Codable, Equatable, Identifiable {
         self.enabledConnectors = enabledConnectors; self.preferredModel = preferredModel
         self.dailyTokenLimit = dailyTokenLimit; self.weeklyTokenLimit = weeklyTokenLimit
         self.monthlyTokenLimit = monthlyTokenLimit; self.hardStopOnBudget = hardStopOnBudget
-        self.lastModifiedAt = lastModifiedAt
+        self.autonomyEnabled = autonomyEnabled; self.lastModifiedAt = lastModifiedAt
     }
 
     // MARK: - Codable (backward compatible — new fields have defaults)
@@ -91,7 +92,7 @@ struct AgentConfig: Codable, Equatable, Identifiable {
         case customInstructions, backgroundKnowledge
         case elevenLabsVoiceID, fallbackTTSVoice, voiceEngine, systemVoiceIdentifier
         case accessLevel, directoryScopes, enabledSkillIDs, enabledCapabilities, enabledConnectors, preferredModel
-        case dailyTokenLimit, weeklyTokenLimit, monthlyTokenLimit, hardStopOnBudget
+        case dailyTokenLimit, weeklyTokenLimit, monthlyTokenLimit, hardStopOnBudget, autonomyEnabled
         case lastModifiedAt
     }
 
@@ -124,6 +125,7 @@ struct AgentConfig: Codable, Equatable, Identifiable {
         weeklyTokenLimit = try c.decodeIfPresent(Int.self, forKey: .weeklyTokenLimit) ?? 0
         monthlyTokenLimit = try c.decodeIfPresent(Int.self, forKey: .monthlyTokenLimit) ?? 0
         hardStopOnBudget = try c.decodeIfPresent(Bool.self, forKey: .hardStopOnBudget) ?? true
+        autonomyEnabled = try c.decodeIfPresent(Bool.self, forKey: .autonomyEnabled) ?? false
         lastModifiedAt = try c.decodeIfPresent(Date.self, forKey: .lastModifiedAt)
     }
 
@@ -588,6 +590,14 @@ struct AgentConfig: Codable, Equatable, Identifiable {
         - Keep responses SHORT. 1-3 sentences unless the user asks for more detail. Brevity is respect.
         - Always respond. Never go silent. If something fails, say what went wrong simply.
         - You are talking to a human having a conversation. Not filing a report.
+
+        NEVER HALLUCINATE:
+        - If you are responding to a message, you ARE fully connected and operational. Do not claim otherwise.
+        - NEVER speculate about your own infrastructure, system status, connection state, or activation status. You do not have visibility into these things.
+        - NEVER invent technical-sounding explanations ("deep integration", "handshake", "activation sequence", "full brain mode") for things you don't understand.
+        - If you don't know something, say "I don't know" — do not fill the gap with plausible-sounding fiction.
+        - NEVER fabricate capabilities, limitations, or system states. Only describe what you can actually observe or do.
+        - Your tools list above is your ground truth. If a tool is listed, you can use it. If it's not listed, you can't. Don't speculate about hidden or inactive capabilities.
         </behavior>
         """)
 
