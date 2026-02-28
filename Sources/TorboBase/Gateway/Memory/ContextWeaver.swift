@@ -289,9 +289,10 @@ actor ContextWeaver {
 
         ENVIRONMENT:
         - You are running inside the Torbo app — a voice-first AI assistant. NOT a web browser, NOT a code editor.
-        - You do NOT have "Canvas" or "Artifacts". NEVER output [writing to canvas...], [writing: filename], or similar bracket markers. These get spoken aloud by TTS and sound terrible.
-        - Your output is spoken aloud via text-to-speech. Keep it conversational — no markdown tables, no code blocks (unless explicitly asked), no progress markers in brackets.
-        - If the user asks for code, games, or long-form content, use write_file to save it, then tell the user where to find it. Do NOT try to display it inline or use canvas.
+        - You have canvas_write — use it for code, games, interactive content, or documents. The user sees a live preview. Prefer canvas_write over speaking long code blocks.
+        - NEVER output bracket markers like [writing: filename], [writing to canvas...], [searching...], or any [text in brackets]. These get spoken aloud by TTS and sound terrible. Just do the action silently.
+        - Your output is spoken aloud via text-to-speech. Keep it conversational — no markdown tables, no code blocks (unless explicitly asked), no progress markers.
+        - If the user asks for code, games, or long-form content, prefer canvas_write for visual/interactive content. For files the user needs to keep, use write_file to save to their Documents folder. Say something like "I put that in Canvas for you" or "I saved that to your Documents folder" — don't describe the tool call process.
         </behavior>
         """)
 
@@ -362,7 +363,19 @@ actor ContextWeaver {
         // Skills define what the agent can actually DO. Without them, agents don't
         // know about their capabilities and act like plain chatbots.
         let agentSkillIDs = await AgentConfigManager.shared.agent(agentID)?.enabledSkillIDs ?? []
-        return await SkillsManager.shared.skillsPromptBlock(forAccessLevel: accessLevel, allowedSkillIDs: agentSkillIDs)
+        var block = await SkillsManager.shared.skillsPromptBlock(forAccessLevel: accessLevel, allowedSkillIDs: agentSkillIDs)
+
+        // Inject community knowledge for each active skill
+        for skillID in agentSkillIDs {
+            let community = await SkillsManager.shared.communityKnowledgeBlock(forSkill: skillID)
+            if !community.isEmpty { block += "\n" + community }
+        }
+
+        // Inject skill learnings from previous conversations
+        let learnings = await SkillsManager.shared.skillLearningsBlock(forSkillIDs: agentSkillIDs)
+        if !learnings.isEmpty { block += "\n" + learnings }
+
+        return block
     }
 
     private func generatePlatform(_ platform: String?) -> String {

@@ -4,18 +4,21 @@
 // Floating workspace for notes, generated content, and agent output.
 // Agents can push content here via the canvas_write tool.
 // Includes a live Preview mode for HTML/CSS/JS rendering via WKWebView.
-#if canImport(SwiftUI) && os(macOS)
+
+#if canImport(SwiftUI)
 import SwiftUI
 
 /// Shared store so agent tools can push content to the Canvas window.
+/// Cross-platform: macOS uses WindowOpener, iOS uses isPresented sheet binding.
 @MainActor
 final class CanvasStore: ObservableObject {
     static let shared = CanvasStore()
 
     @Published var content: String = ""
     @Published var title: String = "Untitled"
+    @Published var isPresented: Bool = false
 
-    /// Per-agent canvas snapshots: agentID → (title, content)
+    /// Per-agent canvas snapshots: agentID -> (title, content)
     private var agentSnapshots: [String: (title: String, content: String)] = [:]
     /// Currently active agent ID (for snapshot tracking)
     private var activeAgentID: String?
@@ -47,15 +50,19 @@ final class CanvasStore: ObservableObject {
         }
     }
 
-    /// Restores canvas content and opens the window
+    /// Restores canvas content and opens the window/sheet
     func restoreState(title: String, content: String) {
         self.title = title
         self.content = content
+        #if os(macOS)
         WindowOpener.openWindow?(id: "canvas")
         NSApp.activate(ignoringOtherApps: true)
+        #else
+        isPresented = true
+        #endif
     }
 
-    /// Called by agent tools to write content to the canvas and open the window.
+    /// Called by agent tools to write content to the canvas and open the window/sheet.
     func write(title: String, content: String, append: Bool = false) {
         self.title = title
         if append {
@@ -64,12 +71,19 @@ final class CanvasStore: ObservableObject {
         } else {
             self.content = content
         }
-        // Open the canvas window
+        #if os(macOS)
         WindowOpener.openWindow?(id: "canvas")
         NSApp.activate(ignoringOtherApps: true)
+        #else
+        isPresented = true
+        #endif
     }
 }
+#endif
 
+// MARK: - macOS Canvas Window + Preview
+
+#if canImport(SwiftUI) && os(macOS)
 struct CanvasWindow: View {
     @ObservedObject private var store = CanvasStore.shared
     @State private var isEditing = false

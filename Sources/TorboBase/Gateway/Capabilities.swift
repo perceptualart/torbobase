@@ -91,7 +91,7 @@ enum CapabilityRegistry {
         CapabilityDefinition(toolName: "clipboard_read", category: .clipboard, minimumAccessLevel: .readFiles, description: "Read clipboard contents", macOnly: true),
         CapabilityDefinition(toolName: "clipboard_write", category: .clipboard, minimumAccessLevel: .writeFiles, description: "Write to clipboard", macOnly: true),
         // Canvas (macOS)
-        CapabilityDefinition(toolName: "canvas_write", category: .clipboard, minimumAccessLevel: .chatOnly, description: "Write content to Canvas window", macOnly: true),
+        CapabilityDefinition(toolName: "canvas_write", category: .clipboard, minimumAccessLevel: .chatOnly, description: "Write content to Canvas window", macOnly: false),
         // System
         CapabilityDefinition(toolName: "process_list", category: .system, minimumAccessLevel: .readFiles, description: "List running processes", macOnly: false),
         CapabilityDefinition(toolName: "process_kill", category: .system, minimumAccessLevel: .execute, description: "Kill a process", macOnly: false),
@@ -1624,6 +1624,17 @@ extension ToolProcessor {
         if !mcpTools.isEmpty {
             tools.append(contentsOf: mcpTools)
         }
+
+        // Skill tools — merge enabled skill tools for this agent
+        let skillIDs = agentConfig?.enabledSkillIDs ?? []
+        let skillTools = await SkillsManager.shared.skillToolDefinitions(
+            forAccessLevel: level.rawValue,
+            allowedSkillIDs: skillIDs
+        )
+        if !skillTools.isEmpty {
+            tools.append(contentsOf: skillTools)
+        }
+
         return tools
     }
 
@@ -1658,6 +1669,25 @@ extension ToolProcessor {
             let iamCheck = await CapabilitiesIAM.checkBeforeToolExecution(agentID: agentID, toolName: name)
             if !iamCheck.permitted {
                 results.append(["role": "tool", "tool_call_id": id, "content": "IAM denied: \(iamCheck.reason ?? "insufficient permissions")"])
+                continue
+            }
+
+            // Handle skill tools (prefixed with skill_)
+            if name.hasPrefix("skill_") {
+                // Parse: skill_{skillID}_{toolName}
+                let remainder = String(name.dropFirst(6)) // drop "skill_"
+                let parts = remainder.split(separator: "_", maxSplits: 1)
+                if parts.count == 2 {
+                    let skillID = String(parts[0])
+                    let toolName = String(parts[1])
+                    let content = await SkillsManager.shared.executeSkillTool(
+                        skillID: skillID, toolName: toolName, arguments: args,
+                        accessLevel: accessLevel.rawValue, agentID: agentID
+                    )
+                    results.append(["role": "tool", "tool_call_id": id, "content": content])
+                } else {
+                    results.append(["role": "tool", "tool_call_id": id, "content": "Error: invalid skill tool name '\(name)'"])
+                }
                 continue
             }
 

@@ -2676,12 +2676,9 @@ actor GatewayServer {
             let clientToolNames = Set(extractToolNames(from: clientTools))
             let serverTools = await ToolProcessor.toolDefinitionsWithMCP(for: accessLevel, agentID: agentID)
             // Add server tools that aren't already provided by the client (avoid duplicates).
-            // Skip canvas_write for remote clients — it opens a Mac-local window that the
-            // remote user can't see, and its progress markers leak to TTS on iOS.
             for tool in serverTools {
                 let name = ((tool["function"] as? [String: Any])?["name"] as? String) ?? ""
                 if !name.isEmpty && !clientToolNames.contains(name) {
-                    if hasClientSystem && name == "canvas_write" { continue }
                     clientTools.append(tool)
                 }
             }
@@ -3484,12 +3481,9 @@ actor GatewayServer {
             var clientTools = body["tools"] as? [[String: Any]] ?? []
             let clientToolNames = Set(extractToolNames(from: clientTools))
             let serverTools = await ToolProcessor.toolDefinitionsWithMCP(for: accessLevel, agentID: agentID)
-            // Skip canvas_write for remote clients — it opens a Mac-local window that the
-            // remote user can't see, and its progress markers leak to TTS on iOS.
             for tool in serverTools {
                 let name = ((tool["function"] as? [String: Any])?["name"] as? String) ?? ""
                 if !name.isEmpty && !clientToolNames.contains(name) {
-                    if hasClientSystem && name == "canvas_write" { continue }
                     clientTools.append(tool)
                 }
             }
