@@ -870,6 +870,29 @@ actor GatewayServer {
             return await CloudRoutes.handleStripeWebhook(req)
         }
 
+        // ── Cross-Node Delegation peer-to-peer (no auth — Ed25519 signature verified) ──
+        if req.method == "GET" && req.path == "/v1/delegation/capabilities" {
+            let capabilities = await CrossNodeDelegation.shared.getCapabilities()
+            return HTTPResponse.json(capabilities.toDict())
+        }
+        if req.method == "POST" && req.path == "/v1/delegation/submit" {
+            if let body = req.jsonBody {
+                let result = await CrossNodeDelegation.shared.handleIncomingTask(data: body, senderIP: clientIP)
+                let status = (result["status"] as? String) == "accepted" ? 200 : 403
+                let data = try? JSONSerialization.data(withJSONObject: result)
+                return HTTPResponse(statusCode: status, headers: ["Content-Type": "application/json"], body: data ?? Data())
+            }
+            return HTTPResponse.badRequest("Missing request body")
+        }
+        if req.method == "POST" && req.path == "/v1/delegation/result" {
+            if let body = req.jsonBody {
+                let result = await CrossNodeDelegation.shared.handleTaskResult(data: body)
+                let data = try? JSONSerialization.data(withJSONObject: result)
+                return HTTPResponse(statusCode: 200, headers: ["Content-Type": "application/json"], body: data ?? Data())
+            }
+            return HTTPResponse.badRequest("Missing request body")
+        }
+
         // --- Everything below requires auth ---
         // Cloud mode: accept both Supabase JWT and legacy server token
         let cloudContext: CloudRequestContext? = await resolveCloudAuth(req)
@@ -1145,6 +1168,13 @@ actor GatewayServer {
         // MARK: - Skill Community Network
         if req.path.hasPrefix("/v1/community") {
             if let response = await handleSkillCommunityRoute(req, clientIP: clientIP, currentLevel: currentLevel) {
+                return response
+            }
+        }
+
+        // MARK: - Cross-Node Task Delegation
+        if req.path.hasPrefix("/v1/delegation") {
+            if let response = await handleDelegationRoute(req, clientIP: clientIP, currentLevel: currentLevel) {
                 return response
             }
         }
@@ -2802,13 +2832,16 @@ actor GatewayServer {
                     headersSent = true
                 }
 
-                // Send progress indicator for each tool being executed
-                let toolLabels = builtInCalls.compactMap { call -> String? in
-                    guard let name = (call["function"] as? [String: Any])?["name"] as? String else { return nil }
-                    return Self.toolProgressLabel(name, args: (call["function"] as? [String: Any])?["arguments"] as? String)
+                // Send progress indicator for each tool being executed.
+                // Skip for remote clients (iOS) — bracket markers get spoken by TTS and sound terrible.
+                if !hasClientSystem {
+                    let toolLabels = builtInCalls.compactMap { call -> String? in
+                        guard let name = (call["function"] as? [String: Any])?["name"] as? String else { return nil }
+                        return Self.toolProgressLabel(name, args: (call["function"] as? [String: Any])?["arguments"] as? String)
+                    }
+                    let progressText = toolLabels.joined(separator: "\n") + "\n\n"
+                    sendSSETextChunk(progressText, id: chunkID, model: model, writer: writer)
                 }
-                let progressText = toolLabels.joined(separator: "\n") + "\n\n"
-                sendSSETextChunk(progressText, id: chunkID, model: model, writer: writer)
 
                 let toolResults = await ToolProcessor.shared.executeBuiltInTools(builtInCalls, accessLevel: accessLevel, agentID: agentID)
                 TorboLog.info("Round \(round + 1): Executed \(builtInCalls.count) tool(s) for \(agentID)", subsystem: "Gateway")
@@ -2895,16 +2928,31 @@ actor GatewayServer {
 
                     if jsonStr == "[DONE]" { break }
 
-                    // Forward chunk to client
-                    writer.sendSSEChunk(jsonStr)
-
-                    // Accumulate content for logging
+                    // Filter hallucination patterns from content deltas
                     if let data = jsonStr.data(using: .utf8),
                        let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                        let choices = json["choices"] as? [[String: Any]],
                        let delta = choices.first?["delta"] as? [String: Any],
                        let content = delta["content"] as? String {
-                        fullContent += content
+                        let filtered = HallucinationFilter.clean(content)
+                        fullContent += filtered
+                        if !filtered.isEmpty {
+                            var mutableJson = json
+                            var mutableChoices = choices
+                            var mutableChoice = mutableChoices[0]
+                            var mutableDelta = delta
+                            mutableDelta["content"] = filtered
+                            mutableChoice["delta"] = mutableDelta
+                            mutableChoices[0] = mutableChoice
+                            mutableJson["choices"] = mutableChoices
+                            if let rebuiltData = try? JSONSerialization.data(withJSONObject: mutableJson),
+                               let rebuiltStr = String(data: rebuiltData, encoding: .utf8) {
+                                writer.sendSSEChunk(rebuiltStr)
+                            }
+                        }
+                    } else {
+                        // Non-content chunk — forward as-is
+                        writer.sendSSEChunk(jsonStr)
                     }
                 } else {
                     buffer.append(char)
@@ -2913,8 +2961,8 @@ actor GatewayServer {
 
             writer.sendSSEDone()
 
-            // Log the full assistant response
-            let capturedContent = fullContent
+            // Log the full assistant response (with final hallucination pass for cross-chunk patterns)
+            let capturedContent = HallucinationFilter.cleanFull(fullContent)
             if !capturedContent.isEmpty {
                 let assistantMsg = ConversationMessage(role: "assistant", content: capturedContent, model: model, clientIP: clientIP, agentID: agentID)
                 if cloudContext == nil {
@@ -2934,7 +2982,8 @@ actor GatewayServer {
                    let userContent = extractTextContent(from: messages.last(where: { $0["role"] as? String == "user" })?["content"]) {
                     Task { await TelegramBridge.shared.forwardExchange(user: userContent, assistant: capturedContent, model: model) }
                     // Memory extraction (background) — use per-user router for cloud users
-                    router.processExchange(userMessage: userContent, assistantResponse: capturedContent, model: model)
+                    let activeSkillIDs = await AgentConfigManager.shared.agent(agentID)?.enabledSkillIDs ?? []
+                    router.processExchange(userMessage: userContent, assistantResponse: capturedContent, model: model, activeSkillIDs: activeSkillIDs)
                 }
             }
         } catch {
@@ -3004,13 +3053,31 @@ actor GatewayServer {
                         guard !line.isEmpty else { continue }
                         let jsonStr = line.hasPrefix("data: ") ? String(line.dropFirst(6)) : line
                         if jsonStr == "[DONE]" { break }
-                        writer.sendSSEChunk(jsonStr)
+                        // Filter hallucination patterns from content deltas
                         if let data = jsonStr.data(using: .utf8),
                            let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                            let choices = json["choices"] as? [[String: Any]],
                            let delta = choices.first?["delta"] as? [String: Any],
                            let content = delta["content"] as? String {
-                            fullContent += content
+                            let filtered = HallucinationFilter.clean(content)
+                            fullContent += filtered
+                            if !filtered.isEmpty {
+                                var mutableJson = json
+                                var mutableChoices = choices
+                                var mutableChoice = mutableChoices[0]
+                                var mutableDelta = delta
+                                mutableDelta["content"] = filtered
+                                mutableChoice["delta"] = mutableDelta
+                                mutableChoices[0] = mutableChoice
+                                mutableJson["choices"] = mutableChoices
+                                if let rebuiltData = try? JSONSerialization.data(withJSONObject: mutableJson),
+                                   let rebuiltStr = String(data: rebuiltData, encoding: .utf8) {
+                                    writer.sendSSEChunk(rebuiltStr)
+                                }
+                            }
+                        } else {
+                            // Non-content chunk (tool calls, finish_reason, etc.) — forward as-is
+                            writer.sendSSEChunk(jsonStr)
                         }
                     } else { buffer.append(char) }
                 }
@@ -3110,16 +3177,19 @@ actor GatewayServer {
                             // Skip thinking block deltas — don't forward to client
                             if currentBlockType == "thinking" { continue }
                             if let text = delta["text"] as? String {
-                                fullContent += text
-                                let chunk: [String: Any] = [
-                                    "id": completionId,
-                                    "object": "chat.completion.chunk",
-                                    "model": model,
-                                    "choices": [["index": 0, "delta": ["content": text], "finish_reason": NSNull()]]
-                                ]
-                                if let chunkData = try? JSONSerialization.data(withJSONObject: chunk),
-                                   let chunkStr = String(data: chunkData, encoding: .utf8) {
-                                    writer.sendSSEChunk(chunkStr)
+                                let filtered = HallucinationFilter.clean(text)
+                                fullContent += filtered
+                                if !filtered.isEmpty {
+                                    let chunk: [String: Any] = [
+                                        "id": completionId,
+                                        "object": "chat.completion.chunk",
+                                        "model": model,
+                                        "choices": [["index": 0, "delta": ["content": filtered], "finish_reason": NSNull()]]
+                                    ]
+                                    if let chunkData = try? JSONSerialization.data(withJSONObject: chunk),
+                                       let chunkStr = String(data: chunkData, encoding: .utf8) {
+                                        writer.sendSSEChunk(chunkStr)
+                                    }
                                 }
                             } else if delta["type"] as? String == "input_json_delta" {
                                 // Tool call argument streaming — accumulate only, emit on content_block_stop.
@@ -3281,13 +3351,14 @@ actor GatewayServer {
                               let parts = contentObj["parts"] as? [[String: Any]] else { continue }
 
                         let text = parts.compactMap { $0["text"] as? String }.joined()
-                        if !text.isEmpty {
-                            fullContent += text
+                        let filtered = HallucinationFilter.clean(text)
+                        if !filtered.isEmpty {
+                            fullContent += filtered
                             let chunk: [String: Any] = [
                                 "id": completionId,
                                 "object": "chat.completion.chunk",
                                 "model": model,
-                                "choices": [["index": 0, "delta": ["content": text], "finish_reason": NSNull()]]
+                                "choices": [["index": 0, "delta": ["content": filtered], "finish_reason": NSNull()]]
                             ]
                             if let chunkData = try? JSONSerialization.data(withJSONObject: chunk),
                                let chunkStr = String(data: chunkData, encoding: .utf8) {
@@ -3323,8 +3394,8 @@ actor GatewayServer {
             writer.sendResponse(response); return
         }
 
-        // Log the full assistant response
-        let capturedCloudContent = fullContent
+        // Log the full assistant response (with final hallucination pass for cross-chunk patterns)
+        let capturedCloudContent = HallucinationFilter.cleanFull(fullContent)
         if !capturedCloudContent.isEmpty {
             let assistantMsg = ConversationMessage(role: "assistant", content: capturedCloudContent, model: model, clientIP: clientIP, agentID: agentID)
             if let ctx = cloudContext {
@@ -3339,7 +3410,8 @@ actor GatewayServer {
                 Task { await TelegramBridge.shared.forwardExchange(user: userContent, assistant: capturedCloudContent, model: model) }
                 // Memory extraction (background) — use per-user router for cloud users
                 let memRouter = router ?? MemoryRouter.shared
-                memRouter.processExchange(userMessage: userContent, assistantResponse: capturedCloudContent, model: model)
+                let activeSkillIDs = await AgentConfigManager.shared.agent(agentID)?.enabledSkillIDs ?? []
+                memRouter.processExchange(userMessage: userContent, assistantResponse: capturedCloudContent, model: model, activeSkillIDs: activeSkillIDs)
             }
         }
     }
@@ -3580,7 +3652,11 @@ actor GatewayServer {
             Task { await TelegramBridge.shared.forwardExchange(user: userContent, assistant: content, model: model) }
             // Memory extraction (background) — use per-user router for cloud users
             let memRouter = router ?? MemoryRouter.shared
-            memRouter.processExchange(userMessage: userContent, assistantResponse: content, model: model)
+            let capturedAgentID = agentID
+            Task {
+                let activeSkillIDs = await AgentConfigManager.shared.agent(capturedAgentID)?.enabledSkillIDs ?? []
+                memRouter.processExchange(userMessage: userContent, assistantResponse: content, model: model, activeSkillIDs: activeSkillIDs)
+            }
         }
     }
 

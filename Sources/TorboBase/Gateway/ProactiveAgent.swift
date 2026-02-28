@@ -111,6 +111,12 @@ actor ProactiveAgent {
                 payload: ["agent_id": agentID, "task_id": task.id, "task_title": task.title, "elapsed": "\(elapsed)"],
                 source: "ProactiveAgent")
 
+            // Deliver result back to originator if this was an inbound delegated task
+            if task.delegatedFromNodeID != nil {
+                await CrossNodeDelegation.shared.deliverResult(
+                    taskID: task.id, status: "completed", result: result, error: nil)
+            }
+
         } catch {
             await TaskQueue.shared.failTask(id: task.id, error: error.localizedDescription)
             TorboLog.error("\(agentID) failed '\(task.title)': \(error.localizedDescription)", subsystem: "Agent")
@@ -118,6 +124,12 @@ actor ProactiveAgent {
             await EventBus.shared.publish("system.agent.error",
                 payload: ["agent_id": agentID, "task_id": task.id, "task_title": task.title, "error": error.localizedDescription],
                 source: "ProactiveAgent")
+
+            // Deliver failure back to originator if this was an inbound delegated task
+            if task.delegatedFromNodeID != nil {
+                await CrossNodeDelegation.shared.deliverResult(
+                    taskID: task.id, status: "failed", result: nil, error: error.localizedDescription)
+            }
         }
         // Slot is auto-freed by ParallelExecutor when this closure returns
     }

@@ -47,6 +47,8 @@ actor TaskQueue {
         var dependsOn: [String]         // Task IDs that must complete before this starts
         var stepIndex: Int?             // Order within workflow (0-based)
         var context: String?            // Context passed from previous task result
+        var delegatedToNodeID: String?   // Set when task sent to remote peer
+        var delegatedFromNodeID: String? // Set when task received from remote peer
 
         init(title: String, description: String, assignedTo: String, assignedBy: String, priority: TaskPriority = .normal,
              workflowID: String? = nil, parentTaskID: String? = nil, dependsOn: [String] = [], stepIndex: Int? = nil) {
@@ -68,6 +70,8 @@ actor TaskQueue {
             self.dependsOn = dependsOn
             self.stepIndex = stepIndex
             self.context = nil
+            self.delegatedToNodeID = nil
+            self.delegatedFromNodeID = nil
         }
     }
 
@@ -160,7 +164,8 @@ actor TaskQueue {
         for taskID in taskOrder {
             guard var task = tasks[taskID],
                   task.assignedTo == agentID,
-                  task.status == .pending else { continue }
+                  task.status == .pending,
+                  task.delegatedToNodeID == nil else { continue }
 
             // Check dependencies — all must be completed
             if !task.dependsOn.isEmpty {
@@ -249,6 +254,26 @@ actor TaskQueue {
         tasks[id] = task
         saveTasks()
         TorboLog.info("Cancelled: '\(task.title)'", subsystem: "Tasks")
+    }
+
+    // MARK: - Cross-Node Delegation
+
+    /// Mark a task as delegated outbound to a remote node.
+    func markDelegatedOutbound(id: String, targetNodeID: String) {
+        guard var task = tasks[id] else { return }
+        task.delegatedToNodeID = targetNodeID
+        task.status = .inProgress
+        task.startedAt = Date()
+        tasks[id] = task
+        saveTasks()
+    }
+
+    /// Mark a task as received from a remote node (inbound delegation).
+    func markDelegatedInbound(id: String, fromNodeID: String) {
+        guard var task = tasks[id] else { return }
+        task.delegatedFromNodeID = fromNodeID
+        tasks[id] = task
+        saveTasks()
     }
 
     // MARK: - Queries

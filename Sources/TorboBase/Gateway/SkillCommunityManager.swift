@@ -445,6 +445,9 @@ actor SkillCommunityManager {
         )
         await store.savePeer(peer)
         TorboLog.info("Peer discovered: \(peer.displayName) (\(host):\(port))", subsystem: "Community")
+
+        // Trigger cross-node delegation capability refresh
+        Task { await CrossNodeDelegation.shared.refreshPeerCapabilities() }
     }
 
     /// Import knowledge entries received from a peer (P2P sync).

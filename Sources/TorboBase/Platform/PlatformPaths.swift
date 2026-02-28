@@ -77,6 +77,9 @@ enum PlatformPaths {
     /// Cron scheduled tasks persistence file.
     static var cronTasksFile: String { dataDir + "/scheduled_tasks.json" }
 
+    /// Cross-node delegation persistence file.
+    static var delegatedTasksFile: String { dataDir + "/delegated_tasks.json" }
+
     /// Webhook definitions file.
     static var webhooksFile: String { dataDir + "/webhooks.json" }
 
