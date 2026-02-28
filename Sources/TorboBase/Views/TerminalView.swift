@@ -18,8 +18,28 @@ class TerminalManager: ObservableObject {
     enum ViewMode: String {
         case tabs
         case tiled
+        case panels
     }
     @Published var viewMode: ViewMode = .tabs
+
+    /// Per-session panel geometry for panels mode.
+    struct PanelState {
+        var position: CGPoint  // top-left corner
+        var size: CGSize       // width x height
+    }
+
+    @Published var panelStates: [UUID: PanelState] = [:]
+    @Published var focusedPanelID: UUID?
+
+    func ensurePanelState(for session: TerminalSession, in containerSize: CGSize) {
+        guard panelStates[session.id] == nil else { return }
+        let offset = CGFloat(panelStates.count) * 30
+        panelStates[session.id] = PanelState(
+            position: CGPoint(x: 20 + offset, y: 20 + offset),
+            size: CGSize(width: min(600, containerSize.width * 0.6),
+                         height: min(400, containerSize.height * 0.6))
+        )
+    }
 
     var activeSession: TerminalSession? {
         guard let id = activeSessionID else { return nil }
@@ -160,6 +180,8 @@ struct TerminalView: View {
                 tabbedContent
             case .tiled:
                 tiledContent
+            case .panels:
+                panelsContent
             }
         }
         .onAppear {
@@ -183,13 +205,24 @@ struct TerminalView: View {
                     }
                     .padding(.leading, 8)
                 }
-            } else {
+            } else if manager.viewMode == .tiled {
                 // Tiled mode label
                 HStack(spacing: 6) {
                     Image(systemName: "square.grid.2x2")
                         .font(.system(size: 11))
                         .foregroundStyle(.white.opacity(0.4))
                     Text("Tiled — \(manager.sessions.count) terminal\(manager.sessions.count == 1 ? "" : "s")")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(.white.opacity(0.5))
+                }
+                .padding(.leading, 12)
+            } else {
+                // Panels mode label
+                HStack(spacing: 6) {
+                    Image(systemName: "rectangle.3.group")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.white.opacity(0.4))
+                    Text("Panels — \(manager.sessions.count) terminal\(manager.sessions.count == 1 ? "" : "s")")
                         .font(.system(size: 11, weight: .medium))
                         .foregroundStyle(.white.opacity(0.5))
                 }
@@ -202,6 +235,7 @@ struct TerminalView: View {
             HStack(spacing: 2) {
                 viewModeButton(icon: "rectangle.stack", mode: .tabs, label: "Tabs")
                 viewModeButton(icon: "square.grid.2x2", mode: .tiled, label: "Tiled")
+                viewModeButton(icon: "rectangle.3.group", mode: .panels, label: "Panels")
             }
             .padding(2)
             .background(Color.white.opacity(0.04))
@@ -306,6 +340,144 @@ struct TerminalView: View {
                     }
                 }
             }
+        }
+    }
+
+    // MARK: - Panels Content
+
+    private var panelsContent: some View {
+        Group {
+            if manager.sessions.isEmpty {
+                emptyState
+            } else {
+                GeometryReader { geo in
+                    ZStack {
+                        // Render panels in order, focused panel last (on top)
+                        let sorted = manager.sessions.sorted { a, b in
+                            if a.id == manager.focusedPanelID { return false }
+                            if b.id == manager.focusedPanelID { return true }
+                            return false
+                        }
+
+                        ForEach(sorted) { session in
+                            panelView(for: session, in: geo.size)
+                        }
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .onAppear {
+                        for session in manager.sessions {
+                            manager.ensurePanelState(for: session, in: geo.size)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private func panelView(for session: TerminalSession, in containerSize: CGSize) -> some View {
+        let isFocused = session.id == manager.focusedPanelID
+        let state = manager.panelStates[session.id] ?? TerminalManager.PanelState(
+            position: CGPoint(x: 20, y: 20),
+            size: CGSize(width: min(600, containerSize.width * 0.6),
+                         height: min(400, containerSize.height * 0.6))
+        )
+
+        return VStack(spacing: 0) {
+            // Title bar — drag handle
+            HStack(spacing: 5) {
+                Circle()
+                    .fill(session.isRunning ? Color.green : Color.red.opacity(0.6))
+                    .frame(width: 6, height: 6)
+                Text(session.title)
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.6))
+                    .lineLimit(1)
+                Spacer(minLength: 0)
+
+                // Pop-out
+                Button {
+                    manager.popOutSession(session.id)
+                } label: {
+                    Image(systemName: "rectangle.portrait.and.arrow.right")
+                        .font(.system(size: 8))
+                        .foregroundStyle(.white.opacity(0.3))
+                }
+                .buttonStyle(.plain)
+
+                // Close
+                Button {
+                    manager.closeSession(session.id)
+                    manager.panelStates.removeValue(forKey: session.id)
+                } label: {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 8, weight: .bold))
+                        .foregroundStyle(.white.opacity(0.3))
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 5)
+            .background(Color.white.opacity(isFocused ? 0.06 : 0.02))
+            .gesture(
+                DragGesture()
+                    .onChanged { value in
+                        manager.focusedPanelID = session.id
+                        var pos = manager.panelStates[session.id]?.position ?? state.position
+                        pos.x += value.translation.width
+                        pos.y += value.translation.height
+                        // Clamp so at least 50px stays visible
+                        let panelSize = manager.panelStates[session.id]?.size ?? state.size
+                        pos.x = max(50 - panelSize.width, min(pos.x, containerSize.width - 50))
+                        pos.y = max(-10, min(pos.y, containerSize.height - 50))
+                        manager.panelStates[session.id]?.position = pos
+                    }
+            )
+
+            // Terminal body
+            TerminalWebView(session: session)
+                .id(session.id)
+
+            // Resize handle — bottom-right corner
+            HStack {
+                Spacer()
+                Image(systemName: "arrow.down.right.and.arrow.up.left")
+                    .font(.system(size: 8))
+                    .foregroundStyle(.white.opacity(0.2))
+                    .frame(width: 12, height: 12)
+                    .contentShape(Rectangle())
+                    .gesture(
+                        DragGesture()
+                            .onChanged { value in
+                                manager.focusedPanelID = session.id
+                                var size = manager.panelStates[session.id]?.size ?? state.size
+                                size.width += value.translation.width
+                                size.height += value.translation.height
+                                // Enforce minimum size
+                                size.width = max(200, size.width)
+                                size.height = max(150, size.height)
+                                manager.panelStates[session.id]?.size = size
+                            }
+                    )
+            }
+            .padding(.trailing, 2)
+            .padding(.bottom, 2)
+            .background(Color.white.opacity(0.02))
+        }
+        .frame(width: state.size.width, height: state.size.height)
+        .overlay(
+            RoundedRectangle(cornerRadius: 4)
+                .stroke(isFocused ? Color(red: 0.66, green: 0.33, blue: 0.97).opacity(0.5) : Color.white.opacity(0.08), lineWidth: 1)
+        )
+        .clipShape(RoundedRectangle(cornerRadius: 4))
+        .shadow(color: .black.opacity(isFocused ? 0.4 : 0.2), radius: isFocused ? 8 : 4)
+        .position(x: state.position.x + state.size.width / 2,
+                  y: state.position.y + state.size.height / 2)
+        .onTapGesture {
+            manager.focusedPanelID = session.id
+            manager.activeSessionID = session.id
+        }
+        .onAppear {
+            manager.ensurePanelState(for: session, in: containerSize)
         }
     }
 

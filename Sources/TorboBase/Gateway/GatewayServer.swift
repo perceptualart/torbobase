@@ -2671,23 +2671,27 @@ actor GatewayServer {
             body.removeValue(forKey: "tool_choice")
             TorboLog.info("Client sent empty tools — skipping all tool injection (conversational)", subsystem: "Gateway")
         } else {
-            // Client provided tools (e.g. native iOS tools) — MERGE with Base's Mac-side tools
-            var clientTools = body["tools"] as? [[String: Any]] ?? []
-            let clientToolNames = Set(extractToolNames(from: clientTools))
-            let serverTools = await ToolProcessor.toolDefinitionsWithMCP(for: accessLevel, agentID: agentID)
-            // Add server tools that aren't already provided by the client (avoid duplicates).
-            for tool in serverTools {
-                let name = ((tool["function"] as? [String: Any])?["name"] as? String) ?? ""
-                if !name.isEmpty && !clientToolNames.contains(name) {
-                    clientTools.append(tool)
+            // Client provided tools (e.g. native iOS tools) — MERGE with Base's Mac-side tools.
+            // Server tools get priority (run_command, file access, LoA memory).
+            // Model-aware cap prevents tool overload that causes confabulation.
+            let clientTools = body["tools"] as? [[String: Any]] ?? []
+            let allServerTools = await ToolProcessor.toolDefinitionsWithMCP(for: accessLevel, agentID: agentID)
+            let serverTools: [[String: Any]]
+            if hasClientSystem {
+                serverTools = allServerTools.filter { tool in
+                    let name = ((tool["function"] as? [String: Any])?["name"] as? String) ?? ""
+                    return !ToolProcessor.remoteExcludedTools.contains(name)
                 }
+            } else {
+                serverTools = allServerTools
             }
-            body["tools"] = clientTools
+            let (merged, mergeLog) = mergeToolsSmart(clientTools: clientTools, serverTools: serverTools, model: model, hasClientSystem: hasClientSystem)
+            body["tools"] = merged
             if body["tool_choice"] == nil {
                 body["tool_choice"] = "auto"
             }
-            toolNames = extractToolNames(from: clientTools)
-            TorboLog.info("Merged tools: \(clientToolNames.count) client + \(serverTools.count) server = \(clientTools.count) total", subsystem: "Gateway")
+            toolNames = extractToolNames(from: merged)
+            TorboLog.info(mergeLog, subsystem: "Gateway")
         }
 
         // Enrich with agent identity + memory (identity skipped if client provided system prompt)
@@ -2733,6 +2737,10 @@ actor GatewayServer {
             let maxToolRounds = 5
             let chunkID = "chatcmpl-tool-\(UUID().uuidString.prefix(8))"
             var headersSent = false
+            // Track canvas_write tool calls for forwarding to remote clients (iOS).
+            // Base executes them server-side (so the LLM gets results), but we also
+            // emit them as SSE tool_call events so the iOS client can open Canvas locally.
+            var pendingClientCanvasCalls: [[String: Any]] = []
 
             for round in 0..<maxToolRounds {
                 let response = await sendChatRequest(body: currentBody, model: model, clientIP: clientIP)
@@ -2746,7 +2754,18 @@ actor GatewayServer {
                        let first = choices.first,
                        let message = first["message"] as? [String: Any],
                        let content = message["content"] as? String {
-                        if headersSent {
+                        if !pendingClientCanvasCalls.isEmpty {
+                            // Forward canvas_write tool calls via SSE so iOS client opens Canvas locally.
+                            // Text is suppressed — the client's follow-up request will generate it.
+                            TorboLog.info("Canvas forwarding: emitting \(pendingClientCanvasCalls.count) SSE tool_call chunks", subsystem: "Gateway")
+                            if !headersSent {
+                                writer.sendStreamHeaders(origin: corsOrigin)
+                                headersSent = true
+                            }
+                            sendSSEToolCallChunks(pendingClientCanvasCalls, id: chunkID, model: model, writer: writer)
+                            sendSSEFinishChunk(id: chunkID, model: model, writer: writer, finishReason: "tool_calls")
+                            writer.sendSSEDone()
+                        } else if headersSent {
                             // Already streaming progress — send final text + finish in same stream
                             sendSSETextChunk(content, id: chunkID, model: model, writer: writer)
                             sendSSEFinishChunk(id: chunkID, model: model, writer: writer)
@@ -2755,6 +2774,17 @@ actor GatewayServer {
                             simulateStreamResponse(content, model: model, writer: writer, corsOrigin: corsOrigin)
                         }
                         logAssistantResponse(response, model: model, clientIP: clientIP, originalMessages: req.jsonBody?["messages"], agentID: agentID, cloudContext: cloudContext, router: router)
+                    } else if !pendingClientCanvasCalls.isEmpty {
+                        // Model returned empty but canvas_write was already executed —
+                        // forward the canvas calls to the client instead of showing an error.
+                        TorboLog.info("Tool loop: empty model response but canvas_write executed — forwarding canvas to client", subsystem: "Gateway")
+                        if !headersSent {
+                            writer.sendStreamHeaders(origin: corsOrigin)
+                            headersSent = true
+                        }
+                        sendSSEToolCallChunks(pendingClientCanvasCalls, id: chunkID, model: model, writer: writer)
+                        sendSSEFinishChunk(id: chunkID, model: model, writer: writer, finishReason: "tool_calls")
+                        writer.sendSSEDone()
                     } else {
                         let bodyStr = String(data: response.body, encoding: .utf8) ?? "(empty)"
                         TorboLog.warn("Tool loop: empty/unparseable response from \(model) (status \(response.statusCode)): \(bodyStr.prefix(500))", subsystem: "Gateway")
@@ -2784,6 +2814,10 @@ actor GatewayServer {
                     let name = ($0["function"] as? [String: Any])?["name"] as? String ?? ""
                     return ToolProcessor.canExecute(name)
                 }
+
+                // Track canvas_write calls for forwarding to remote clients (iOS).
+                // Canvas calls are tracked AFTER execution (below) so auto-generated
+                // content is included in the forwarded args.
 
                 // If there are non-built-in tool calls, can't handle them
                 if builtInCalls.count != toolCalls.count {
@@ -2843,6 +2877,33 @@ actor GatewayServer {
                 let toolResults = await ToolProcessor.shared.executeBuiltInTools(builtInCalls, accessLevel: accessLevel, agentID: agentID)
                 TorboLog.info("Round \(round + 1): Executed \(builtInCalls.count) tool(s) for \(agentID)", subsystem: "Gateway")
 
+                // Canvas focus: if canvas_write was rejected for empty content,
+                // strip all tools except canvas_write for the retry — gives the
+                // model maximum context headroom to generate HTML/code content.
+                // Track canvas_write calls for forwarding AFTER execution —
+                // auto-generated content is now in the canvas store.
+                if hasClientSystem {
+                    for call in builtInCalls {
+                        guard let fn = call["function"] as? [String: Any],
+                              let bname = fn["name"] as? String, bname == "canvas_write" else { continue }
+                        // Check if canvas has content (may have been auto-generated)
+                        let canvasContent = await CanvasStore.shared.content
+                        if !canvasContent.isEmpty {
+                            // Build a forwarding call with the actual canvas content
+                            let canvasTitle = await CanvasStore.shared.title
+                            let fwdArgs: [String: Any] = ["title": canvasTitle, "content": canvasContent]
+                            let fwdArgsStr = (try? JSONSerialization.data(withJSONObject: fwdArgs)).flatMap { String(data: $0, encoding: .utf8) } ?? "{}"
+                            let fwdCall: [String: Any] = [
+                                "id": call["id"] as? String ?? "call_canvas",
+                                "type": "function",
+                                "function": ["name": "canvas_write", "arguments": fwdArgsStr]
+                            ]
+                            pendingClientCanvasCalls.append(fwdCall)
+                            TorboLog.info("Canvas forwarding: tracked canvas_write with \(canvasContent.count) chars content", subsystem: "Gateway")
+                        }
+                    }
+                }
+
                 var messages = currentBody["messages"] as? [[String: Any]] ?? []
                 messages.append(message)
                 for result in toolResults { messages.append(result) }
@@ -2855,7 +2916,16 @@ actor GatewayServer {
                let choices = json["choices"] as? [[String: Any]],
                let message = choices.first?["message"] as? [String: Any],
                let content = message["content"] as? String {
-                if headersSent {
+                if !pendingClientCanvasCalls.isEmpty {
+                    TorboLog.info("Canvas forwarding: emitting \(pendingClientCanvasCalls.count) SSE tool_call chunks (post-loop)", subsystem: "Gateway")
+                    if !headersSent {
+                        writer.sendStreamHeaders(origin: corsOrigin)
+                        headersSent = true
+                    }
+                    sendSSEToolCallChunks(pendingClientCanvasCalls, id: chunkID, model: model, writer: writer)
+                    sendSSEFinishChunk(id: chunkID, model: model, writer: writer, finishReason: "tool_calls")
+                    writer.sendSSEDone()
+                } else if headersSent {
                     sendSSETextChunk(content, id: chunkID, model: model, writer: writer)
                     sendSSEFinishChunk(id: chunkID, model: model, writer: writer)
                     writer.sendSSEDone()
@@ -3444,6 +3514,72 @@ actor GatewayServer {
         }
     }
 
+    /// Model-aware tool cap — smaller models can't handle large tool counts.
+    /// With too many tools, models ignore them entirely and confabulate responses.
+    private static func toolCapForModel(_ model: String) -> Int {
+        let m = model.lowercased()
+        if m.contains("haiku")                         { return 45 }
+        if m.contains("opus")                          { return 128 }
+        if m.contains("sonnet") || m.contains("gpt-4") { return 75 }
+        if m.contains("llama") || m.contains("qwen") || m.contains("mistral")
+            || m.contains("phi") || m.contains("gemma") { return 30 }
+        return 60 // conservative default
+    }
+
+    /// Client tools that are functionally replaced by server-side equivalents.
+    /// When the server provides loa_teach/loa_recall/loa_forget, the client's
+    /// save_memory/recall_memory/forget_memory/list_memories are redundant.
+    private static let clientToolsReplacedByServer: [String: String] = [
+        "save_memory":   "loa_teach",   // client memory → server LoA
+        "recall_memory": "loa_recall",
+        "forget_memory": "loa_forget",
+        "list_memories": "loa_entities",
+    ]
+
+    /// Merge client (iOS) tools with server (Base) tools, model-aware capping and dedup.
+    /// Strategy: server tools have priority (they enable Mac-side capabilities like run_command,
+    /// file access, LoA memory). Client tools fill remaining slots.
+    private func mergeToolsSmart(clientTools: [[String: Any]], serverTools: [[String: Any]], model: String, hasClientSystem: Bool) -> (merged: [[String: Any]], log: String) {
+        let maxTools = Self.toolCapForModel(model)
+        let serverNames = Set(extractToolNames(from: serverTools))
+
+        // Remove client tools that are functionally duplicated by server tools
+        var filteredClient = clientTools
+        var removedDupes: [String] = []
+        if hasClientSystem {
+            filteredClient = clientTools.filter { tool in
+                let name = ((tool["function"] as? [String: Any])?["name"] as? String) ?? ""
+                if let serverEquiv = Self.clientToolsReplacedByServer[name], serverNames.contains(serverEquiv) {
+                    removedDupes.append("\(name)→\(serverEquiv)")
+                    return false
+                }
+                // Also remove exact name duplicates
+                if serverNames.contains(name) {
+                    return false
+                }
+                return true
+            }
+        }
+
+        // Build merged list: server tools FIRST (priority), then client tools
+        var merged: [[String: Any]] = []
+        merged.append(contentsOf: serverTools)
+        merged.append(contentsOf: filteredClient)
+
+        // Cap to model limit
+        var trimmed = 0
+        if merged.count > maxTools {
+            trimmed = merged.count - maxTools
+            // Trim from the end (client tools, since server tools were added first)
+            merged = Array(merged.prefix(maxTools))
+        }
+
+        let originalClient = clientTools.count
+        let usedClient = merged.count - serverTools.count
+        let log = "Merged tools: \(serverTools.count) server (priority) + \(usedClient)/\(originalClient) client = \(merged.count) total (cap=\(maxTools) for \(model))\(removedDupes.isEmpty ? "" : " [deduped: \(removedDupes.joined(separator: ", "))]")\(trimmed > 0 ? " [trimmed \(trimmed) low-priority]" : "")"
+        return (merged, log)
+    }
+
     // MARK: - Chat Proxy (with streaming, logging & Telegram forwarding)
 
     private func proxyChatCompletion(_ req: HTTPRequest, clientIP: String, agentID: String, accessLevel: AccessLevel, platform: String? = nil, cloudContext: CloudRequestContext? = nil) async -> HTTPResponse {
@@ -3477,22 +3613,25 @@ actor GatewayServer {
             body.removeValue(forKey: "tool_choice")
             TorboLog.info("Client sent empty tools — skipping all tool injection (non-streaming conversational)", subsystem: "Gateway")
         } else {
-            // Client provided tools (e.g. native iOS tools) — MERGE with Base's Mac-side tools
-            var clientTools = body["tools"] as? [[String: Any]] ?? []
-            let clientToolNames = Set(extractToolNames(from: clientTools))
-            let serverTools = await ToolProcessor.toolDefinitionsWithMCP(for: accessLevel, agentID: agentID)
-            for tool in serverTools {
-                let name = ((tool["function"] as? [String: Any])?["name"] as? String) ?? ""
-                if !name.isEmpty && !clientToolNames.contains(name) {
-                    clientTools.append(tool)
+            // Client provided tools — same smart merge as streaming path.
+            let clientTools = body["tools"] as? [[String: Any]] ?? []
+            let allServerTools = await ToolProcessor.toolDefinitionsWithMCP(for: accessLevel, agentID: agentID)
+            let serverTools: [[String: Any]]
+            if hasClientSystem {
+                serverTools = allServerTools.filter { tool in
+                    let name = ((tool["function"] as? [String: Any])?["name"] as? String) ?? ""
+                    return !ToolProcessor.remoteExcludedTools.contains(name)
                 }
+            } else {
+                serverTools = allServerTools
             }
-            body["tools"] = clientTools
+            let (merged, mergeLog) = mergeToolsSmart(clientTools: clientTools, serverTools: serverTools, model: model, hasClientSystem: hasClientSystem)
+            body["tools"] = merged
             if body["tool_choice"] == nil {
                 body["tool_choice"] = "auto"
             }
-            toolNames = extractToolNames(from: clientTools)
-            TorboLog.info("Merged tools (non-streaming): \(clientToolNames.count) client + \(serverTools.count) server = \(clientTools.count) total", subsystem: "Gateway")
+            toolNames = extractToolNames(from: merged)
+            TorboLog.info("(non-stream) \(mergeLog)", subsystem: "Gateway")
         }
 
         // Enrich with agent identity + memory (identity skipped if client provided system prompt)
@@ -3883,6 +4022,17 @@ actor GatewayServer {
                 }
 
                 let finishReason = stopReason == "tool_use" ? "tool_calls" : "stop"
+                // Debug: log tool call arguments for canvas diagnostics
+                if !toolUseBlocks.isEmpty {
+                    let usage = json["usage"] as? [String: Any]
+                    let outTok = usage?["output_tokens"] as? Int ?? -1
+                    for block in toolUseBlocks {
+                        let bname = block["name"] as? String ?? "?"
+                        let binput = block["input"] as? [String: Any] ?? [:]
+                        let inputKeys = Array(binput.keys)
+                        TorboLog.info("Anthropic tool_use: \(bname) keys=\(inputKeys), output_tokens=\(outTok)", subsystem: "Gateway")
+                    }
+                }
                 let openAIFormat: [String: Any] = [
                     "id": json["id"] ?? "chatcmpl-torbo",
                     "object": "chat.completion",
@@ -3904,6 +4054,27 @@ actor GatewayServer {
                 }
                 return HTTPResponse.json(openAIFormat)
             }
+
+            // Anthropic returned something we couldn't parse as a message — extract the error
+            if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let error = json["error"] as? [String: Any] {
+                let errorType = error["type"] as? String ?? "unknown"
+                let errorMsg = error["message"] as? String ?? "Unknown error"
+                TorboLog.warn("Anthropic API error (\(errorType)): \(errorMsg)", subsystem: "Gateway")
+                // Wrap as OpenAI-compatible error so the tool loop can surface it properly
+                let userMsg = errorType == "overloaded_error" ? "The model is overloaded right now. Try again in a moment."
+                    : errorType == "rate_limit_error" ? "Rate limited by the model provider. Try again shortly."
+                    : "Model error: \(errorMsg)"
+                let wrapped: [String: Any] = [
+                    "id": "chatcmpl-error", "object": "chat.completion", "model": model,
+                    "choices": [["index": 0, "message": ["role": "assistant", "content": userMsg], "finish_reason": "stop"]],
+                    "usage": [:] as [String: Any]
+                ]
+                return HTTPResponse.json(wrapped)
+            }
+
+            let bodyPreview = String(data: data.prefix(300), encoding: .utf8) ?? "(binary)"
+            TorboLog.warn("Anthropic unparseable response (status \(code)): \(bodyPreview)", subsystem: "Gateway")
             return HTTPResponse(statusCode: code, headers: ["Content-Type": "application/json"], body: data)
         } catch {
             return HTTPResponse.serverError("Anthropic error: \(error.localizedDescription)")
@@ -5985,17 +6156,77 @@ actor GatewayServer {
     }
 
     /// Send a finish chunk via SSE (no done — caller sends done separately)
-    private func sendSSEFinishChunk(id: String, model: String, writer: ResponseWriter) {
+    private func sendSSEFinishChunk(id: String, model: String, writer: ResponseWriter, finishReason: String = "stop") {
         let chunk: [String: Any] = [
             "id": id,
             "object": "chat.completion.chunk",
             "created": Int(Date().timeIntervalSince1970),
             "model": model,
-            "choices": [["index": 0, "delta": [:] as [String: String], "finish_reason": "stop"] as [String: Any]]
+            "choices": [["index": 0, "delta": [:] as [String: String], "finish_reason": finishReason] as [String: Any]]
         ]
         if let data = try? JSONSerialization.data(withJSONObject: chunk),
            let jsonStr = String(data: data, encoding: .utf8) {
             writer.sendSSEChunk(jsonStr)
+        }
+    }
+
+    /// Emit tool call events in OpenAI SSE format for client-side execution.
+    /// Used to forward canvas_write (and similar) tool calls to remote iOS clients
+    /// so they can execute them locally (e.g. opening the Canvas sheet).
+    private func sendSSEToolCallChunks(_ toolCalls: [[String: Any]], id: String, model: String, writer: ResponseWriter) {
+        for (index, call) in toolCalls.enumerated() {
+            guard let fn = call["function"] as? [String: Any],
+                  let name = fn["name"] as? String else { continue }
+            let callId = call["id"] as? String ?? "call_\(UUID().uuidString.prefix(8))"
+            let argsStr = fn["arguments"] as? String ?? "{}"
+
+            // Chunk 1: tool call start — name + id
+            let startChunk: [String: Any] = [
+                "id": id,
+                "object": "chat.completion.chunk",
+                "created": Int(Date().timeIntervalSince1970),
+                "model": model,
+                "choices": [[
+                    "index": 0,
+                    "delta": [
+                        "tool_calls": [[
+                            "index": index,
+                            "id": callId,
+                            "type": "function",
+                            "function": ["name": name, "arguments": ""]
+                        ] as [String: Any]]
+                    ] as [String: Any],
+                    "finish_reason": NSNull()
+                ] as [String: Any]]
+            ]
+            if let data = try? JSONSerialization.data(withJSONObject: startChunk),
+               let jsonStr = String(data: data, encoding: .utf8) {
+                writer.sendSSEChunk(jsonStr)
+            }
+
+            // Chunk 2: arguments (may be large for canvas content)
+            let argsChunk: [String: Any] = [
+                "id": id,
+                "object": "chat.completion.chunk",
+                "created": Int(Date().timeIntervalSince1970),
+                "model": model,
+                "choices": [[
+                    "index": 0,
+                    "delta": [
+                        "tool_calls": [[
+                            "index": index,
+                            "function": ["arguments": argsStr]
+                        ] as [String: Any]]
+                    ] as [String: Any],
+                    "finish_reason": NSNull()
+                ] as [String: Any]]
+            ]
+            if let data = try? JSONSerialization.data(withJSONObject: argsChunk),
+               let jsonStr = String(data: data, encoding: .utf8) {
+                writer.sendSSEChunk(jsonStr)
+            }
+
+            TorboLog.info("Forwarded \(name) tool call to remote client (id: \(callId), args: \(argsStr.count) chars)", subsystem: "Gateway")
         }
     }
 

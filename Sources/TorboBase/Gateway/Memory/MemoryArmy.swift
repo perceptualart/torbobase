@@ -106,12 +106,12 @@ actor MemoryArmy {
 
     /// Called after every conversation exchange.
     /// Extracts new facts, episodes, and insights, then indexes them.
-    func librarianProcess(userMessage: String, assistantResponse: String, model: String) async {
+    func librarianProcess(userMessage: String, assistantResponse: String, model: String, activeSkillIDs: [String] = []) async {
         let startTime = Date().timeIntervalSinceReferenceDate
         conversationCount += 1
 
         // Step 1: Extract structured memories using local LLM
-        let extracted = await extractMemories(userMessage: userMessage, assistantResponse: assistantResponse)
+        let extracted = await extractMemories(userMessage: userMessage, assistantResponse: assistantResponse, activeSkillIDs: activeSkillIDs)
 
         // Step 1.5: Contradiction detection — check if new facts update existing knowledge
         let checkedMemories = await detectContradictions(extracted)
@@ -453,13 +453,24 @@ actor MemoryArmy {
         let entities: [String]
     }
 
-    private func extractMemories(userMessage: String, assistantResponse: String) async -> [ExtractedMemory] {
+    private func extractMemories(userMessage: String, assistantResponse: String, activeSkillIDs: [String] = []) async -> [ExtractedMemory] {
+        var skillContext = ""
+        if !activeSkillIDs.isEmpty {
+            let ids = activeSkillIDs.joined(separator: ", ")
+            skillContext = """
+
+            Active skills in this conversation: [\(ids)]
+            - "skill_learning" — techniques, patterns, or insights learned while using a skill
+            If the conversation reveals techniques, patterns, or useful insights related to these skills, extract them as "skill_learning" category with the skill ID as an entity tag (e.g., entities: ["skill:web-researcher"]).
+            """
+        }
+
         let prompt = """
         You are a precise memory extraction system. Extract facts worth remembering from this conversation.
         Only extract NEW, specific, useful information. Skip greetings, filler, and obvious statements.
 
         Categories: "fact" (objective info about user or world), "preference" (user likes/dislikes/opinions/style),
-        "project" (work/creative/technical projects), "technical" (tools/code/systems/configs), "personal" (relationships/family/life events)
+        "project" (work/creative/technical projects), "technical" (tools/code/systems/configs), "personal" (relationships/family/life events)\(skillContext)
 
         Return ONLY valid JSON in this exact format:
         {"memories": [{"text": "...", "category": "...", "importance": 0.7, "entities": ["Name1", "Name2"]}]}
@@ -514,7 +525,7 @@ actor MemoryArmy {
     // M-24: Only accept known categories from LLM output — reject arbitrary values
     private static let allowedCategories: Set<String> = [
         "fact", "personal", "identity", "preference", "project",
-        "technical", "episode", "reflection"
+        "technical", "episode", "reflection", "skill_learning"
     ]
 
     private func parseExtracted(_ array: [[String: Any]]) -> [ExtractedMemory] {

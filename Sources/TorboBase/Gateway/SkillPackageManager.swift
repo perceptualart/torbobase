@@ -17,6 +17,7 @@ enum SkillPackageError: Error, LocalizedError {
     case skillNotFound(String)
     case zipFailed(String)
     case unzipFailed(String)
+    case securityThreat(String)
 
     var errorDescription: String? {
         switch self {
@@ -28,6 +29,7 @@ enum SkillPackageError: Error, LocalizedError {
         case .skillNotFound(let id): return "Skill '\(id)' not found"
         case .zipFailed(let reason): return "ZIP creation failed: \(reason)"
         case .unzipFailed(let reason): return "ZIP extraction failed: \(reason)"
+        case .securityThreat(let reason): return "Security threat detected: \(reason)"
         }
     }
 }
@@ -290,6 +292,12 @@ enum SkillPackageManager {
                     throw SkillPackageError.tooLarge(totalSize)
                 }
             }
+        }
+
+        // Security screening — block if threats detected
+        let scanResult = SkillSecurityScreener.scan(skillDir: skillDir)
+        if case .blocked(let reason) = scanResult {
+            throw SkillPackageError.securityThreat(reason)
         }
 
         return manifest

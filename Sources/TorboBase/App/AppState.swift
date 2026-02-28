@@ -143,6 +143,10 @@ struct ConversationSession: Identifiable, Codable {
     var model: String
     var title: String
     var agentID: String
+    var folderID: String?  // nil = unfiled (root level)
+    var colorLabel: String?  // nil, "red", "orange", "yellow", "green", "blue", "purple"
+    var canvasTitle: String?
+    var canvasContent: String?
 
     init(model: String = "unknown", agentID: String = "sid") {
         self.id = UUID()
@@ -152,11 +156,16 @@ struct ConversationSession: Identifiable, Codable {
         self.model = model
         self.title = "New Session"
         self.agentID = agentID
+        self.folderID = nil
+        self.colorLabel = nil
+        self.canvasTitle = nil
+        self.canvasContent = nil
     }
 
     /// Explicit-ID init for synced sessions from paired devices
     init(id: UUID, startedAt: Date, lastActivity: Date, messageCount: Int,
-         model: String, title: String, agentID: String) {
+         model: String, title: String, agentID: String, folderID: String? = nil,
+         colorLabel: String? = nil, canvasTitle: String? = nil, canvasContent: String? = nil) {
         self.id = id
         self.startedAt = startedAt
         self.lastActivity = lastActivity
@@ -164,9 +173,13 @@ struct ConversationSession: Identifiable, Codable {
         self.model = model
         self.title = title
         self.agentID = agentID
+        self.folderID = folderID
+        self.colorLabel = colorLabel
+        self.canvasTitle = canvasTitle
+        self.canvasContent = canvasContent
     }
 
-    // Backward compat: old sessions without agentID default to "sid"
+    // Backward compat: old sessions without agentID/folderID/colorLabel/canvas
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         id = try c.decode(UUID.self, forKey: .id)
@@ -176,6 +189,24 @@ struct ConversationSession: Identifiable, Codable {
         model = try c.decode(String.self, forKey: .model)
         title = try c.decode(String.self, forKey: .title)
         agentID = try c.decodeIfPresent(String.self, forKey: .agentID) ?? "sid"
+        folderID = try c.decodeIfPresent(String.self, forKey: .folderID)
+        colorLabel = try c.decodeIfPresent(String.self, forKey: .colorLabel)
+        canvasTitle = try c.decodeIfPresent(String.self, forKey: .canvasTitle)
+        canvasContent = try c.decodeIfPresent(String.self, forKey: .canvasContent)
+    }
+}
+
+// MARK: - Conversation Folder
+
+struct ConversationFolder: Identifiable, Codable {
+    let id: String
+    var name: String
+    var createdAt: Date
+
+    init(name: String) {
+        self.id = UUID().uuidString
+        self.name = name
+        self.createdAt = Date()
     }
 }
 
@@ -480,7 +511,7 @@ final class AppState: _TorboObservable {
     }
 
     /// Per-agent access levels — synced from AgentConfigManager
-    var agentAccessLevels: [String: AccessLevel] = ["sid": .chatOnly] {
+    var agentAccessLevels: [String: AccessLevel] = [:] {
         willSet { willChangeUI() }
     }
 
@@ -530,8 +561,28 @@ final class AppState: _TorboObservable {
     // Rate limiting
     var rateLimit: Int = AppConfig.rateLimit { willSet { willChangeUI() } }
 
-    // Global capability toggles — categories set to false are disabled for ALL agents
+    // Global capability toggles — categories set to false are disabled for ALL agents.
+    // Non-essential categories are OFF by default to keep tool count manageable.
+    // Users can enable them in Dashboard > Security > Global Capabilities.
     var globalCapabilities: [String: Bool] = {
+        // One-time migration: apply sensible defaults to reduce tool overload
+        if !UserDefaults.standard.bool(forKey: "torboCapabilitiesV2") {
+            UserDefaults.standard.set(true, forKey: "torboCapabilitiesV2")
+            let defaults: [String: Bool] = [
+                "Images": false,         // 12 tools — generate_image, edit_photo, etc.
+                "Automation": false,     // 8 tools — mouse_control, keyboard, HA
+                "Screen": false,         // 3 tools — screenshot, screen_record
+                "System": false,         // 4 tools — process_list, volume_control
+                "Browser": false,        // 6 tools — browser automation, deep_research
+                "Scripting": false,      // 1 tool  — applescript_run
+                "Notifications": false,  // 1 tool  — send_notification
+                "Network": false,        // 2 tools — network_status, browser_open
+            ]
+            if let data = try? JSONSerialization.data(withJSONObject: defaults) {
+                UserDefaults.standard.set(data, forKey: "torboGlobalCapabilities")
+            }
+            return defaults
+        }
         if let data = UserDefaults.standard.data(forKey: "torboGlobalCapabilities"),
            let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Bool] {
             return dict
@@ -676,6 +727,22 @@ final class AppState: _TorboObservable {
         self.elevenLabsVoiceID = defaults.string(forKey: "torboElevenLabsVoiceID") ?? ""
         self.autoListen = defaults.object(forKey: "torboAutoListen") == nil ? true : defaults.bool(forKey: "torboAutoListen")
         self.silenceThreshold = defaults.object(forKey: "torboSilenceThreshold") == nil ? 0.5 : defaults.double(forKey: "torboSilenceThreshold")
+
+        // Load per-agent access levels synchronously from agent config files so tools are
+        // available on the very first request (async refreshAgentLevels can race with startup)
+        let agentsURL = URL(fileURLWithPath: PlatformPaths.agentsDir)
+        if let files = try? FileManager.default.contentsOfDirectory(at: agentsURL, includingPropertiesForKeys: nil) {
+            var levels: [String: AccessLevel] = [:]
+            for file in files where file.pathExtension == "json" {
+                if let data = try? Data(contentsOf: file),
+                   let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                   let id = json["id"] as? String,
+                   let raw = json["accessLevel"] as? Int {
+                    levels[id] = AccessLevel(rawValue: raw) ?? .chatOnly
+                }
+            }
+            self.agentAccessLevels = levels
+        }
     }
 
     func addAuditEntry(_ entry: AuditEntry) {
@@ -749,11 +816,49 @@ final class AppState: _TorboObservable {
                 await store.ensureSessionExists(agentID: agentForChat, sessionID: sessionID, messageCount: msgs.count)
                 // Title the session from the first user message
                 if msg.role == "user", msgs.count <= 2 {
-                    let title = String(msg.content.prefix(60))
-                    await store.updateSessionTitle(agentID: agentForChat, sessionID: sessionID, title: title)
+                    let userText = msg.content
+                    let capturedAgentID = agentForChat
+                    let capturedSessionID = sessionID
+                    Task {
+                        let smartTitle = await Self.generateSmartTitle(userText)
+                        await store.updateSessionTitle(agentID: capturedAgentID, sessionID: capturedSessionID, title: smartTitle)
+                    }
                 }
             }
         }
+    }
+
+    /// Generate a short 3-5 word title for a conversation using local Ollama
+    private static func generateSmartTitle(_ userMessage: String) async -> String {
+        let snippet = String(userMessage.prefix(300))
+        let prompt = "Generate a 3-5 word title for this conversation. Return ONLY the title, nothing else:\n\n\(snippet)"
+
+        guard let url = URL(string: "\(OllamaManager.baseURL)/v1/chat/completions") else {
+            return String(userMessage.prefix(40))
+        }
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.timeoutInterval = 5
+        let body: [String: Any] = [
+            "model": "llama3.2:3b",
+            "messages": [["role": "user", "content": prompt]],
+            "max_tokens": 20,
+            "temperature": 0.3
+        ]
+        req.httpBody = try? JSONSerialization.data(withJSONObject: body)
+
+        guard let (data, _) = try? await URLSession.shared.data(for: req),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let choices = json["choices"] as? [[String: Any]],
+              let message = choices.first?["message"] as? [String: Any],
+              let title = message["content"] as? String else {
+            return String(userMessage.prefix(40))
+        }
+
+        let cleaned = title.trimmingCharacters(in: .whitespacesAndNewlines)
+            .replacingOccurrences(of: "\"", with: "")
+        return cleaned.isEmpty ? String(userMessage.prefix(40)) : String(cleaned.prefix(60))
     }
 
     /// Load persisted conversations on launch

@@ -58,6 +58,23 @@ struct ChamberView: View {
             let userText = voiceEngine.lastUserTranscript
             guard !userText.isEmpty else { return }
 
+            // Anti-feedback: reject transcripts that match recent agent output (TTS bleeding into mic)
+            let recentAgentTexts = manager.messages.suffix(5)
+                .filter { $0.role == "assistant" }
+                .map { $0.content.lowercased() }
+            let userLower = userText.lowercased()
+            var isFeedback = false
+            for agentText in recentAgentTexts {
+                if userLower.count > 10 && agentText.contains(String(userLower.prefix(20))) {
+                    isFeedback = true
+                    break
+                }
+            }
+            if isFeedback {
+                TorboLog.warn("Chamber: rejected feedback loop — transcript matches agent output", subsystem: "Chamber")
+                return
+            }
+
             if let chamberID = manager.activeChamberID,
                let chamber = manager.chambers.first(where: { $0.id == chamberID }) {
                 // Barge-in cleanup: stop any in-progress agent speech before starting new round
@@ -93,7 +110,7 @@ struct ChamberView: View {
                     manager.respondingAgentID = nil
 
                     if isChamberVoiceActive && !voiceEngine.isMicMuted && !isInterrupted {
-                        try? await Task.sleep(nanoseconds: 500_000_000)
+                        try? await Task.sleep(nanoseconds: 1_000_000_000)
                         if voiceEngine.isActive && voiceEngine.state != .listening {
                             voiceEngine.listen()
                         }
@@ -614,6 +631,35 @@ struct ChamberView: View {
                         .padding(.top, 2)
                 }
 
+                // Responses per round
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("RESPONSES PER ROUND")
+                        .font(.system(size: 11, weight: .bold, design: .monospaced))
+                        .foregroundStyle(.white.opacity(0.4))
+
+                    Picker("", selection: Binding(
+                        get: { chamber.maxResponsesPerRound },
+                        set: { newVal in
+                            if let idx = manager.chambers.firstIndex(where: { $0.id == chamber.id }) {
+                                manager.chambers[idx].maxResponsesPerRound = newVal
+                                manager.chambers[idx].updatedAt = Date()
+                            }
+                        }
+                    )) {
+                        Text("All agents").tag(0)
+                        ForEach(1...max(chamber.agentIDs.count, 1), id: \.self) { n in
+                            Text("\(n)").tag(n)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .frame(maxWidth: 300)
+
+                    Text(chamber.maxResponsesPerRound == 0 ? "Every agent responds each round." : "Only \(chamber.maxResponsesPerRound) agent\(chamber.maxResponsesPerRound == 1 ? "" : "s") respond per round. With Round Robin, this naturally rotates who speaks.")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.white.opacity(0.4))
+                        .padding(.top, 2)
+                }
+
                 // Members
                 VStack(alignment: .leading, spacing: 8) {
                     HStack {
@@ -800,7 +846,7 @@ struct ChamberView: View {
             if isChamberVoiceActive {
                 voiceEngine.autoListen = true
                 if !voiceEngine.isMicMuted && !isInterrupted {
-                    try? await Task.sleep(nanoseconds: 500_000_000)
+                    try? await Task.sleep(nanoseconds: 1_000_000_000)
                     if voiceEngine.isActive && voiceEngine.state != .listening {
                         voiceEngine.listen()
                     }

@@ -33,18 +33,34 @@ struct Chamber: Codable, Identifiable {
     var discussionStyle: DiscussionStyle
     var description: String
     var icon: String
+    var maxResponsesPerRound: Int   // 0 = all agents respond (default)
     let createdAt: Date
     var updatedAt: Date
 
-    init(name: String, agentIDs: [String], style: DiscussionStyle = .sequential, description: String = "", icon: String = "person.3.fill") {
+    init(name: String, agentIDs: [String], style: DiscussionStyle = .sequential, description: String = "", icon: String = "person.3.fill", maxResponsesPerRound: Int = 0) {
         self.id = UUID().uuidString
         self.name = name
         self.agentIDs = agentIDs
         self.discussionStyle = style
         self.description = description
         self.icon = icon
+        self.maxResponsesPerRound = maxResponsesPerRound
         self.createdAt = Date()
         self.updatedAt = Date()
+    }
+
+    // Backward compat: existing chambers without maxResponsesPerRound
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        name = try c.decode(String.self, forKey: .name)
+        agentIDs = try c.decode([String].self, forKey: .agentIDs)
+        discussionStyle = try c.decode(DiscussionStyle.self, forKey: .discussionStyle)
+        description = try c.decode(String.self, forKey: .description)
+        icon = try c.decode(String.self, forKey: .icon)
+        maxResponsesPerRound = try c.decodeIfPresent(Int.self, forKey: .maxResponsesPerRound) ?? 0
+        createdAt = try c.decode(Date.self, forKey: .createdAt)
+        updatedAt = try c.decode(Date.self, forKey: .updatedAt)
     }
 }
 
@@ -140,8 +156,14 @@ final class ChamberManager: ObservableObject {
         let userMsg = ChamberMessage(agentID: "user", agentName: "You", role: "user", content: text, timestamp: Date(), isStreaming: false)
         messages.append(userMsg)
 
-        // Determine agent order
-        let orderedAgents = agentOrder(for: chamber)
+        // Determine agent order, applying per-round limit if set
+        let allOrdered = agentOrder(for: chamber)
+        let orderedAgents: [String]
+        if chamber.maxResponsesPerRound > 0 && chamber.maxResponsesPerRound < allOrdered.count {
+            orderedAgents = Array(allOrdered.prefix(chamber.maxResponsesPerRound))
+        } else {
+            orderedAgents = allOrdered
+        }
 
         // Build system prompt with roundtable context — include agent display names
         var agentNamesList: [String] = []

@@ -1576,7 +1576,7 @@ struct AgentsView: View {
                 showHeader: false,
                 sessionID: activeSessionID
             )
-                .id(editConfig.id)
+                .id("\(editConfig.id)_\(activeSessionID?.uuidString ?? "")")
                 .environmentObject(state)
         }
     }

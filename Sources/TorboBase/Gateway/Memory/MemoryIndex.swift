@@ -876,6 +876,12 @@ actor MemoryIndex {
     /// All entries in the index (for deduplication and maintenance).
     var allEntries: [IndexEntry] { entries }
 
+    /// Entries filtered by category, sorted by importance (highest first).
+    func entriesByCategory(_ category: String) -> [IndexEntry] {
+        entries.filter { $0.category == category }
+            .sorted { $0.importance > $1.importance }
+    }
+
     /// Bulk remove entries by ID (more efficient than individual removes).
     func removeBatch(ids: [Int64]) {
         guard !ids.isEmpty, let db else { return }

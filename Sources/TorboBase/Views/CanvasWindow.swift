@@ -62,6 +62,16 @@ final class CanvasStore: ObservableObject {
         #endif
     }
 
+    /// Whether content looks like HTML that should be previewed (full doc or rich fragment)
+    var looksLikeHTML: Bool {
+        let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        // Full HTML document
+        if trimmed.hasPrefix("<!doctype") || trimmed.hasPrefix("<html") { return true }
+        // Rich HTML fragment with structure tags
+        let structureTags = ["<canvas", "<svg", "<style", "<div", "<body", "<table", "<form", "<nav", "<header", "<section"]
+        return structureTags.contains(where: { trimmed.contains($0) })
+    }
+
     /// Called by agent tools to write content to the canvas and open the window/sheet.
     func write(title: String, content: String, append: Bool = false) {
         self.title = title
@@ -174,6 +184,12 @@ struct CanvasWindow: View {
         }
         .background(Color(red: 0.06, green: 0.06, blue: 0.08))
         .preferredColorScheme(.dark)
+        .onChange(of: store.content) { newContent in
+            // Auto-enable preview when HTML content is written by an agent
+            if !showPreview && store.looksLikeHTML {
+                showPreview = true
+            }
+        }
     }
 }
 

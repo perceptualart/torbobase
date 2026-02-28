@@ -9,6 +9,8 @@ import WebKit
 struct CanvasWebView: NSViewRepresentable {
     let htmlContent: String
 
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
     func makeNSView(context: Context) -> WKWebView {
         let config = WKWebViewConfiguration()
         let prefs = WKWebpagePreferences()
@@ -17,11 +19,20 @@ struct CanvasWebView: NSViewRepresentable {
 
         let webView = WKWebView(frame: .zero, configuration: config)
         webView.setValue(false, forKey: "drawsBackground")
+        context.coordinator.lastContent = htmlContent
+        webView.loadHTMLString(htmlContent, baseURL: nil)
         return webView
     }
 
     func updateNSView(_ webView: WKWebView, context: Context) {
+        // Only reload when content actually changes — prevents flash on every SwiftUI cycle
+        guard htmlContent != context.coordinator.lastContent else { return }
+        context.coordinator.lastContent = htmlContent
         webView.loadHTMLString(htmlContent, baseURL: nil)
+    }
+
+    class Coordinator {
+        var lastContent: String = ""
     }
 }
 #endif

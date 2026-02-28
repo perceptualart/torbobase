@@ -326,8 +326,8 @@ actor MCPManager {
         TorboLog.info("Ready: \(servers.count) server(s), \(allTools.count) total tool(s)", subsystem: "MCP")
     }
 
-    /// Start a single MCP server by name and config (used by both initialize and addServer)
-    private func startServer(name: String, config: MCPServerConfig) async {
+    /// Start a single MCP server by name and config (used by initialize, addServer, and SkillsManager)
+    func startServer(name: String, config: MCPServerConfig) async {
         // Validate command against allowlist
         let commandBasename = URL(fileURLWithPath: config.resolvedCommand).lastPathComponent
         let userAllowed = Set(MCPConfigLoader.loadAllowedCommands())

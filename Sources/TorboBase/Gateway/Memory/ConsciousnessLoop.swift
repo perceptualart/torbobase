@@ -110,6 +110,9 @@ actor ConsciousnessLoop {
         // 3. Log hot topics from recent stream
         await logStreamActivity()
 
+        // 4. Promote high-quality skill learnings to community knowledge
+        await SkillsManager.shared.promoteSkillLearnings()
+
         let elapsed = (Date().timeIntervalSinceReferenceDate - startTime) * 1000
         TorboLog.info("Tide cycle complete in \(String(format: "%.0f", elapsed))ms", subsystem: "Consciousness")
         await EventBus.shared.publish("consciousness.tide", payload: ["elapsed_ms": String(Int(elapsed))], source: "consciousness")

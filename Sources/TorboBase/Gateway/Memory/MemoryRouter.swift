@@ -160,7 +160,7 @@ actor MemoryRouter {
     /// Process a completed exchange AFTER the LLM responds.
     /// Extracts new memories and indexes them. Runs in background.
     /// Nonisolated so callers don't need to await — fires and forgets.
-    nonisolated func processExchange(userMessage: String, assistantResponse: String, model: String) {
+    nonisolated func processExchange(userMessage: String, assistantResponse: String, model: String, activeSkillIDs: [String] = []) {
         guard AppConfig.memoryEnabled else { return }
         let army = memoryArmy
         // Run extraction in background — never block the response
@@ -169,7 +169,8 @@ actor MemoryRouter {
             await army.librarianProcess(
                 userMessage: userMessage,
                 assistantResponse: assistantResponse,
-                model: model
+                model: model,
+                activeSkillIDs: activeSkillIDs
             )
 
             // Also update legacy MemoryManager (backward compatibility)

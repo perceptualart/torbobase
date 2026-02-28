@@ -134,6 +134,15 @@ struct AgentChatView: View {
                     ChatMessage(role: $0.role, content: $0.content, timestamp: $0.timestamp, isStreaming: false)
                 }
             }
+            // Silently restore canvas data if this session had canvas content
+            let sessions = await ConversationStore.shared.loadSessions()
+            if let session = sessions.first(where: { $0.id == sid }),
+               let ct = session.canvasTitle, let cc = session.canvasContent, !cc.isEmpty {
+                await MainActor.run {
+                    CanvasStore.shared.title = ct
+                    CanvasStore.shared.content = cc
+                }
+            }
         }
         // Persistence: debounced save on message changes
         .onChange(of: messages.count) { _ in
@@ -847,8 +856,17 @@ struct AgentChatView: View {
     }
 
     private func formatTime(_ date: Date) -> String {
+        let calendar = Calendar.current
         let f = DateFormatter()
-        f.dateFormat = "HH:mm"
+        if calendar.isDateInToday(date) {
+            f.dateFormat = "HH:mm"
+        } else if calendar.isDateInYesterday(date) {
+            f.dateFormat = "'Yesterday' HH:mm"
+        } else if calendar.isDate(date, equalTo: Date(), toGranularity: .year) {
+            f.dateFormat = "MMM d, HH:mm"
+        } else {
+            f.dateFormat = "MMM d yyyy, HH:mm"
+        }
         return f.string(from: date)
     }
 

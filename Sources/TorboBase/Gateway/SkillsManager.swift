@@ -76,6 +76,8 @@ actor SkillsManager {
         await createBuiltInSkillsIfNeeded()
         // Scan and load all skills
         await scanSkills()
+        // Start MCP servers defined in skill configs
+        await loadSkillMCPServers()
         TorboLog.info("Loaded \(skills.count) skill(s)", subsystem: "Skills")
     }
 
@@ -156,14 +158,189 @@ actor SkillsManager {
         return parts.joined(separator: "\n")
     }
 
-    /// Get additional tool definitions from enabled skills
-    func skillToolDefinitions(forAccessLevel level: Int) -> [[String: Any]] {
-        enabledSkills(forAccessLevel: level).flatMap { $0.toolDefinitions ?? [] }
+    /// Get additional tool definitions from enabled skills.
+    /// Tool names are prefixed with `skill_{skillID}_` to namespace them (like `mcp_` prefix).
+    /// If allowedSkillIDs is non-empty, only include those skills. Empty = all enabled skills.
+    func skillToolDefinitions(forAccessLevel level: Int, allowedSkillIDs: [String] = []) -> [[String: Any]] {
+        var active = enabledSkills(forAccessLevel: level)
+        if !allowedSkillIDs.isEmpty {
+            active = active.filter { allowedSkillIDs.contains($0.id) }
+        }
+        var result: [[String: Any]] = []
+        for skill in active {
+            guard let tools = skill.toolDefinitions else { continue }
+            for var tool in tools {
+                // Namespace the tool name: skill_{skillID}_{originalName}
+                if let fn = tool["function"] as? [String: Any],
+                   let originalName = fn["name"] as? String {
+                    var mutableFn = fn
+                    mutableFn["name"] = "skill_\(skill.id)_\(originalName)"
+                    tool["function"] = mutableFn
+                    tool["type"] = "function"
+                }
+                result.append(tool)
+            }
+        }
+        return result
+    }
+
+    /// Execute a skill tool by parsing the prefixed name and dispatching.
+    /// If the skill has an MCP config, delegates to MCPManager.
+    /// Otherwise returns an error (tool definitions are prompt-only guidance).
+    func executeSkillTool(skillID: String, toolName: String, arguments: [String: Any],
+                          accessLevel: Int, agentID: String) async -> String {
+        guard let skill = skills[skillID] else {
+            return "Error: skill '\(skillID)' not found"
+        }
+        guard skill.enabled else {
+            return "Error: skill '\(skillID)' is disabled"
+        }
+        guard skill.requiredAccessLevel <= accessLevel else {
+            return "Error: insufficient access level for skill '\(skillID)'"
+        }
+        // If skill has MCP config, its tools are already registered via MCPManager
+        // with scoped names — they'd be dispatched via the mcp_ prefix handler instead.
+        // This path handles skills with tools.json but no MCP backend.
+        return "Error: skill '\(skillID)' tool '\(toolName)' has no execution backend. Tool definitions provide prompt guidance only."
     }
 
     /// Get community knowledge block for a skill (Phase 1: stub, Phase 2: wired to SkillCommunityManager).
     func communityKnowledgeBlock(forSkill skillID: String) async -> String {
         await SkillCommunityManager.shared.communityKnowledgeBlock(forSkill: skillID)
+    }
+
+    // MARK: - Skill MCP Servers
+
+    /// Load and start MCP servers defined in per-skill mcp_config.json files.
+    /// Servers are registered with skill-scoped names: skill_{skillID}_{serverName}
+    /// so their tools get namespaced via MCPManager's existing mcp_ prefix.
+    func loadSkillMCPServers() async {
+        for skill in skills.values where skill.enabled {
+            guard let mcpFile = skill.mcpConfigFile else { continue }
+            let configURL = skillsDir.appendingPathComponent(skill.id).appendingPathComponent(mcpFile)
+            guard FileManager.default.fileExists(atPath: configURL.path) else { continue }
+
+            do {
+                let data = try Data(contentsOf: configURL)
+                let config = try JSONDecoder().decode(MCPConfigFile.self, from: data)
+                for (serverName, serverConfig) in config.mcpServers where serverConfig.isEnabled {
+                    let scopedName = "skill_\(skill.id)_\(serverName)"
+                    await MCPManager.shared.startServer(name: scopedName, config: serverConfig)
+                    TorboLog.info("Started MCP server '\(scopedName)' for skill '\(skill.name)'", subsystem: "Skills")
+                }
+            } catch {
+                TorboLog.error("Failed to load MCP config for skill '\(skill.id)': \(error)", subsystem: "Skills")
+            }
+        }
+    }
+
+    // MARK: - Skill Learnings
+
+    /// Build a prompt block with learnings from previous skill usage.
+    /// Retrieves skill-tagged memories from LoA (Library of Alexandria).
+    func skillLearningsBlock(forSkillIDs skillIDs: [String], maxTokens: Int = 300) async -> String {
+        guard !skillIDs.isEmpty else { return "" }
+
+        var lines: [String] = []
+        var estimatedTokens = 0
+
+        for skillID in skillIDs {
+            // Search by entity tag "skill:{id}" — learnings are tagged with this during extraction
+            let results = await MemoryIndex.shared.searchByEntity(name: "skill:\(skillID)", topK: 10)
+            let learnings = results.filter { $0.category == "skill_learning" }
+
+            for learning in learnings {
+                let tokens = learning.text.count / 4
+                if estimatedTokens + tokens > maxTokens { break }
+                lines.append("- \(learning.text)")
+                estimatedTokens += tokens
+            }
+        }
+
+        guard !lines.isEmpty else { return "" }
+        return "<skill-learnings>\nInsights from previous skill usage:\n\(lines.joined(separator: "\n"))\n</skill-learnings>"
+    }
+
+    // MARK: - Skill Learning Promotion
+
+    /// Tracks which memory IDs have already been contributed to avoid re-submitting.
+    private var contributedMemoryIDs = Set<Int64>()
+
+    /// Promote high-quality personal skill learnings into the community knowledge pool.
+    /// Called from the TIDE cycle (every 15 min). Quality thresholds + dedup + rate limiting make repeated calls safe.
+    func promoteSkillLearnings() async {
+        let learnings = await MemoryIndex.shared.entriesByCategory("skill_learning")
+        guard !learnings.isEmpty else { return }
+
+        var promoted = 0
+        for learning in learnings {
+            // Skip already-contributed
+            guard !contributedMemoryIDs.contains(learning.id) else { continue }
+
+            // Quality gates — learning must prove itself useful before sharing
+            guard learning.importance >= 0.7,
+                  learning.accessCount >= 3,
+                  learning.confidence >= 0.7 else { continue }
+
+            // Extract skill ID from entity tags (format: "skill:{id}")
+            guard let skillEntity = learning.entities.first(where: { $0.hasPrefix("skill:") }) else { continue }
+            let skillID = String(skillEntity.dropFirst(6)) // drop "skill:"
+
+            // Classify into KnowledgeCategory
+            let category = classifyLearning(learning.text)
+
+            // Contribute — this checks prefs.shareKnowledge, rate limits, and dedup internally
+            let success = await SkillCommunityManager.shared.contributeKnowledge(
+                skillID: skillID,
+                text: learning.text,
+                category: category,
+                confidence: Double(learning.confidence)
+            )
+
+            // Mark as contributed regardless of success (prefs off, rate limit, dedup are all permanent-ish)
+            contributedMemoryIDs.insert(learning.id)
+
+            if success { promoted += 1 }
+        }
+
+        if promoted > 0 {
+            TorboLog.info("Promoted \(promoted) skill learning(s) to community knowledge", subsystem: "Skills")
+        }
+    }
+
+    /// Classify a learning text into a KnowledgeCategory using keyword heuristics.
+    private func classifyLearning(_ text: String) -> KnowledgeCategory {
+        let lower = text.lowercased()
+
+        // Gotcha — pitfalls, warnings, mistakes
+        if lower.contains("don't") || lower.contains("do not") || lower.contains("avoid")
+            || lower.contains("careful") || lower.contains("pitfall") || lower.contains("gotcha")
+            || lower.contains("mistake") || lower.contains("warning") || lower.contains("beware") {
+            return .gotcha
+        }
+
+        // Correction — fixes for misconceptions
+        if lower.contains("actually") || lower.contains("incorrect") || lower.contains("wrong")
+            || lower.contains("correc") || lower.contains("not true") || lower.contains("misconception") {
+            return .correction
+        }
+
+        // Technique — how-to, patterns, approaches
+        if lower.contains("how to") || lower.contains("pattern") || lower.contains("approach")
+            || lower.contains("technique") || lower.contains("method") || lower.contains("workflow")
+            || lower.contains("step") || lower.contains("process") {
+            return .technique
+        }
+
+        // Reference — specs, codes, standards, versions
+        if lower.contains("version") || lower.contains("spec") || lower.contains("standard")
+            || lower.contains("rfc") || lower.contains("api") || lower.contains("documentation")
+            || lower.contains("reference") {
+            return .reference
+        }
+
+        // Default: tip
+        return .tip
     }
 
     // MARK: - Install / Remove

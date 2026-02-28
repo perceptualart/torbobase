@@ -20,6 +20,11 @@ struct AgentChatMessage: Identifiable, Codable {
     }
 }
 
+/// Posted when sessions or folders change on disk. Views can subscribe to auto-refresh.
+extension Notification.Name {
+    static let conversationsChanged = Notification.Name("torboConversationsChanged")
+}
+
 /// Manages persistent storage of conversations on disk.
 /// Data lives in ~/Library/Application Support/TorboBase/
 actor ConversationStore {
@@ -169,6 +174,7 @@ actor ConversationStore {
         do {
             let data = try encoder.encode(sessions)
             try data.write(to: sessionsFile, options: .atomic)
+            NotificationCenter.default.post(name: .conversationsChanged, object: nil)
         } catch {
             TorboLog.error("Failed to save sessions: \(error)", subsystem: "ConvStore")
         }
@@ -388,5 +394,133 @@ actor ConversationStore {
             grouped[key]?.sort { $0.lastActivity > $1.lastActivity }
         }
         return grouped
+    }
+
+    // MARK: - Conversation CRUD
+
+    /// Create a new empty conversation session
+    @discardableResult
+    func createSession(agentID: String, title: String, folderID: String? = nil) -> ConversationSession {
+        let session = ConversationSession(
+            id: UUID(), startedAt: Date(), lastActivity: Date(),
+            messageCount: 0, model: "unknown", title: title, agentID: agentID, folderID: folderID
+        )
+        var sessions = loadSessions()
+        sessions.insert(session, at: 0)
+        saveSessions(sessions)
+        return session
+    }
+
+    /// Delete a session and its agent_chats file
+    func deleteSession(sessionID: UUID) {
+        var sessions = loadSessions()
+        let removed = sessions.first(where: { $0.id == sessionID })
+        sessions.removeAll { $0.id == sessionID }
+        saveSessions(sessions)
+
+        // Delete the agent chat file if it exists
+        if let agentID = removed?.agentID {
+            deleteAgentChat(agentID: agentID, sessionID: sessionID)
+        }
+    }
+
+    /// Delete a specific agent chat file
+    func deleteAgentChat(agentID: String, sessionID: UUID) {
+        let file = agentChatsDir.appendingPathComponent("\(agentID)_\(sessionID.uuidString).json")
+        try? FileManager.default.removeItem(at: file)
+    }
+
+    /// Move a session into or out of a folder
+    func moveSessionToFolder(sessionID: UUID, folderID: String?) {
+        var sessions = loadSessions()
+        if let idx = sessions.firstIndex(where: { $0.id == sessionID }) {
+            sessions[idx].folderID = folderID
+            saveSessions(sessions)
+        }
+    }
+
+    /// Rename a session
+    func renameSession(sessionID: UUID, title: String) {
+        var sessions = loadSessions()
+        if let idx = sessions.firstIndex(where: { $0.id == sessionID }) {
+            sessions[idx].title = title
+            saveSessions(sessions)
+        }
+    }
+
+    /// Set or clear a color label on a session
+    func setSessionColor(sessionID: UUID, color: String?) {
+        var sessions = loadSessions()
+        if let idx = sessions.firstIndex(where: { $0.id == sessionID }) {
+            sessions[idx].colorLabel = color
+            saveSessions(sessions)
+        }
+    }
+
+    /// Persist canvas state to a session for restoration on navigation
+    func updateSessionCanvas(sessionID: UUID, title: String, content: String) {
+        var sessions = loadSessions()
+        if let idx = sessions.firstIndex(where: { $0.id == sessionID }) {
+            sessions[idx].canvasTitle = title
+            sessions[idx].canvasContent = content
+            saveSessions(sessions)
+        }
+    }
+
+    // MARK: - Folder CRUD
+
+    private var foldersFile: URL {
+        storageDir.appendingPathComponent("folders.json")
+    }
+
+    func loadFolders() -> [ConversationFolder] {
+        guard FileManager.default.fileExists(atPath: foldersFile.path) else { return [] }
+        do {
+            let data = try Data(contentsOf: foldersFile)
+            return try decoder.decode([ConversationFolder].self, from: data)
+        } catch {
+            TorboLog.error("Failed to load folders: \(error)", subsystem: "ConvStore")
+            return []
+        }
+    }
+
+    func saveFolders(_ folders: [ConversationFolder]) {
+        do {
+            let data = try encoder.encode(folders)
+            try data.write(to: foldersFile, options: .atomic)
+            NotificationCenter.default.post(name: .conversationsChanged, object: nil)
+        } catch {
+            TorboLog.error("Failed to save folders: \(error)", subsystem: "ConvStore")
+        }
+    }
+
+    @discardableResult
+    func createFolder(name: String) -> ConversationFolder {
+        let folder = ConversationFolder(name: name)
+        var folders = loadFolders()
+        folders.append(folder)
+        saveFolders(folders)
+        return folder
+    }
+
+    func deleteFolder(id: String) {
+        var folders = loadFolders()
+        folders.removeAll { $0.id == id }
+        saveFolders(folders)
+
+        // Move contained sessions to root (unfiled)
+        var sessions = loadSessions()
+        for i in sessions.indices where sessions[i].folderID == id {
+            sessions[i].folderID = nil
+        }
+        saveSessions(sessions)
+    }
+
+    func renameFolder(id: String, name: String) {
+        var folders = loadFolders()
+        if let idx = folders.firstIndex(where: { $0.id == id }) {
+            folders[idx].name = name
+            saveFolders(folders)
+        }
     }
 }

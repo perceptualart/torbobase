@@ -2488,7 +2488,7 @@ struct SidebarButton: View {
     var info: String? = nil
     let action: () -> Void
 
-    @State private var showInfo = false
+    @State private var isHovered = false
 
     var body: some View {
         Button(action: action) {
@@ -2496,49 +2496,26 @@ struct SidebarButton: View {
                 Image(systemName: icon)
                     .font(.system(size: 13, weight: .regular))
                     .frame(width: 20)
-                    .foregroundStyle(isSelected ? .white : .white.opacity(0.45))
+                    .foregroundStyle(isSelected ? .white : .white.opacity(isHovered ? 0.65 : 0.45))
                 Text(title)
                     .font(.system(size: 13, weight: isSelected ? .medium : .regular))
-                    .foregroundStyle(isSelected ? .white : .white.opacity(0.55))
+                    .foregroundStyle(isSelected ? .white : .white.opacity(isHovered ? 0.75 : 0.55))
                     .lineLimit(1)
                 Spacer()
-                if info != nil {
-                    Image(systemName: "info.circle")
-                        .font(.system(size: 11))
-                        .foregroundStyle(.white.opacity(isSelected ? 0.3 : 0.15))
-                        .onTapGesture {
-                            showInfo.toggle()
-                        }
-                        .popover(isPresented: $showInfo, arrowEdge: .trailing) {
-                            VStack(alignment: .leading, spacing: 8) {
-                                HStack(spacing: 6) {
-                                    Image(systemName: icon)
-                                        .font(.system(size: 13, weight: .medium))
-                                        .foregroundStyle(.white.opacity(0.7))
-                                    Text(title)
-                                        .font(.system(size: 13, weight: .semibold))
-                                        .foregroundStyle(.white)
-                                }
-                                Text(info ?? "")
-                                    .font(.system(size: 12))
-                                    .foregroundStyle(.white.opacity(0.7))
-                                    .lineSpacing(3)
-                                    .fixedSize(horizontal: false, vertical: true)
-                            }
-                            .padding(14)
-                            .frame(width: 260)
-                            .background(Color(nsColor: NSColor(red: 0.1, green: 0.1, blue: 0.12, alpha: 1)))
-                        }
-                }
             }
             .padding(.horizontal, 10)
             .padding(.vertical, 8)
             .background(
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(isSelected ? Color.white.opacity(0.1) : .clear)
+                    .fill(isSelected ? Color.white.opacity(0.1) : (isHovered ? Color.white.opacity(0.05) : .clear))
             )
+            .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
         }
         .buttonStyle(.plain)
+        .onHover { isHovered = $0 }
+        .animation(.easeOut(duration: 0.15), value: isSelected)
+        .animation(.easeOut(duration: 0.12), value: isHovered)
+        .help(info ?? "")
     }
 }
 

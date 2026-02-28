@@ -107,14 +107,30 @@ class PiperTTSEngine {
                 // Tokens file is required by sherpa-onnx. Try agent-specific, then SiD fallback.
                 let agentTokensPath = voicesDir + "/\(agentID)_tokens.txt"
                 let sidTokensPath = voicesDir + "/sid_tokens.txt"
-                let tokensFile: String
+                let rawTokensPath: String
                 if fm.fileExists(atPath: agentTokensPath) {
-                    tokensFile = agentTokensPath
+                    rawTokensPath = agentTokensPath
                 } else if fm.fileExists(atPath: sidTokensPath) {
-                    tokensFile = sidTokensPath
+                    rawTokensPath = sidTokensPath
                 } else {
                     TorboLog.warn("No tokens file for \(name) — skipping (sherpa-onnx requires tokens)", subsystem: "PiperTTS")
                     continue
+                }
+
+                // sherpa-onnx calls exit(-1) if tokens contain multi-char entries like
+                // "<space>". Strip those lines — the model handles spaces internally.
+                let tokensFile: String
+                if let rawContent = try? String(contentsOfFile: rawTokensPath, encoding: .utf8),
+                   rawContent.contains("<space>") {
+                    let lines = rawContent.components(separatedBy: "\n")
+                    let cleaned = lines.filter { !$0.contains("<space>") }
+                    let sanitized = cleaned.joined(separator: "\n")
+                    let cleanPath = voicesDir + "/\(agentID)_tokens_clean.txt"
+                    try? sanitized.write(toFile: cleanPath, atomically: true, encoding: .utf8)
+                    tokensFile = cleanPath
+                    TorboLog.info("Sanitized tokens file for \(name) (removed <space> line)", subsystem: "PiperTTS")
+                } else {
+                    tokensFile = rawTokensPath
                 }
 
                 // Per-agent voice tuning

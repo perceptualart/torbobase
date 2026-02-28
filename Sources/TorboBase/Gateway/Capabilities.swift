@@ -355,6 +355,28 @@ actor ToolProcessor {
         return names
     }()
 
+    /// Tools that only make sense when controlling the Mac locally — excluded
+    /// from merging when a remote client (iOS) already provides its own tools.
+    /// This prevents tool overload (139 tools → ~36K input tokens) which causes
+    /// models to return empty responses.
+    static let remoteExcludedTools: Set<String> = [
+        // Mac screen — iOS has its own screen capture
+        "take_screenshot", "get_screen_info", "screen_record",
+        // Mac UI automation — can't control Mac UI from iOS
+        "open_file", "mouse_control", "keyboard_control", "window_management",
+        // Mac clipboard — iOS has its own clipboard
+        "clipboard_read", "clipboard_write",
+        // Mac system management
+        "process_list", "process_kill", "system_monitor", "volume_control",
+        // Mac-only search
+        "spotlight_search", "finder_reveal",
+        // Mac-only misc
+        "send_notification", "browser_open", "applescript_run",
+        // Browser automation — runs on Mac browser, not useful from iOS
+        "browser_navigate", "browser_screenshot", "browser_extract", "browser_interact",
+        "deep_research", "browser_agent",
+    ]
+
     /// All tool names the gateway handles (core + MCP)
     static var builtInToolNames: Set<String> {
         // Core tools + MCP tools checked dynamically via canExecute()
@@ -1185,13 +1207,73 @@ extension ToolProcessor {
                 "type": "object",
                 "properties": [
                     "title": ["type": "string", "description": "Title for the canvas document (e.g. filename or description)"],
-                    "content": ["type": "string", "description": "The text content to write to the canvas"],
+                    "content": ["type": "string", "description": "The full content to display — HTML (with inline CSS/JS for websites/apps), code, or document text. Must be non-empty."],
                     "append": ["type": "boolean", "description": "If true, append to existing content instead of replacing. Default false."]
                 ] as [String: Any],
                 "required": ["title", "content"]
             ] as [String: Any]
         ] as [String: Any]
     ]
+
+    /// Generate canvas content via a focused API call when the model's tool call has empty content.
+    /// Uses the same model as the agent but with NO tools — lets the model produce large HTML/code
+    /// as regular text output, which is far more reliable than tool argument generation.
+    private static func generateCanvasContent(title: String, agentID: String) async -> String {
+        let apiKey = await MainActor.run { AppState.shared.cloudAPIKeys["ANTHROPIC_API_KEY"] ?? "" }
+        guard !apiKey.isEmpty else {
+            TorboLog.warn("canvas_write: no Anthropic API key for content generation", subsystem: "Gateway")
+            return ""
+        }
+        // Use Sonnet for canvas generation — fast enough for HTML, capable enough for quality.
+        let anthropicModel = "claude-sonnet-4-6"
+
+        guard let url = URL(string: "https://api.anthropic.com/v1/messages") else { return "" }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue(apiKey, forHTTPHeaderField: "x-api-key")
+        request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
+        request.timeoutInterval = 90  // HTML generation can take 30-60s for complex apps
+
+        TorboLog.info("canvas_write: generating content for '\(title)' via \(anthropicModel) (90s timeout)", subsystem: "Gateway")
+
+        let body: [String: Any] = [
+            "model": anthropicModel,
+            "max_tokens": 16384,
+            "messages": [
+                ["role": "user", "content": "Generate a complete, self-contained HTML file for: \(title). Include all CSS and JavaScript inline. Output ONLY the raw HTML code starting with <!DOCTYPE html> — no explanation, no markdown fences, no commentary. Make it visually polished and fully functional."]
+            ]
+        ]
+        request.httpBody = try? JSONSerialization.data(withJSONObject: body)
+
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard let httpResp = response as? HTTPURLResponse, httpResp.statusCode == 200,
+                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let content = json["content"] as? [[String: Any]],
+                  let text = content.first(where: { $0["type"] as? String == "text" })?["text"] as? String else {
+                let code = (response as? HTTPURLResponse)?.statusCode ?? -1
+                TorboLog.warn("canvas_write: focused generation failed (status \(code))", subsystem: "Gateway")
+                return ""
+            }
+            // Strip any markdown code fences the model might wrap around the HTML
+            var result = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            if result.hasPrefix("```") {
+                // Remove opening fence (```html or ```)
+                if let firstNewline = result.firstIndex(of: "\n") {
+                    result = String(result[result.index(after: firstNewline)...])
+                }
+            }
+            if result.hasSuffix("```") {
+                result = String(result.dropLast(3)).trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+            TorboLog.info("canvas_write: focused generation produced \(result.count) chars", subsystem: "Gateway")
+            return result
+        } catch {
+            TorboLog.error("canvas_write: focused generation error: \(error)", subsystem: "Gateway")
+            return ""
+        }
+    }
 
     /// create_workflow tool — lets agents decompose multi-step requests into workflows
     static let createWorkflowToolDefinition: [String: Any] = [
@@ -2194,10 +2276,34 @@ extension ToolProcessor {
                     content = await SystemToolsEngine.shared.clipboardWrite(text: text)
                 case "canvas_write":
                     let canvasTitle = args["title"] as? String ?? "Untitled"
-                    let canvasContent = args["content"] as? String ?? ""
+                    var canvasContent = args["content"] as? String ?? ""
                     let canvasAppend = args["append"] as? Bool ?? false
+                    TorboLog.info("canvas_write: title=\"\(canvasTitle)\", content=\(canvasContent.count) chars, append=\(canvasAppend)", subsystem: "Gateway")
+                    // When the model sends canvas_write without content (common with many tools),
+                    // generate the content via a focused API call with NO tools — the model can
+                    // produce large HTML/code as text output much more reliably than as tool args.
+                    if canvasContent.isEmpty {
+                        TorboLog.info("canvas_write: empty content — generating via focused API call", subsystem: "Gateway")
+                        canvasContent = await Self.generateCanvasContent(title: canvasTitle, agentID: agentID)
+                    }
+                    if canvasContent.isEmpty {
+                        content = "Canvas content could not be generated. Please try describing what you want in more detail."
+                        results.append(["role": "tool", "tool_call_id": id, "content": content])
+                        continue
+                    }
                     await CanvasStore.shared.write(title: canvasTitle, content: canvasContent, append: canvasAppend)
                     content = "Content written to Canvas window (\(canvasContent.count) chars). The Canvas window is now open for the user to view and edit."
+                    // Persist canvas to the active conversation session
+                    let capturedAgentID = agentID
+                    let capturedCanvasTitle = canvasTitle
+                    let capturedCanvasContent = canvasAppend ? (await CanvasStore.shared.content) : canvasContent
+                    Task {
+                        if let sessionID = await ConversationStore.shared.mostRecentSessionID(forAgent: capturedAgentID) {
+                            await ConversationStore.shared.updateSessionCanvas(
+                                sessionID: sessionID, title: capturedCanvasTitle, content: capturedCanvasContent
+                            )
+                        }
+                    }
                 case "process_list":
                     let limit = args["limit"] as? Int ?? 20
                     let filter = args["filter"] as? String

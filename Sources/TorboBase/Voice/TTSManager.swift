@@ -48,18 +48,62 @@ final class TTSManager: NSObject, ObservableObject {
 
     func speak(_ text: String) {
         stop()
-        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        let cleaned = Self.cleanForSpeech(text)
+        guard !cleaned.isEmpty else { return }
 
         isSpeaking = true
-        TorboLog.info("TTS speak — engine: \(engine), text: \"\(text.prefix(60))...\"", subsystem: "TTS")
+        TorboLog.info("TTS speak — engine: \(engine), text: \"\(cleaned.prefix(60))...\"", subsystem: "TTS")
 
         if engine == "torbo" {
-            speakTask = Task { await synthesizePiper(text) }
+            speakTask = Task { await synthesizePiper(cleaned) }
         } else if engine == "elevenlabs" {
-            speakTask = Task { await synthesizeElevenLabs(text) }
+            speakTask = Task { await synthesizeElevenLabs(cleaned) }
         } else {
-            speakSystem(text)
+            speakSystem(cleaned)
         }
+    }
+
+    /// Strip markdown and other non-speech artifacts so TTS engines don't read punctuation aloud.
+    static func cleanForSpeech(_ text: String) -> String {
+        var s = text
+
+        // Code fences (```lang ... ```)
+        s = s.replacingOccurrences(of: "```[a-zA-Z]*\\n?", with: "", options: .regularExpression)
+        s = s.replacingOccurrences(of: "```", with: "")
+
+        // Inline code backticks
+        s = s.replacingOccurrences(of: "`", with: "")
+
+        // Bold / italic markers (order matters: ** before *)
+        s = s.replacingOccurrences(of: "***", with: "")
+        s = s.replacingOccurrences(of: "**", with: "")
+        s = s.replacingOccurrences(of: "__", with: "")
+        // Single * and _ used as italic — only strip when wrapping a word: *word* / _word_
+        s = s.replacingOccurrences(of: "(?<=\\s|^)\\*(?=\\S)|(?<=\\S)\\*(?=\\s|$|[.,!?;:])", with: "", options: .regularExpression)
+        s = s.replacingOccurrences(of: "(?<=\\s|^)_(?=\\S)|(?<=\\S)_(?=\\s|$|[.,!?;:])", with: "", options: .regularExpression)
+
+        // Strikethrough
+        s = s.replacingOccurrences(of: "~~", with: "")
+
+        // Markdown headers (# ## ### at line start)
+        s = s.replacingOccurrences(of: "(?m)^#{1,4}\\s+", with: "", options: .regularExpression)
+
+        // Markdown links [text](url) → text
+        s = s.replacingOccurrences(of: "\\[([^\\]]+)\\]\\([^)]+\\)", with: "$1", options: .regularExpression)
+
+        // Bullet markers (- or * at line start)
+        s = s.replacingOccurrences(of: "(?m)^\\s*[\\-\\*]\\s+", with: "", options: .regularExpression)
+
+        // Numbered list markers (1. 2. etc.)
+        s = s.replacingOccurrences(of: "(?m)^\\s*\\d+\\.\\s+", with: "", options: .regularExpression)
+
+        // Horizontal rules (--- or ***)
+        s = s.replacingOccurrences(of: "(?m)^[\\-\\*]{3,}$", with: "", options: .regularExpression)
+
+        // Collapse multiple newlines / whitespace
+        s = s.replacingOccurrences(of: "\\n{3,}", with: "\n\n", options: .regularExpression)
+
+        return s.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     func stop() {
