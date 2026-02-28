@@ -18,13 +18,63 @@ actor SkillCommunityManager {
     private var identity: NodeIdentity?
     private let syncInterval: TimeInterval = 15 * 60 // 15 minutes
     private let maxKnowledgePerHour = 10
+    private var initialized = false
 
     // MARK: - Lifecycle
 
-    func initialize() async {
+    /// Auto-initializes on first access — no startup call needed.
+    private func ensureReady() async {
+        guard !initialized else { return }
+        initialized = true
         await store.initialize()
         identity = await ensureIdentity()
+        // Seed community catalog from installed skills so browse tab isn't empty
+        await seedFromInstalledSkills()
         TorboLog.info("Community manager initialized — node: \(identity?.nodeID ?? "unknown")", subsystem: "Community")
+    }
+
+    func initialize() async {
+        await ensureReady()
+    }
+
+    /// Populate the community catalog with locally installed skills on first run.
+    private func seedFromInstalledSkills() async {
+        let existingCount = (await store.communityStats()["published_skills"] as? Int) ?? 0
+        guard existingCount == 0 else { return }
+
+        let installed = await SkillsManager.shared.listSkills()
+        guard !installed.isEmpty, let id = identity else { return }
+
+        let now = ISO8601DateFormatter().string(from: Date())
+        for skill in installed {
+            guard let skillID = skill["id"] as? String,
+                  let name = skill["name"] as? String else { continue }
+
+            let published = PublishedSkill(
+                id: skillID,
+                name: name,
+                description: skill["description"] as? String ?? "",
+                version: skill["version"] as? String ?? "1.0.0",
+                author: id.displayName,
+                authorNodeID: id.nodeID,
+                icon: skill["icon"] as? String ?? "puzzlepiece",
+                tags: skill["tags"] as? [String] ?? [],
+                packageHash: "",
+                signature: "",
+                publishedAt: now,
+                rating: 0.0,
+                ratingCount: 0,
+                downloadCount: 0,
+                contributors: 0,
+                knowledgeCount: 0
+            )
+            await store.savePublishedSkill(published)
+
+            // Default prefs: receive on, share off
+            let prefs = SkillSharingPrefs(skillID: skillID, shareKnowledge: false, receiveKnowledge: true)
+            await store.savePrefs(prefs)
+        }
+        TorboLog.info("Seeded community catalog with \(installed.count) installed skill(s)", subsystem: "Community")
     }
 
     /// Ensure this node has a persistent identity.
@@ -51,9 +101,7 @@ actor SkillCommunityManager {
     // MARK: - Identity
 
     func getIdentity() async -> NodeIdentity? {
-        if identity == nil {
-            identity = await store.getIdentity()
-        }
+        await ensureReady()
         return identity
     }
 
@@ -61,7 +109,8 @@ actor SkillCommunityManager {
 
     /// Publish a local skill to the community network.
     func publishSkill(skillID: String, changelog: String = "Initial release") async -> PublishedSkill? {
-        guard let identity = await getIdentity() else {
+        await ensureReady()
+        guard let identity else {
             TorboLog.error("Cannot publish: no node identity", subsystem: "Community")
             return nil
         }
@@ -159,6 +208,7 @@ actor SkillCommunityManager {
 
     /// Install a skill from the community (from peer or cached package).
     func installCommunitySkill(skillID: String, fromPeer peerNodeID: String? = nil) async -> String? {
+        await ensureReady()
         guard let published = await store.getPublishedSkill(skillID) else {
             TorboLog.warn("Skill '\(skillID)' not found in community catalog", subsystem: "Community")
             return nil
@@ -229,7 +279,8 @@ actor SkillCommunityManager {
     func contributeKnowledge(skillID: String, text: String,
                              category: KnowledgeCategory = .tip,
                              confidence: Double = 0.8) async -> Bool {
-        guard let identity = await getIdentity() else { return false }
+        await ensureReady()
+        guard let identity else { return false }
 
         // Check sharing prefs
         let prefs = await store.getPrefs(forSkill: skillID)
@@ -280,6 +331,7 @@ actor SkillCommunityManager {
 
     /// Get formatted community knowledge block for prompt injection.
     func communityKnowledgeBlock(forSkill skillID: String, maxTokens: Int = 500) async -> String {
+        await ensureReady()
         let prefs = await store.getPrefs(forSkill: skillID)
         guard prefs.receiveKnowledge else { return "" }
 
@@ -308,7 +360,8 @@ actor SkillCommunityManager {
     // MARK: - Ratings
 
     func rateSkill(skillID: String, rating: Int, review: String? = nil) async {
-        guard let identity = await getIdentity() else { return }
+        await ensureReady()
+        guard let identity else { return }
         let clamped = max(1, min(5, rating))
 
         let skillRating = SkillRating(
@@ -342,6 +395,7 @@ actor SkillCommunityManager {
 
     /// Push unsynced knowledge to peers, pull from peers.
     func syncKnowledge() async {
+        await ensureReady()
         let pending = await store.pendingKnowledgeForSync(limit: 50)
         if !pending.isEmpty {
             TorboLog.info("Syncing \(pending.count) knowledge entries to peers", subsystem: "Community")
@@ -362,6 +416,7 @@ actor SkillCommunityManager {
 
     /// Discover peers via Bonjour and known Tailscale hosts.
     func discoverPeers() async {
+        await ensureReady()
         // Probe known peers to check liveness
         let existingPeers = await store.allPeers()
         for peer in existingPeers {
@@ -371,6 +426,7 @@ actor SkillCommunityManager {
 
     /// Handle an incoming peer announcement.
     func handlePeerAnnouncement(_ data: [String: Any]) async {
+        await ensureReady()
         guard let nodeID = data["node_id"] as? String,
               let host = data["host"] as? String,
               let port = data["port"] as? Int else { return }
@@ -393,6 +449,7 @@ actor SkillCommunityManager {
 
     /// Import knowledge entries received from a peer (P2P sync).
     func importKnowledgeFromPeer(entries: [[String: Any]]) async -> Int {
+        await ensureReady()
         var imported = 0
         for entry in entries {
             guard let skillID = entry["skill_id"] as? String,
@@ -435,6 +492,7 @@ actor SkillCommunityManager {
     // MARK: - Stats & Browse
 
     func communityStats() async -> [String: Any] {
+        await ensureReady()
         var stats = await store.communityStats()
         if let id = identity {
             stats["node_id"] = id.nodeID
@@ -445,10 +503,12 @@ actor SkillCommunityManager {
 
     func browseSkills(query: String? = nil, tag: String? = nil,
                       page: Int = 1, limit: Int = 20, sort: String = "newest") async -> [String: Any] {
+        await ensureReady()
         return await store.browsePublishedSkills(query: query, tag: tag, page: page, limit: limit, sort: sort)
     }
 
     func getSkillDetail(skillID: String) async -> [String: Any]? {
+        await ensureReady()
         guard let skill = await store.getPublishedSkill(skillID) else { return nil }
         let versions = await store.getVersions(forSkill: skillID)
         let ratings = await store.getRatings(forSkill: skillID)
@@ -466,30 +526,36 @@ actor SkillCommunityManager {
     // MARK: - Prefs
 
     func getPrefs(forSkill skillID: String) async -> SkillSharingPrefs {
+        await ensureReady()
         return await store.getPrefs(forSkill: skillID)
     }
 
     func setPrefs(_ prefs: SkillSharingPrefs) async {
+        await ensureReady()
         await store.savePrefs(prefs)
     }
 
     func allPrefs() async -> [SkillSharingPrefs] {
+        await ensureReady()
         return await store.allPrefs()
     }
 
     // MARK: - Peers
 
     func allPeers() async -> [PeerNode] {
+        await ensureReady()
         return await store.allPeers()
     }
 
     // MARK: - Knowledge CRUD
 
     func getKnowledge(forSkill skillID: String, page: Int = 1, limit: Int = 50) async -> [[String: Any]] {
+        await ensureReady()
         return await store.getKnowledge(forSkill: skillID, page: page, limit: limit)
     }
 
     func voteKnowledge(id: String, upvote: Bool) async {
+        await ensureReady()
         await store.voteKnowledge(id: id, upvote: upvote)
     }
 
@@ -497,6 +563,7 @@ actor SkillCommunityManager {
 
     /// Get the cached .tbskill package URL for serving to peers.
     func packageURL(forSkill skillID: String) async -> URL? {
+        await ensureReady()
         guard let published = await store.getPublishedSkill(skillID) else { return nil }
         let path = packageCachePath(skillID: skillID, version: published.version)
         return FileManager.default.fileExists(atPath: path.path) ? path : nil
